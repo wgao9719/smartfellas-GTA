@@ -1,0 +1,74 @@
+schema_version: 1
+pack_id: original-pilot-reactions-v1
+# Authored rules are dormant until the runtime supplies validated local Evidence.
+# This pack does not claim that GTA natives expose any of these observations.
+limits:
+  local_remark_interval_seconds: 45
+  actor_remark_cooldown_seconds: 120
+  area_remark_cooldown_seconds: 60
+  evidence_max_age_seconds: 2
+  effect_ttl_seconds: 3
+  event_dedupe_seconds: 120
+  max_queue: 64
+  max_state_entries: 2048
+rules:
+  - id: acknowledge-nearby-greeting
+    match:
+      event_types: [actor.greeted]
+      provenances: [directly_observed, heard]
+    scope:
+      area_ids: [pilot-commercial-block]
+    conditions:
+      - {field: confidence, op: gte, value: 0.8}
+      - {field: distance_meters, op: lte, value: 8}
+      - {field: player_present, op: eq, value: true}
+    priority: 40
+    cooldown_seconds: 120
+    probability: 0.65
+    effect:
+      type: speak_to_player
+      template: "Hello. Is this a good time for a quick chat?"
+  - id: retain-witnessed-weather
+    match:
+      event_types: [world.weather_changed]
+      provenances: [directly_observed]
+    scope:
+      area_ids: [pilot-commercial-block]
+    conditions:
+      - {field: confidence, op: gte, value: 0.8}
+    priority: 20
+    cooldown_seconds: 600
+    probability: 1
+    effect:
+      type: thought
+  - id: preserve-qualified-local-report
+    match:
+      event_types: [actor.spoke]
+      provenances: [reported]
+    scope:
+      area_ids: [pilot-commercial-block]
+    conditions:
+      - {field: confidence, op: gte, value: 0.7}
+    priority: 30
+    cooldown_seconds: 180
+    probability: 1
+    effect:
+      type: knowledge_write
+  - id: suggest-facing-greeting
+    match:
+      event_types: [actor.greeted]
+      provenances: [directly_observed, heard]
+    scope:
+      area_ids: [pilot-commercial-block]
+    conditions:
+      - {field: distance_meters, op: lte, value: 5}
+      - {field: idle, op: eq, value: true}
+    priority: 10
+    cooldown_seconds: 120
+    probability: 1
+    effect:
+      type: suggested_action
+      action:
+        action_id: face_player
+        arguments: {duration_seconds: 2}
+        reason_for_player: "A nearby greeting may warrant a brief response."

@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Living Los Santos · Local dashboard</title>
+  <style nonce="__CSP_NONCE__">
+    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;
+      background:#101816;color:#edf3ef;font-size:16px}
+    *{box-sizing:border-box}body{margin:0}button,input,select,textarea{font:inherit}
+    button,select,input,textarea{border:1px solid #456459;border-radius:7px;
+      color:inherit;background:#172720;padding:.65rem .8rem}
+    button{cursor:pointer}button:hover{background:#294335}button:disabled{opacity:.5;cursor:wait}
+    button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,
+    summary:focus-visible{outline:3px solid #bddf9f;outline-offset:3px}
+    header{padding:2rem max(1.5rem,calc((100vw - 1180px)/2));border-bottom:1px solid #30463a;
+      background:#15211b}header p{color:#b8c7bd;max-width:60rem;line-height:1.6}
+    h1{margin:.35rem 0;font-size:2rem;letter-spacing:-.04em}h2{font-size:1.2rem;margin:0 0 1rem}
+    h3{font-size:1rem}p{line-height:1.5}.eyebrow{font-size:.76rem;letter-spacing:.16em;
+      color:#b8d9a0;text-transform:uppercase}.badge{display:inline-block;border:1px solid #456459;
+      border-radius:99px;padding:.25rem .65rem;font-size:.78rem;margin-right:.5rem}
+    main{max-width:1230px;margin:auto;padding:1.5rem;display:grid;gap:1.3rem}
+    .toolbar,.actions{display:flex;align-items:end;gap:.7rem;flex-wrap:wrap}
+    .toolbar label{min-width:200px;flex:1}label{display:grid;gap:.4rem;color:#cbd7cf;font-size:.88rem}
+    .grid{display:grid;grid-template-columns:340px minmax(0,1fr);gap:1.3rem}
+    section,.panel{background:#17221c;border:1px solid #30463a;border-radius:12px;padding:1.3rem;
+      min-width:0}select,input{width:100%}.muted{color:#aabeb0}.small{font-size:.8rem}
+    #status{min-height:1.5rem;margin:0;padding:.7rem 1rem;border-left:3px solid #c7dfaa;
+      background:#1e2b23}#status[data-error=true]{border-color:#f0ab96;color:#f6c7b8}
+    #actor-list{display:grid;gap:.5rem;margin-top:1rem;max-height:25rem;overflow:auto}
+    .actor-choice{text-align:left;display:block;width:100%}.actor-choice[aria-pressed=true]{
+      border-color:#c7dfaa;background:#2b4433}.actor-choice span{display:block;font-size:.78rem;
+      color:#aabeb0;margin-top:.3rem}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.8rem;
+      line-height:1.65;background:#0e1912;padding:1rem;border-radius:6px;max-height:25rem;overflow:auto}
+    details{margin-top:.8rem}summary{cursor:pointer;color:#c7dfaa;padding:.4rem 0}
+    .memory{padding:1rem 0;border-top:1px solid #30463a}.memory:first-child{border-top:0}
+    .memory textarea{width:100%;resize:vertical;min-height:6rem;margin:.6rem 0}
+    .memory-meta{color:#aec0b4;font-size:.76rem;overflow-wrap:anywhere;line-height:1.65}
+    .memory .scores{display:flex;gap:1rem;flex-wrap:wrap}.scores label{max-width:9rem}
+    .warning{color:#f3bca5;border-left:3px solid #c8836b;padding:.1rem 0 .1rem .7rem}
+    .danger{border-color:#ab7560;background:#3a2921;color:#ffd8c4}
+    dialog{width:min(94vw,550px);border:1px solid #ab7560;border-radius:12px;padding:1.5rem;
+      background:#1a231c;color:inherit}dialog::backdrop{background:#000a}
+    dialog .actions{justify-content:end;margin-top:1rem}.empty{padding:2rem 0;color:#aabeb0}
+    #export-content{width:100%;min-height:16rem;margin-top:1rem;font-family:ui-monospace,monospace;
+      font-size:.75rem}.timeline-card{padding:.7rem 0;border-bottom:1px solid #30463a}
+    #profile-tools{display:grid;gap:.8rem}.bottom-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.3rem}
+    .config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}
+    .config-grid input[type=checkbox]{width:auto;justify-self:start}
+    #provider-controls .actions{margin-top:1rem}#provider-controls details{margin-top:1.2rem}
+    @media(max-width:800px){.grid,.bottom-grid{grid-template-columns:1fr}header{padding:1.5rem}
+      main{padding:1rem}h1{font-size:1.65rem}#actor-list{max-height:14rem}}
+  </style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">Living Los Santos / Local control</div>
+  <h1>Characters with a history.</h1>
+  <p>Inspect characters, correct memories, and manage each save timeline. The dashboard uses this computer’s local service.</p>
+  <span class="badge" id="provider">Provider: loading</span>
+  <span class="badge">Game verification pending</span>
+  <span class="badge">Voice verification pending</span>
+</header>
+<main>
+  <div class="toolbar">
+    <label for="profile">Save profile<select id="profile"><option value="">Loading profiles…</option></select></label>
+    <button id="refresh">Refresh dashboard</button>
+  </div>
+  <p id="status" role="status" aria-live="polite">Connecting to the local service…</p>
+  <section id="provider-controls" aria-labelledby="provider-title">
+    <h2 id="provider-title">AI provider</h2>
+    <p id="provider-summary" class="muted">Loading provider settings…</p>
+    <div class="config-grid">
+      <label for="provider-choice">Provider<select id="provider-choice">
+        <option value="disabled">AI off</option><option value="local_openai">Local OpenAI-compatible server</option>
+        <option value="openai">Hosted OpenAI-compatible server</option><option value="fake">Simulated dialogue (testing)</option>
+      </select></label>
+      <label for="provider-endpoint">Server endpoint<input id="provider-endpoint" type="url" spellcheck="false"></label>
+      <label for="dialogue-model">Dialogue model<input id="dialogue-model" maxlength="128" spellcheck="false"></label>
+      <label for="action-model">Action model (blank uses dialogue model)<input id="action-model" maxlength="128" spellcheck="false"></label>
+    </div>
+    <details><summary>Semantic memory retrieval</summary>
+      <p class="small muted">Semantic retrieval can find memories with related meanings. If embeddings are unavailable, the service uses text search.</p>
+      <div class="config-grid">
+        <label for="embedding-provider">Embedding provider<select id="embedding-provider">
+          <option value="disabled">Text search only</option><option value="local_openai">Local OpenAI-compatible server</option>
+          <option value="openai">Hosted OpenAI-compatible server</option>
+        </select></label>
+        <label for="embedding-model">Embedding model<input id="embedding-model" maxlength="128" spellcheck="false"></label>
+        <label for="embedding-endpoint">Embedding endpoint (blank uses provider endpoint)<input id="embedding-endpoint" type="url" spellcheck="false"></label>
+        <label for="embedding-dimensions">Dimensions (optional)<input id="embedding-dimensions" type="number" min="1" max="4096" step="1"></label>
+        <label for="embedding-input-price">Embedding input USD per million tokens<input id="embedding-input-price" type="number" min="0" max="10000" step="any"></label>
+      </div>
+    </details>
+    <details><summary>Hosted prices and daily limits</summary>
+      <p class="small muted">Enter your provider’s current USD prices per million tokens. Estimates use these prices, not your provider’s invoice.</p>
+      <div class="config-grid">
+        <label for="dialogue-input-price">Dialogue input price<input id="dialogue-input-price" type="number" min="0" max="10000" step="any"></label>
+        <label for="dialogue-output-price">Dialogue output price<input id="dialogue-output-price" type="number" min="0" max="10000" step="any"></label>
+        <label for="action-input-price">Action input price<input id="action-input-price" type="number" min="0" max="10000" step="any"></label>
+        <label for="action-output-price">Action output price<input id="action-output-price" type="number" min="0" max="10000" step="any"></label>
+        <label for="foreground-requests">Foreground requests per UTC day<input id="foreground-requests" type="number" min="0" max="100000" step="1"></label>
+        <label for="foreground-usd">Foreground estimated USD per UTC day<input id="foreground-usd" type="number" min="0" max="10000" step="any"></label>
+        <label for="background-requests">Background requests per UTC day<input id="background-requests" type="number" min="0" max="100000" step="1"></label>
+        <label for="background-usd">Background estimated USD per UTC day<input id="background-usd" type="number" min="0" max="10000" step="any"></label>
+      </div>
+      <p class="small muted">Requests reserve their maximum estimated cost before dispatch. Missing usage retains the reservation. Profile resets do not reset daily usage.</p>
+    </details>
+    <details><summary>Local fallback</summary>
+      <p class="small muted">If the hosted provider cannot respond, use an explicitly configured local server. Its endpoint must use a literal loopback IP.</p>
+      <div class="config-grid">
+        <label for="fallback-enabled">Enable local fallback<input id="fallback-enabled" type="checkbox"></label>
+        <label for="fallback-endpoint">Local fallback endpoint<input id="fallback-endpoint" type="url" spellcheck="false"></label>
+        <label for="fallback-dialogue">Fallback dialogue model<input id="fallback-dialogue" maxlength="128" spellcheck="false"></label>
+        <label for="fallback-action">Fallback action model<input id="fallback-action" maxlength="128" spellcheck="false"></label>
+      </div>
+    </details>
+    <div class="actions"><button id="save-provider">Save provider settings</button><button id="refresh-provider">Reload provider settings</button></div>
+    <p class="small muted">Saving settings cancels active replies and revokes cloud consent. Configure credentials through the service environment.</p>
+    <p id="cloud-destination" class="small"></p>
+    <p class="small">Enabling cloud sends selected character context, memories, and dialogue to the saved hosted endpoints. Hosted embeddings receive search queries and selected memories.</p>
+    <div class="actions"><button id="enable-cloud" disabled>Enable cloud for saved settings</button>
+      <button id="revoke-cloud">Revoke cloud consent</button></div>
+    <details><summary>Usage and fallback status</summary><pre id="provider-usage">Loading…</pre></details>
+  </section>
+  <section aria-labelledby="diagnostics-title">
+    <h2 id="diagnostics-title">Live session</h2>
+    <div class="toolbar">
+      <label for="diagnostic-session">Session<select id="diagnostic-session"><option value="">No sessions</option></select></label>
+      <button id="refresh-diagnostics">Refresh session</button>
+    </div>
+    <p id="diagnostic-summary" class="muted small">Connect the game bridge to inspect a session.</p>
+    <details><summary>Nearby characters and world state</summary><pre id="diagnostic-actors">No session selected.</pre></details>
+    <details><summary>Dialogue and action queue</summary><pre id="diagnostic-commands">No session selected.</pre></details>
+    <details><summary>Context sources, decisions, and timing</summary><pre id="diagnostic-trace">No session selected.</pre></details>
+    <details><summary>Perception, triggers, and social scenes</summary><pre id="diagnostic-perception">No session selected.</pre></details>
+    <details><summary>Compatibility and performance</summary><pre id="diagnostic-manifest">No session selected.</pre></details>
+  </section>
+  <div class="grid">
+    <section aria-labelledby="characters-title">
+      <h2 id="characters-title">Characters</h2>
+      <p class="muted small">Persistent characters and pedestrians from active sessions.</p>
+      <div id="actor-list"></div>
+    </section>
+    <section aria-labelledby="memory-title">
+      <h2 id="memory-title">Select a character</h2>
+      <p id="actor-description" class="muted">Choose a character to inspect its profile and memories.</p>
+      <details id="persona-details"><summary>Character profile</summary><pre id="persona"></pre></details>
+      <p class="small muted">This administrator view includes all saved histories. Each memory shows its branch and protagonist.</p>
+      <div id="memory-list"><p class="empty">No character selected.</p></div>
+      <div class="actions"><button id="previous" disabled>Previous memories</button>
+        <button id="next" disabled>More memories</button></div>
+      <details><summary>Reset this character</summary>
+        <p class="warning">WARNING: Resetting a character deletes its memories, knowledge, and relationship history across all branches.</p>
+        <button id="reset-actor" class="danger" disabled>Reset character data</button>
+      </details>
+    </section>
+  </div>
+  <div class="bottom-grid">
+    <section aria-labelledby="timeline-title">
+      <h2 id="timeline-title">Save timelines</h2>
+      <p class="muted small">A game date cannot always identify a save. Select a history when the service reports an ambiguous timeline.</p>
+      <p class="muted small">Selecting a history closes this profile’s active sessions. The next connection uses your selection.</p>
+      <div id="branches"></div>
+    </section>
+    <section aria-labelledby="tools-title">
+      <h2 id="tools-title">Local data</h2>
+      <div id="profile-tools">
+        <button id="export-profile">Show profile export</button>
+        <button id="backup">Back up all profiles</button>
+        <p class="small muted">Backups remain beside the local database. Erasing a profile does not erase existing backups.</p>
+        <details><summary>Erase this save profile</summary>
+          <p class="warning">WARNING: Erasing a profile permanently deletes its characters, events, memories, and saved histories from the active database.</p>
+          <button id="erase-profile" class="danger">Erase profile data</button>
+        </details>
+      </div>
+    </section>
+  </div>
+  <section id="export-panel" hidden aria-labelledby="export-title">
+    <h2 id="export-title">Profile export</h2>
+    <p class="muted small">This export includes private conversations. It remains in this page until you close the panel.</p>
+    <button id="close-export">Clear and close export</button>
+    <textarea id="export-content" readonly aria-label="Profile JSON export"></textarea>
+  </section>
+  <details><summary>Active session information</summary><pre id="sessions"></pre></details>
+</main>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title">
+  <h2 id="confirm-title"></h2><p id="confirm-warning" class="warning"></p>
+  <p id="confirm-target" class="small"></p>
+  <label for="confirm-input">Type the exact identifier<input id="confirm-input" autocomplete="off" spellcheck="false"></label>
+  <div class="actions"><button id="confirm-cancel">Cancel</button><button id="confirm-accept" class="danger">Confirm</button></div>
+</dialog>
+<script nonce="__CSP_NONCE__">
+  const credentials = __ADMIN_BOOTSTRAP__;
+  const el = id => document.getElementById(id);
+  const state = {profile:'', actor:null, actors:[], offset:0, pageSize:20, generation:0};
+  let confirmation = null;
+  let diagnosticsGeneration = 0;
+  let memoryGeneration = 0;
+  let exportGeneration = 0;
+  let refreshGeneration = 0;
+  let providerConfiguration = null;
+  let providerRevision = null;
+  function status(message, error=false) {
+    el('status').textContent = message;
+    el('status').dataset.error = String(error);
+  }
+  async function api(path, method='GET', body) {
+    const response = await fetch('/v1/admin'+path, {
+      method, cache:'no-store', credentials:'omit',
+      headers:{Authorization:'Bearer '+credentials.token,'X-CSRF-Token':credentials.csrf,
+        ...(body===undefined?{}:{'Content-Type':'application/json'})},
+      body:body===undefined?undefined:JSON.stringify(body)
+    });
+    const data = await response.json();
+    if (!response.ok) throw Error(typeof data.detail==='string'?data.detail:'The request failed.');
+    if(method!=='GET'&&method!=='HEAD'&&path.startsWith('/profiles/'))invalidateDataViews();
+    return data;
+  }
+  const profilePath = () => '/profiles/'+encodeURIComponent(state.profile);
+  function button(text, handler, className='') {
+    const node=document.createElement('button'); node.textContent=text; node.className=className;
+    node.addEventListener('click',()=>run(handler,node)); return node;
+  }
+  async function run(handler,node) {
+    if(node) node.disabled=true;
+    try {await handler();} catch(error) {status(error.message,true);}
+    finally {if(node) node.disabled=false;}
+  }
+  function confirmTarget(title, warning, target) {
+    return new Promise(resolve=>{
+      confirmation={resolve,target};el('confirm-title').textContent=title;
+      el('confirm-warning').textContent=warning;el('confirm-target').textContent=target;
+      el('confirm-input').value='';el('confirm-accept').disabled=true;
+      el('confirm-dialog').showModal();el('confirm-input').focus();
+    });
+  }
+  function finishConfirmation(accepted) {
+    const pending=confirmation;confirmation=null;el('confirm-dialog').close();
+    if(pending)pending.resolve(accepted);
+  }
+  el('confirm-input').addEventListener('input',()=>{
+    el('confirm-accept').disabled=!confirmation || el('confirm-input').value!==confirmation.target;
+  });
+  el('confirm-cancel').addEventListener('click',()=>finishConfirmation(false));
+  el('confirm-accept').addEventListener('click',()=>finishConfirmation(true));
+  el('confirm-dialog').addEventListener('cancel',event=>{event.preventDefault();finishConfirmation(false);});
+  function clearExport(){
+    exportGeneration++;el('export-content').value='';el('export-panel').hidden=true;
+  }
+  function clearMemories(){
+    memoryGeneration++;el('memory-list').replaceChildren();
+    el('previous').disabled=true;el('next').disabled=true;
+  }
+  function clearDiagnostics(){
+    diagnosticsGeneration++;
+    el('diagnostic-summary').textContent='Refresh the session to load current data.';
+    for(const field of ['actors','commands','trace','perception','manifest'])
+      el('diagnostic-'+field).textContent='No current session data.';
+  }
+  function invalidateDataViews(){
+    state.generation++;refreshGeneration++;
+    clearExport();clearMemories();clearDiagnostics();
+  }
+  async function reloadMemoryViews(){
+    await Promise.all([loadMemories(),loadDiagnostics()]);
+  }
+  function numberValue(id) {
+    const input=el(id),value=Number(input.value);
+    if(input.value.trim()===''||!Number.isFinite(value)||!input.checkValidity())
+      throw Error('Enter a valid value for '+document.querySelector('label[for="'+id+'"]').firstChild.textContent+'.');
+    return value;
+  }
+  function displayProvider(data) {
+    providerConfiguration=data.configuration;
+    providerRevision=data.configuration_revision;
+    const config=data.configuration,gateway=config.ai_gateway;
+    el('provider-choice').value=config.provider;
+    el('provider-endpoint').value=config.provider==='local_openai'?config.local_base_url:config.openai_base_url;
+    el('dialogue-model').value=config.dialogue_model;el('action-model').value=config.action_model;
+    const embedding=config.embedding;
+    el('embedding-provider').value=embedding.provider;
+    el('embedding-model').value=embedding.model;
+    el('embedding-endpoint').value=embedding.base_url;
+    el('embedding-dimensions').value=embedding.dimensions??'';
+    el('embedding-input-price').value=gateway.prices[embedding.model]?.input_usd_per_million??'';
+    for(const lane of ['dialogue','action']){
+      const model=config[lane+'_model']||config.dialogue_model,price=gateway.prices[model];
+      for(const direction of ['input','output'])
+        el(lane+'-'+direction+'-price').value=price?price[direction+'_usd_per_million']:'';
+    }
+    for(const lane of ['foreground','background']){
+      el(lane+'-requests').value=gateway[lane].max_requests;
+      el(lane+'-usd').value=gateway[lane].max_estimated_usd;
+    }
+    const fallback=gateway.local_fallback;
+    el('fallback-enabled').checked=Boolean(fallback);
+    el('fallback-endpoint').value=fallback?.endpoint||'http://127.0.0.1:1234/v1';
+    el('fallback-dialogue').value=fallback?.dialogue_model||'';
+    el('fallback-action').value=fallback?.action_model||'';
+    const destinations=[];
+    if(config.provider==='openai')destinations.push('Dialogue: '+config.openai_base_url);
+    if(embedding.provider==='openai')destinations.push('Embeddings: '+(embedding.base_url||config.openai_base_url));
+    el('cloud-destination').textContent=destinations.length?destinations.join(' · '):'No hosted providers selected.';
+    el('enable-cloud').disabled=!destinations.length||data.cloud_consent;
+    el('provider-summary').textContent='Selected provider: '+config.provider+' · Cloud consent: '+(data.cloud_consent?'enabled':'revoked');
+    el('provider').textContent='Provider: '+config.provider;
+    const {configuration,...usage}=data;
+    el('provider-usage').textContent=JSON.stringify(usage,null,2);
+  }
+  async function loadProvider(){displayProvider(await api('/provider'));}
+  async function saveProvider(){
+    if(!providerConfiguration)throw Error('Reload provider settings first.');
+    const config=JSON.parse(JSON.stringify(providerConfiguration));delete config.cloud_opt_in;
+    config.provider=el('provider-choice').value;
+    if(config.provider==='local_openai')config.local_base_url=el('provider-endpoint').value.trim();
+    if(config.provider==='openai')config.openai_base_url=el('provider-endpoint').value.trim();
+    config.dialogue_model=el('dialogue-model').value.trim();config.action_model=el('action-model').value.trim();
+    config.embedding.provider=el('embedding-provider').value;
+    config.embedding.model=el('embedding-model').value.trim();
+    config.embedding.base_url=el('embedding-endpoint').value.trim();
+    config.embedding.dimensions=el('embedding-dimensions').value===''?null:numberValue('embedding-dimensions');
+    for(const lane of ['foreground','background'])config.ai_gateway[lane]={
+      max_requests:numberValue(lane+'-requests'),max_estimated_usd:numberValue(lane+'-usd')};
+    for(const lane of ['dialogue','action']){
+      const model=config[lane+'_model']||config.dialogue_model;
+      if(lane==='action'&&model===config.dialogue_model)continue;
+      const input=el(lane+'-input-price').value,output=el(lane+'-output-price').value;
+      if(input===''&&output===''){delete config.ai_gateway.prices[model];continue;}
+      config.ai_gateway.prices[model]={input_usd_per_million:numberValue(lane+'-input-price'),
+        output_usd_per_million:numberValue(lane+'-output-price')};
+    }
+    config.ai_gateway.local_fallback=el('fallback-enabled').checked?{
+      endpoint:el('fallback-endpoint').value.trim(),dialogue_model:el('fallback-dialogue').value.trim(),
+      action_model:el('fallback-action').value.trim()||null}:null;
+    if(el('embedding-input-price').value!==''&&config.embedding.model)
+      config.ai_gateway.prices[config.embedding.model]={
+        input_usd_per_million:numberValue('embedding-input-price'),output_usd_per_million:0};
+    displayProvider(await api('/provider','PUT',config));status('Provider settings saved. Cloud consent is revoked.');
+  }
+  el('provider-controls').addEventListener('input',()=>{el('enable-cloud').disabled=true;});
+  el('provider-choice').addEventListener('change',()=>{
+    if(!providerConfiguration)return;
+    el('provider-endpoint').value=el('provider-choice').value==='local_openai'?
+      providerConfiguration.local_base_url:providerConfiguration.openai_base_url;
+  });
+  el('save-provider').addEventListener('click',()=>run(saveProvider,el('save-provider')));
+  el('refresh-provider').addEventListener('click',()=>run(loadProvider,el('refresh-provider')));
+  el('enable-cloud').addEventListener('click',()=>run(async()=>{
+    displayProvider(await api('/provider/consent','POST',{
+      endpoint:providerConfiguration.openai_base_url,configuration_revision:providerRevision}));
+    status('Cloud consent enabled for the saved endpoint.');
+  }));
+  el('revoke-cloud').addEventListener('click',()=>run(async()=>{
+    displayProvider(await api('/provider/revoke','POST',{}));status('Cloud consent revoked. Active model requests have stopped.');
+  },el('revoke-cloud')));
+  async function refresh() {
+    const generation=++refreshGeneration;
+    await loadProvider();
+    if(generation!==refreshGeneration)return;
+    const data=await api('/overview');
+    if(generation!==refreshGeneration)return;
+    el('provider').textContent='Provider: '+data.provider;
+    el('sessions').textContent=JSON.stringify(data.sessions,null,2);
+    const selectedSession=el('diagnostic-session').value;
+    el('diagnostic-session').replaceChildren();
+    for(const session of data.sessions){const option=document.createElement('option');
+      option.value=session.session_id;option.textContent=session.profile_id+' · '+session.protagonist_id+
+        (session.closed?' · closed':' · active');el('diagnostic-session').append(option);}
+    if(data.sessions.some(session=>session.session_id===selectedSession))
+      el('diagnostic-session').value=selectedSession;
+    await loadDiagnostics();
+    if(generation!==refreshGeneration)return;
+    const previous=state.profile;el('profile').replaceChildren();
+    for(const profile of data.profiles){const option=document.createElement('option');
+      option.value=profile.profile_id;option.textContent=profile.profile_id+
+        (profile.save_slot?' · '+profile.save_slot:' · save association not set');
+      el('profile').append(option);}
+    if(data.profiles.some(profile=>profile.profile_id===previous))el('profile').value=previous;
+    state.profile=el('profile').value;await loadProfile();
+    status(data.profiles.length?'Dashboard refreshed.':'No profiles exist. Connect the game bridge to create a profile.');
+  }
+  async function loadDiagnostics() {
+    clearDiagnostics();
+    const generation=diagnosticsGeneration,session=el('diagnostic-session').value;
+    const fields=['actors','commands','trace','perception','manifest'];
+    el('diagnostic-summary').textContent=session?'Loading session…':'No sessions are available.';
+    for(const field of fields)el('diagnostic-'+field).textContent=session?'Loading…':'No session selected.';
+    el('refresh-diagnostics').disabled=!session;
+    if(!session)return;
+    const data=await api('/sessions/'+encodeURIComponent(session)+'/diagnostics');
+    if(generation!==diagnosticsGeneration)return;
+    el('diagnostic-summary').textContent=(data.closed?'Closed':'Active')+' · '+data.protagonist_id+
+      ' · '+data.game_datetime+' · '+data.actors.length+' nearby characters · Provider: '+data.provider;
+    const values={actors:{actors:data.actors,world:data.world},commands:data.commands,trace:data.trace,
+      perception:{perception:data.perception,triggers:data.triggers,social:data.social,social_scheduler:data.social_scheduler},
+      manifest:{manifest:data.manifest,heartbeat:data.heartbeat,game_verified:data.game_verified}};
+    for(const field of fields)el('diagnostic-'+field).textContent=JSON.stringify(values[field],null,2);
+  }
+  async function loadProfile() {
+    state.generation++;state.actor=null;state.actors=[];state.offset=0;clearExport();clearMemories();
+    el('actor-list').replaceChildren();
+    el('persona').textContent='';el('memory-title').textContent='Select a character';
+    el('actor-description').textContent='Choose a character to inspect its profile and memories.';
+    el('reset-actor').disabled=true;el('previous').disabled=true;el('next').disabled=true;
+    for(const id of ['export-profile','erase-profile'])el(id).disabled=!state.profile;
+    if(!state.profile){el('branches').textContent='No saved histories yet.';return;}
+    const generation=state.generation;
+    const [actorData,branchData]=await Promise.all([api(profilePath()+'/actors'),api(profilePath()+'/branches')]);
+    if(generation!==state.generation)return;
+    state.actors=actorData.actors;
+    for(const actor of state.actors){
+      const choice=button(actor.display_name||actor.id,()=>selectActor(actor));
+      choice.className='actor-choice';choice.dataset.actor=actor.id;choice.setAttribute('aria-pressed','false');
+      const subtitle=document.createElement('span');subtitle.textContent=actor.occupation||actor.actor_kind;
+      choice.append(subtitle);el('actor-list').append(choice);
+    }
+    if(!state.actors.length)el('actor-list').textContent='No characters in this profile.';
+    el('branches').replaceChildren();
+    for(const branch of branchData.branches){
+      const card=document.createElement('div');card.className='timeline-card';
+      const details=document.createElement('p');details.className='memory-meta';
+      details.textContent=branch.branch_id+' · Started '+branch.fork_time+' · Latest '+branch.latest_time;
+      const choose=button(branchData.selected_branch_id===branch.branch_id?'Selected for next connection':'Use this history',async()=>{
+        const profile=state.profile;
+        if(!await confirmTarget('Select a save history','CAUTION: This closes the profile’s active sessions.',profile))return;
+        await api('/profiles/'+encodeURIComponent(profile)+'/timeline','POST',
+          {branch_id:branch.branch_id,confirm_profile_id:profile});
+        await loadProfile();status('History selected. Reconnect the game bridge.');
+      });card.append(details,choose);el('branches').append(card);
+    }
+    if(!branchData.branches.length)el('branches').textContent='No saved histories yet.';
+    if(state.actors.length)await selectActor(state.actors[0]);
+  }
+  async function selectActor(actor) {
+    state.actor=actor;state.offset=0;state.generation++;
+    el('memory-title').textContent=actor.display_name||actor.id;
+    el('actor-description').textContent=actor.short_bio||actor.persona?.biography||actor.actor_kind;
+    el('persona').textContent=JSON.stringify(actor,null,2);el('reset-actor').disabled=false;
+    for(const choice of el('actor-list').children)
+      choice.setAttribute('aria-pressed',String(choice.dataset.actor===actor.id));
+    await loadMemories();
+  }
+  async function loadMemories() {
+    clearMemories();
+    if(!state.actor)return;
+    const generation=state.generation,request=memoryGeneration,profile=state.profile,actor=state.actor.id;
+    const path='/profiles/'+encodeURIComponent(profile);
+    const data=await api(path+'/memories?actor_id='+encodeURIComponent(actor)+
+      '&limit='+state.pageSize+'&offset='+state.offset);
+    if(generation!==state.generation||request!==memoryGeneration)return;
+    el('memory-list').replaceChildren();
+    for(const memory of data.memories){
+      const row=document.createElement('article');row.className='memory';
+      const meta=document.createElement('div');meta.className='memory-meta';
+      meta.textContent=memory.provenance+' · '+(memory.protagonist_id||'No protagonist')+
+        ' · '+memory.game_datetime+' · Branch '+memory.branch_id;
+      const text=document.createElement('textarea');text.value=memory.text;
+      text.setAttribute('aria-label','Memory text');
+      const sources=document.createElement('div');sources.className='memory-meta';
+      sources.textContent='Sources: '+memory.source_event_ids.join(', ');
+      const scores=document.createElement('div');scores.className='scores';
+      const inputs={};for(const key of ['importance','confidence']){
+        const label=document.createElement('label');label.textContent=key;
+        const input=document.createElement('input');input.type='number';input.min=0;input.max=1;
+        input.step=.05;input.value=memory[key];label.append(input);scores.append(label);inputs[key]=input;
+      }
+      const actions=document.createElement('div');actions.className='actions';
+      actions.append(button('Save memory',async()=>{
+        await api(path+'/memories/'+encodeURIComponent(memory.memory_id),'PATCH',
+          {text:text.value,importance:Number(inputs.importance.value),confidence:Number(inputs.confidence.value)});
+        await reloadMemoryViews();status('Memory saved. Active replies were canceled.');
+      }),button('Delete memory',async()=>{
+        if(!await confirmTarget('Delete this memory','WARNING: This permanently deletes the memory and its derived summaries.',memory.memory_id))return;
+        await api(path+'/memories/'+encodeURIComponent(memory.memory_id),'DELETE',{confirm_memory_id:memory.memory_id});
+        await reloadMemoryViews();status('Memory deleted.');
+      },'danger'));
+      row.append(meta,text,sources,scores,actions);el('memory-list').append(row);
+    }
+    if(!data.memories.length){const empty=document.createElement('p');empty.className='empty';
+      empty.textContent='No memories in this history window.';el('memory-list').append(empty);}
+    el('previous').disabled=state.offset===0;el('next').disabled=data.memories.length<state.pageSize;
+  }
+  el('profile').addEventListener('change',()=>run(async()=>{state.profile=el('profile').value;await loadProfile();}));
+  el('refresh').addEventListener('click',()=>run(refresh,el('refresh')));
+  el('diagnostic-session').addEventListener('change',()=>run(loadDiagnostics));
+  el('refresh-diagnostics').addEventListener('click',()=>run(loadDiagnostics,el('refresh-diagnostics')));
+  el('previous').addEventListener('click',()=>run(async()=>{state.offset=Math.max(0,state.offset-state.pageSize);await loadMemories();}));
+  el('next').addEventListener('click',()=>run(async()=>{state.offset+=state.pageSize;await loadMemories();}));
+  el('reset-actor').addEventListener('click',()=>run(async()=>{
+    if(!state.actor)return;const actor=state.actor.id,profile=state.profile;
+    if(!await confirmTarget('Reset character data','WARNING: This deletes all memories, knowledge, and relationship history for this character.',actor))return;
+    await api('/profiles/'+encodeURIComponent(profile)+'/actors/'+encodeURIComponent(actor)+'/reset','POST',{confirm_actor_id:actor});
+    await reloadMemoryViews();status('Character data reset. Its authored profile remains.');
+  }));
+  el('export-profile').addEventListener('click',()=>run(async()=>{
+    clearExport();
+    const profile=state.profile,generation=exportGeneration;
+    const data=await api(profilePath()+'/export');
+    if(profile!==state.profile||generation!==exportGeneration)return;
+    el('export-content').value=JSON.stringify(data,null,2);el('export-panel').hidden=false;
+    el('export-panel').scrollIntoView({behavior:'smooth'});status('Profile export is visible locally.');
+  }));
+  el('close-export').addEventListener('click',clearExport);
+  el('backup').addEventListener('click',()=>run(async()=>{
+    const data=await api('/backups','POST',{confirm_scope:'all_profiles'});
+    status('Local backup created: '+data.path);
+  },el('backup')));
+  el('erase-profile').addEventListener('click',()=>run(async()=>{
+    const profile=state.profile;
+    if(!await confirmTarget('Erase profile data','WARNING: This permanently deletes the profile from the active database. Existing backups remain.',profile))return;
+    await api('/profiles/'+encodeURIComponent(profile),'DELETE',{confirm_profile_id:profile});
+    state.actor=null;state.actors=[];el('actor-list').replaceChildren();el('persona').textContent='';
+    el('actor-description').textContent='';await refresh();status('Profile erased: '+profile);
+  }));
+  window.addEventListener('pagehide',()=>{credentials.token='';credentials.csrf='';invalidateDataViews();});
+  run(refresh);
+</script>
+</body>
+</html>

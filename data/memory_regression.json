@@ -1,0 +1,658 @@
+{
+  "schema_version": 1,
+  "description": "50 deterministic retrieval questions. Misinformation cases require retrieving the original qualification. This does not claim live model answer verification.",
+  "events": [
+    {
+      "event_id": "qa:bicycle",
+      "game_datetime": "2025-01-01T10:00:00Z",
+      "protagonist_id": "franklin",
+      "event_type": "qa_fixture",
+      "observer_ids": [
+        "avery"
+      ],
+      "provenance": "heard",
+      "confidence": 0.8,
+      "payload": {
+        "text": "I heard Franklin say his bicycle has a loose bell. I did not inspect the bicycle."
+      }
+    },
+    {
+      "event_id": "qa:canopy",
+      "game_datetime": "2025-01-01T10:01:00Z",
+      "protagonist_id": "franklin",
+      "event_type": "qa_fixture",
+      "observer_ids": [
+        "avery"
+      ],
+      "provenance": "directly_observed",
+      "confidence": 0.8,
+      "payload": {
+        "text": "I read a notice proposing a canopy discussion. I have not seen a canopy built."
+      }
+    },
+    {
+      "event_id": "qa:coffee",
+      "game_datetime": "2025-01-01T10:02:00Z",
+      "protagonist_id": "franklin",
+      "event_type": "qa_fixture",
+      "observer_ids": [
+        "avery"
+      ],
+      "provenance": "reported",
+      "confidence": 0.8,
+      "payload": {
+        "text": "Franklin told me he prefers decaffeinated coffee. I did not observe a purchase."
+      }
+    },
+    {
+      "event_id": "qa:sewing",
+      "game_datetime": "2025-01-01T10:03:00Z",
+      "protagonist_id": "franklin",
+      "event_type": "qa_fixture",
+      "observer_ids": [
+        "avery"
+      ],
+      "provenance": "directly_observed",
+      "confidence": 0.8,
+      "payload": {
+        "text": "I explained a sewing knot to Franklin. I do not know whether he used it."
+      }
+    },
+    {
+      "event_id": "qa:garden",
+      "game_datetime": "2025-01-01T10:04:00Z",
+      "protagonist_id": "franklin",
+      "event_type": "qa_fixture",
+      "observer_ids": [
+        "avery"
+      ],
+      "provenance": "heard",
+      "confidence": 0.8,
+      "payload": {
+        "text": "Franklin mentioned an interest in a garden. He did not ask me to arrange any work."
+      }
+    },
+    {
+      "event_id": "qa:book",
+      "game_datetime": "2025-01-01T10:05:00Z",
+      "protagonist_id": "franklin",
+      "event_type": "qa_fixture",
+      "observer_ids": [
+        "avery"
+      ],
+      "provenance": "heard",
+      "confidence": 0.8,
+      "payload": {
+        "text": "Franklin said a book title sounded interesting. I did not lend or sell him a book."
+      }
+    },
+    {
+      "event_id": "qa:painting",
+      "game_datetime": "2025-01-01T10:06:00Z",
+      "protagonist_id": "franklin",
+      "event_type": "qa_fixture",
+      "observer_ids": [
+        "avery"
+      ],
+      "provenance": "heard",
+      "confidence": 0.8,
+      "payload": {
+        "text": "Franklin said he likes blue painting designs. I did not change any signs."
+      }
+    },
+    {
+      "event_id": "qa:bus",
+      "game_datetime": "2025-01-01T10:07:00Z",
+      "protagonist_id": "franklin",
+      "event_type": "qa_fixture",
+      "observer_ids": [
+        "avery"
+      ],
+      "provenance": "heard",
+      "confidence": 0.8,
+      "payload": {
+        "text": "Franklin asked about a bus stop. I do not know where he traveled later."
+      }
+    },
+    {
+      "event_id": "qa:music",
+      "game_datetime": "2025-01-01T10:08:00Z",
+      "protagonist_id": "franklin",
+      "event_type": "qa_fixture",
+      "observer_ids": [
+        "avery"
+      ],
+      "provenance": "heard",
+      "confidence": 0.8,
+      "payload": {
+        "text": "Franklin said he enjoys quiet music. I did not hear a recording."
+      }
+    },
+    {
+      "event_id": "qa:walking",
+      "game_datetime": "2025-01-01T10:09:00Z",
+      "protagonist_id": "franklin",
+      "event_type": "qa_fixture",
+      "observer_ids": [
+        "avery"
+      ],
+      "provenance": "directly_observed",
+      "confidence": 0.8,
+      "payload": {
+        "text": "We discussed a possible walking route. We did not start a walk together."
+      }
+    }
+  ],
+  "questions": [
+    {
+      "id": "bicycle:lexical",
+      "category": "lexical",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What do you recall about the bicycle?",
+      "expected_top_source_event_ids": [
+        "qa:bicycle"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "bicycle:specific_detail",
+      "category": "specific_detail",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What did we say about bell?",
+      "expected_top_source_event_ids": [
+        "qa:bicycle"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "bicycle:misinformation_bait",
+      "category": "misinformation_bait",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "Was the bicycle inspected and repaired?",
+      "expected_top_source_event_ids": [
+        "qa:bicycle"
+      ],
+      "required_qualification": "I heard Franklin say his bicycle has a loose bell. I did not inspect the bicycle."
+    },
+    {
+      "id": "bicycle:wrong_npc",
+      "category": "wrong_npc",
+      "actor_id": "bea",
+      "protagonist_id": "franklin",
+      "query": "You also saw the bicycle, right?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "bicycle:wrong_protagonist",
+      "category": "wrong_protagonist",
+      "actor_id": "avery",
+      "protagonist_id": "michael",
+      "query": "What did I tell you about the bicycle?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "canopy:lexical",
+      "category": "lexical",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What do you recall about the canopy?",
+      "expected_top_source_event_ids": [
+        "qa:canopy"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "canopy:specific_detail",
+      "category": "specific_detail",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What did the canopy notice propose for discussion?",
+      "expected_top_source_event_ids": [
+        "qa:canopy"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "canopy:misinformation_bait",
+      "category": "misinformation_bait",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "Did the canopy construction finish?",
+      "expected_top_source_event_ids": [
+        "qa:canopy"
+      ],
+      "required_qualification": "I read a notice proposing a canopy discussion. I have not seen a canopy built."
+    },
+    {
+      "id": "canopy:wrong_npc",
+      "category": "wrong_npc",
+      "actor_id": "bea",
+      "protagonist_id": "franklin",
+      "query": "You also saw the canopy, right?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "canopy:wrong_protagonist",
+      "category": "wrong_protagonist",
+      "actor_id": "avery",
+      "protagonist_id": "michael",
+      "query": "What did I tell you about the canopy?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "coffee:lexical",
+      "category": "lexical",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What do you recall about the coffee?",
+      "expected_top_source_event_ids": [
+        "qa:coffee"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "coffee:specific_detail",
+      "category": "specific_detail",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What did we say about decaffeinated?",
+      "expected_top_source_event_ids": [
+        "qa:coffee"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "coffee:misinformation_bait",
+      "category": "misinformation_bait",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "Did Franklin buy decaffeinated coffee from me?",
+      "expected_top_source_event_ids": [
+        "qa:coffee"
+      ],
+      "required_qualification": "Franklin told me he prefers decaffeinated coffee. I did not observe a purchase."
+    },
+    {
+      "id": "coffee:wrong_npc",
+      "category": "wrong_npc",
+      "actor_id": "bea",
+      "protagonist_id": "franklin",
+      "query": "You also saw the coffee, right?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "coffee:wrong_protagonist",
+      "category": "wrong_protagonist",
+      "actor_id": "avery",
+      "protagonist_id": "michael",
+      "query": "What did I tell you about the coffee?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "sewing:lexical",
+      "category": "lexical",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What do you recall about the sewing?",
+      "expected_top_source_event_ids": [
+        "qa:sewing"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "sewing:specific_detail",
+      "category": "specific_detail",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What did we say about knot?",
+      "expected_top_source_event_ids": [
+        "qa:sewing"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "sewing:misinformation_bait",
+      "category": "misinformation_bait",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "Did Franklin finish sewing a jacket?",
+      "expected_top_source_event_ids": [
+        "qa:sewing"
+      ],
+      "required_qualification": "I explained a sewing knot to Franklin. I do not know whether he used it."
+    },
+    {
+      "id": "sewing:wrong_npc",
+      "category": "wrong_npc",
+      "actor_id": "bea",
+      "protagonist_id": "franklin",
+      "query": "You also saw the sewing, right?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "sewing:wrong_protagonist",
+      "category": "wrong_protagonist",
+      "actor_id": "avery",
+      "protagonist_id": "michael",
+      "query": "What did I tell you about the sewing?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "garden:lexical",
+      "category": "lexical",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What do you recall about the garden?",
+      "expected_top_source_event_ids": [
+        "qa:garden"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "garden:specific_detail",
+      "category": "specific_detail",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What did Franklin say about his garden interest?",
+      "expected_top_source_event_ids": [
+        "qa:garden"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "garden:misinformation_bait",
+      "category": "misinformation_bait",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "Did I assign Franklin a garden mission?",
+      "expected_top_source_event_ids": [
+        "qa:garden"
+      ],
+      "required_qualification": "Franklin mentioned an interest in a garden. He did not ask me to arrange any work."
+    },
+    {
+      "id": "garden:wrong_npc",
+      "category": "wrong_npc",
+      "actor_id": "bea",
+      "protagonist_id": "franklin",
+      "query": "You also saw the garden, right?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "garden:wrong_protagonist",
+      "category": "wrong_protagonist",
+      "actor_id": "avery",
+      "protagonist_id": "michael",
+      "query": "What did I tell you about the garden?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "book:lexical",
+      "category": "lexical",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What do you recall about the book?",
+      "expected_top_source_event_ids": [
+        "qa:book"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "book:specific_detail",
+      "category": "specific_detail",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What did we say about title?",
+      "expected_top_source_event_ids": [
+        "qa:book"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "book:misinformation_bait",
+      "category": "misinformation_bait",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "Did Franklin buy a book?",
+      "expected_top_source_event_ids": [
+        "qa:book"
+      ],
+      "required_qualification": "Franklin said a book title sounded interesting. I did not lend or sell him a book."
+    },
+    {
+      "id": "book:wrong_npc",
+      "category": "wrong_npc",
+      "actor_id": "bea",
+      "protagonist_id": "franklin",
+      "query": "You also saw the book, right?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "book:wrong_protagonist",
+      "category": "wrong_protagonist",
+      "actor_id": "avery",
+      "protagonist_id": "michael",
+      "query": "What did I tell you about the book?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "painting:lexical",
+      "category": "lexical",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What do you recall about the painting?",
+      "expected_top_source_event_ids": [
+        "qa:painting"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "painting:specific_detail",
+      "category": "specific_detail",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What did we say about blue?",
+      "expected_top_source_event_ids": [
+        "qa:painting"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "painting:misinformation_bait",
+      "category": "misinformation_bait",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "Did I repaint a sign for Franklin?",
+      "expected_top_source_event_ids": [
+        "qa:painting"
+      ],
+      "required_qualification": "Franklin said he likes blue painting designs. I did not change any signs."
+    },
+    {
+      "id": "painting:wrong_npc",
+      "category": "wrong_npc",
+      "actor_id": "bea",
+      "protagonist_id": "franklin",
+      "query": "You also saw the painting, right?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "painting:wrong_protagonist",
+      "category": "wrong_protagonist",
+      "actor_id": "avery",
+      "protagonist_id": "michael",
+      "query": "What did I tell you about the painting?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "bus:lexical",
+      "category": "lexical",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What do you recall about the bus?",
+      "expected_top_source_event_ids": [
+        "qa:bus"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "bus:specific_detail",
+      "category": "specific_detail",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What did we say about stop?",
+      "expected_top_source_event_ids": [
+        "qa:bus"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "bus:misinformation_bait",
+      "category": "misinformation_bait",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "Did I track Franklin on the bus?",
+      "expected_top_source_event_ids": [
+        "qa:bus"
+      ],
+      "required_qualification": "Franklin asked about a bus stop. I do not know where he traveled later."
+    },
+    {
+      "id": "bus:wrong_npc",
+      "category": "wrong_npc",
+      "actor_id": "bea",
+      "protagonist_id": "franklin",
+      "query": "You also saw the bus, right?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "bus:wrong_protagonist",
+      "category": "wrong_protagonist",
+      "actor_id": "avery",
+      "protagonist_id": "michael",
+      "query": "What did I tell you about the bus?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "music:lexical",
+      "category": "lexical",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What do you recall about the music?",
+      "expected_top_source_event_ids": [
+        "qa:music"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "music:specific_detail",
+      "category": "specific_detail",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What did we say about quiet?",
+      "expected_top_source_event_ids": [
+        "qa:music"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "music:misinformation_bait",
+      "category": "misinformation_bait",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "Did Franklin play a recording for me?",
+      "expected_top_source_event_ids": [
+        "qa:music"
+      ],
+      "required_qualification": "Franklin said he enjoys quiet music. I did not hear a recording."
+    },
+    {
+      "id": "music:wrong_npc",
+      "category": "wrong_npc",
+      "actor_id": "bea",
+      "protagonist_id": "franklin",
+      "query": "You also saw the music, right?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "music:wrong_protagonist",
+      "category": "wrong_protagonist",
+      "actor_id": "avery",
+      "protagonist_id": "michael",
+      "query": "What did I tell you about the music?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "walking:lexical",
+      "category": "lexical",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What do you recall about the walking?",
+      "expected_top_source_event_ids": [
+        "qa:walking"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "walking:specific_detail",
+      "category": "specific_detail",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "What did we say about route?",
+      "expected_top_source_event_ids": [
+        "qa:walking"
+      ],
+      "required_qualification": null
+    },
+    {
+      "id": "walking:misinformation_bait",
+      "category": "misinformation_bait",
+      "actor_id": "avery",
+      "protagonist_id": "franklin",
+      "query": "Did we complete the walking route together?",
+      "expected_top_source_event_ids": [
+        "qa:walking"
+      ],
+      "required_qualification": "We discussed a possible walking route. We did not start a walk together."
+    },
+    {
+      "id": "walking:wrong_npc",
+      "category": "wrong_npc",
+      "actor_id": "bea",
+      "protagonist_id": "franklin",
+      "query": "You also saw the walking, right?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    },
+    {
+      "id": "walking:wrong_protagonist",
+      "category": "wrong_protagonist",
+      "actor_id": "avery",
+      "protagonist_id": "michael",
+      "query": "What did I tell you about the walking?",
+      "expected_top_source_event_ids": [],
+      "required_qualification": null
+    }
+  ]
+}

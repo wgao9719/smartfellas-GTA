@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>LivingNPC.GameAdapter</AssemblyName>
+    <PlatformTarget>x64</PlatformTarget>
+    <DefineConstants Condition="'$(Configuration)' == 'Debug'">$(DefineConstants);DEVELOPMENT</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <ProjectReference Include="../LivingNPC.Core/LivingNPC.Core.csproj" />
+    <Reference Include="ScriptHookVDotNet3"><HintPath>../vendor-refs/ScriptHookVDotNet3.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Net.Http" />
+    <None Include="LivingNPC.ini.example" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CheckSHVDN" BeforeTargets="ResolveReferences" Condition="!Exists('../vendor-refs/ScriptHookVDotNet3.dll')">
+    <Error Text="Run python3 tools/fetch_shvdn_reference.py before building. Game runtime files are never committed." />
+  </Target>
+  <Target Name="WriteAdapterBuildIdentity" AfterTargets="Build">
+    <Exec Command="git status --porcelain" WorkingDirectory="$(MSBuildProjectDirectory)" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="AdapterGitStatus" />
+      <Output TaskParameter="ExitCode" PropertyName="AdapterGitStatusExitCode" />
+    </Exec>
+    <PropertyGroup>
+      <AdapterSourceDirty>null</AdapterSourceDirty>
+      <AdapterSourceDirty Condition="'$(AdapterGitStatusExitCode)' == '0'">false</AdapterSourceDirty>
+      <AdapterSourceDirty Condition="'$(AdapterGitStatusExitCode)' == '0' and '@(AdapterGitStatus)' != ''">true</AdapterSourceDirty>
+    </PropertyGroup>
+    <GetFileHash Files="$(TargetPath)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="AdapterHashedAssembly" />
+    </GetFileHash>
+    <GetFileHash Files="$(TargetDir)LivingNPC.Core.dll" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="CoreHashedAssembly" />
+    </GetFileHash>
+    <PropertyGroup><AdapterAssemblyHash>@(AdapterHashedAssembly->'%(FileHash)')</AdapterAssemblyHash></PropertyGroup>
+    <PropertyGroup><CoreAssemblyHash>@(CoreHashedAssembly->'%(FileHash)')</CoreAssemblyHash></PropertyGroup>
+    <WriteLinesToFile File="$(TargetDir)adapter-build-identity.json" Overwrite="true" Encoding="UTF-8"
+      Lines="{ &quot;schema_version&quot;: 1, &quot;adapter_version&quot;: &quot;$(Version)&quot;, &quot;informational_version&quot;: &quot;$(InformationalVersion)&quot;, &quot;source_commit&quot;: &quot;$(SourceRevisionId)&quot;, &quot;source_dirty&quot;: $(AdapterSourceDirty), &quot;configuration&quot;: &quot;$(Configuration)&quot;, &quot;built_at_utc&quot;: &quot;$([System.DateTime]::UtcNow.ToString('o'))&quot;, &quot;adapter_sha256&quot;: &quot;$(AdapterAssemblyHash)&quot;, &quot;core_sha256&quot;: &quot;$(CoreAssemblyHash)&quot; }" />
+  </Target>
+</Project>
