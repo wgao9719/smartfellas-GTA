@@ -92,7 +92,7 @@ namespace LivingNPC.GameAdapter
             pinKey = settings.GetEnum("Input", "PinKey", Keys.F8);
             confirmProfileKey = settings.GetEnum("Input", "ConfirmProfileKey", Keys.F10);
 #if DEVELOPMENT
-            socialEnabled = settings.GetBoolean("Development", "EnableUnverifiedSocial", false);
+            socialEnabled = settings.GetBoolean("Development", "EnableUnverifiedSocial", true);
             game.PinPersistence = settings.GetBoolean("Development", "EnableUnverifiedPinPersistence", false);
 #endif
             if (settings.HasInvalidValues)

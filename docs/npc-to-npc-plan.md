@@ -89,7 +89,7 @@ Mac-testable now.
    - Exclude scene members from the releasable set at the `PruneBindings` call site (`adapter/LivingNPC.GameAdapter/GtaGameAdapter.cs:121`).
    - Raise `BindingRetention.Headroom` from 4 to about 10, so one scan pass cannot reach the 36-binding cap.
 2. Snapshot fields. Add heading, `area_id` from the zone name, and `interior_id`.
-3. Capability. Advertise `development:social:v1` in Debug builds behind an INI opt-in.
+3. Capability. Advertise `development:social:v1` by default in Debug builds, with an INI opt-out.
 4. Fake street. Simulate 8 peds in `LivingNPC.BridgeProbe` so the full loop runs on a Mac.
 
 ## Phase C: visible conversations
@@ -134,7 +134,7 @@ Needs the Windows rig to verify.
 
 ## Current delivery and remaining work
 
-Phases B and C are implemented behind the Debug INI opt-in, including actual render-time
+Phases B and C are implemented by default in Debug builds (with an INI opt-out), including actual render-time
 observations and ordered HTTP delivery. Run `tests/live_bridge_check.py --embodied` for the
 production social controller against the real service with simulated game observations.
 The adapter and service enforce the 6 m pairing and 12 m generated-dialogue bounds.

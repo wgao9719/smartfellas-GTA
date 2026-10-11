@@ -169,3 +169,25 @@ def test_audio_device_settings_parse_default_index_and_names(monkeypatch, value,
     monkeypatch.setenv("LLS_OUTPUT_DEVICE", value)
     speech = Settings.from_env().speech
     assert speech.input_device == speech.output_device == expected
+
+
+@pytest.mark.parametrize(
+    "environment,expected",
+    [
+        ({}, (True, False, False)),
+        ({"LLS_RELEASE": "0"}, (False, True, True)),
+        ({"LLS_RELEASE": "0", "LLS_DEV_SOCIAL": "0"}, (False, False, False)),
+        ({"LLS_RELEASE": "0", "LLS_DEV_SOCIAL_AUTONOMY": "0"}, (False, True, False)),
+    ],
+)
+def test_social_startup_defaults_and_opt_out(monkeypatch, environment, expected):
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    settings = Settings.from_env()
+    assert (settings.release, settings.dev_social, settings.dev_social_autonomy) == expected
+
+
+def test_social_startup_still_rejects_release_enablement(monkeypatch):
+    monkeypatch.setenv("LLS_DEV_SOCIAL", "1")
+    with pytest.raises(ValueError, match="release builds refuse development social"):
+        Settings.from_env()

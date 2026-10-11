@@ -1,9 +1,12 @@
 # Development NPC social embodiment
 
 Status: implemented and compiled on macOS; **not observed in GTA**. G0–G4 remain open.
-Debug builds require `[Development] EnableUnverifiedSocial=true` in `LivingNPC.ini`.
-The service requires `LLS_RELEASE=0`, `LLS_DEV_SOCIAL=1`, and, for automatic initiation,
-`LLS_DEV_SOCIAL_AUTONOMY=1`. Release builds cannot enable this path.
+Debug builds enable NPC-to-NPC by default. Set `[Development] EnableUnverifiedSocial=false`
+in `LivingNPC.ini` to disable it; an existing explicit `false` must be changed to `true`.
+With `LLS_RELEASE=0`, the service defaults both social scenes and automatic initiation on.
+The Windows rig launcher already selects this development mode. Set `LLS_DEV_SOCIAL=0`
+to disable both, or `LLS_DEV_SOCIAL_AUTONOMY=0` to disable automatic initiation only.
+Release builds cannot enable this path.
 
 | Operation | Native mapping | Bounds | Observed on rig |
 | --- | --- | --- | --- |

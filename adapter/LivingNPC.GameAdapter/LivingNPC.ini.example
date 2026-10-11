@@ -39,5 +39,6 @@ EnableUnverifiedActions=false
 ; Debug builds only. Keeps pinned peds from despawning through an unverified persistence call.
 EnableUnverifiedPinPersistence=false
 
-; Debug only: nearby NPC conversations, overhead text, native chat tasks and hearing.
-EnableUnverifiedSocial=false
+; Debug only, enabled by default: nearby NPC conversations, overhead text, native chat tasks and hearing.
+; Set false to disable. Existing INI values take precedence over the default.
+EnableUnverifiedSocial=true

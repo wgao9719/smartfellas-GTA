@@ -162,15 +162,19 @@ class Settings(StrictModel):
             else:
                 base = Path.home() / "Library" / "Application Support" / "LivingLosSantos"
             database = str(base / "lls.sqlite3")
+        release = os.environ.get("LLS_RELEASE", "1") == "1"
+        social = os.environ.get("LLS_DEV_SOCIAL", "0" if release else "1") == "1"
         return cls(
             bootstrap_token=os.environ.get("LLS_BRIDGE_TOKEN", ""),
             host=os.environ.get("LLS_HOST", "127.0.0.1"),
             port=int(os.environ.get("LLS_PORT", "8765")),
-            release=os.environ.get("LLS_RELEASE", "1") == "1",
+            release=release,
             dev_lan=os.environ.get("LLS_DEV_LAN", "0") == "1",
             dev_perception=os.environ.get("LLS_DEV_PERCEPTION", "0") == "1",
-            dev_social=os.environ.get("LLS_DEV_SOCIAL", "0") == "1",
-            dev_social_autonomy=os.environ.get("LLS_DEV_SOCIAL_AUTONOMY", "0") == "1",
+            dev_social=social,
+            dev_social_autonomy=(
+                os.environ.get("LLS_DEV_SOCIAL_AUTONOMY", "1" if social else "0") == "1"
+            ),
             dev_skills=os.environ.get("LLS_DEV_SKILLS", "0") == "1",
             dev_skill_autonomy=os.environ.get("LLS_DEV_SKILL_AUTONOMY", "0") == "1",
             dev_neighborhood=os.environ.get("LLS_DEV_NEIGHBORHOOD", "0") == "1",
