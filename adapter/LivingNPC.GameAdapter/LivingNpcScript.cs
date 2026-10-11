@@ -121,6 +121,7 @@ namespace LivingNPC.GameAdapter
         }
         private void OnTick(object sender, EventArgs args)
         {
+            game.BindScriptThread();
             if (!enabled) { game.Render(null); return; }
             var timer = Stopwatch.StartNew(); var world = game.ReadWorld();
             profileConfirmation.Observe(world, bridge?.RequiresReconnect == true);
@@ -326,6 +327,13 @@ namespace LivingNPC.GameAdapter
             }
             else CancelInput();
         }
-        private void OnAborted(object sender, EventArgs args) { CancelInput(); bridge?.Dispose(); game.Reset(); log.Write("adapter_stopped"); log.Dispose(); }
+        // SHVDN may abort from its domain thread; cleanup is best effort and must never throw.
+        private void OnAborted(object sender, EventArgs args)
+        {
+            try { CancelInput(); } catch (Exception error) { log.Write("abort_cancel_failed type=" + error.GetType().Name); }
+            try { bridge?.Dispose(); } catch (Exception error) { log.Write("abort_bridge_failed type=" + error.GetType().Name); }
+            try { game.Reset(); } catch (Exception error) { log.Write("abort_reset_failed type=" + error.GetType().Name); }
+            log.Write("adapter_stopped"); log.Dispose();
+        }
     }
 }
