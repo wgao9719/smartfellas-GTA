@@ -820,6 +820,31 @@ async def test_current_capability_is_checked_before_each_operation(skill_scene):
     assert len([c for c in session.commands.values() if c["kind"] == "action.execute"]) == 1
 
 
+@pytest.mark.parametrize("change", ["stored_policy", "skill_capability"])
+async def test_queued_skill_is_reauthorized_at_bridge_delivery(skill_scene, change):
+    client, runtime, session, _ = skill_scene
+    candidate = await generate(client, session)
+    task = start_trial(client, session, candidate)
+    command = await command_for(session, task)
+    if change == "stored_policy":
+        actor = runtime.repo.get_actor(session.request.profile_id, "npc")
+        runtime.repo.register_actor(session.request.profile_id, {
+            **actor, "control_policy": "protected",
+        })
+    else:
+        session.request.manifest.capability_flags.remove(DEVELOPMENT_SKILLS_CAPABILITY)
+    response = await client.get(
+        "/v1/bridge/commands", params={"session_id": session.id, "wait_seconds": 0}
+    )
+    assert response.status_code == 200, response.text
+    assert not any(c["id"] == command["id"] for c in response.json()["commands"])
+    assert command["state"] == "canceled"
+    assert command["reason"] in {"actor_policy_changed", "skill_authorization_changed"}
+    assert (await asyncio.wait_for(task, 1)).status_code == 409
+    assert not runtime.skill_owners
+    assert session.skill_task is None
+
+
 async def test_selected_retirement_revokes_execution_before_next_operation(skill_scene):
     client, runtime, session, _ = skill_scene
     candidate = await generate(client, session)

@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from .display import DISPLAY_MAX_CHARS, display_text
 from .gateway import GatewayProvider
+from .grounding import NEUTRAL_FALLBACK, grounded_text
 from .perception import DeliveredUtterance, Incident, PerceptionLimits, Witness, witnesses_for
 from .providers import FakeProvider
 from .social_models import (
@@ -470,15 +471,23 @@ class SocialEngine:
                 )
             raw, carriers = await self._model(scene, actor_id, "turn", retelling)
             # Delivery receipts must quote exactly what the subtitle shows.
-            text = display_text(raw, DISPLAY_MAX_CHARS)
+            text = display_text(raw)
             if not text.strip() or (retelling is not None and text != retelling["text"]):
                 raise SocialError("social reply did not preserve the requested exact quote")
+            safe_text = display_text(grounded_text(text), DISPLAY_MAX_CHARS)
+            if safe_text != text:
+                # Filtered or clipped words cannot remain an exact retelling. Kept sentences
+                # still derive from their carriers for actor-local erasure.
+                retell_event_id = None
+            if not safe_text.strip():
+                safe_text = NEUTRAL_FALLBACK
+                carriers = ()
             scene.pending = SocialUtterance(
                 scene_id=scene_id,
                 utterance_id=self.id_factory("social_utterance"),
                 actor_id=actor_id,
                 runtime_instance_id=scene.start.participant_bindings[actor_id],
-                text=text,
+                text=safe_text,
                 turn_index=scene.turn_index,
                 scene_epoch=scene.epoch,
                 sampled_at=self.utc_now(),

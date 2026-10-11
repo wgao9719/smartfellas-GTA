@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from service.lls.__main__ import fixture_event, fixture_role_fields, fixture_session
 from service.lls.app import create_app
 from service.lls.display import DISPLAY_MAX_CHARS, is_display_safe
+from service.lls.grounding import NEUTRAL_FALLBACK
 from service.lls.perception_bridge import DEVELOPMENT_PERCEPTION_CAPABILITY
 from service.lls.providers import DisabledProvider
 from service.lls.settings import Settings
@@ -361,6 +362,31 @@ async def test_trigger_remarks_are_display_safe_and_bounded(scene, template, evi
     remark = next(c for c in session.commands.values() if c.get("_autonomous"))["payload"]
     assert remark["text"] == expected and is_display_safe(expected)
     assert len(expected) <= DISPLAY_MAX_CHARS
+
+
+@pytest.mark.parametrize(("evidence", "expected"), [
+    ("Lester has a mission for you. Nice weather today.", "Nice weather today."),
+    ("I already repaired your car.", NEUTRAL_FALLBACK),
+    ("I already ate. Nice weather today.", "I already ate. Nice weather today."),
+    ("word " * 110 + "and you earned a cash reward.", NEUTRAL_FALLBACK),
+])
+async def test_authored_trigger_speech_is_grounded_before_display_clipping(
+    scene, evidence, expected,
+):
+    client, runtime, session, clock = scene
+    runtime.trigger_engine = engine(clock, {"type": "speak_to_player", "template": "{evidence}"})
+    body = batch(session, clock)
+    body["incident"]["text"] = evidence
+    response = await client.post("/v1/bridge/perception", json=body)
+    assert response.status_code == 200, response.text
+    command = next(c for c in session.commands.values() if c.get("_autonomous"))
+    assert command["payload"]["text"] == expected
+    response = await client.post(f"/v1/bridge/commands/{command['id']}/ack", json={
+        "session_id": session.id, "runtime_generation": 1, "status": "completed",
+        "observed": {"delivery": "subtitle", "text": expected},
+    })
+    assert response.status_code == 200, response.text
+    assert session.delivered_utterances[command["id"] + ":delivered"].text == expected
 
 
 async def test_foreground_speech_suppresses_automatic_remark(scene):

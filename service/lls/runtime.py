@@ -22,6 +22,7 @@ from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
 from .bridge_limits import MAX_BODY_BYTES
 from .context import build_context
 from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
+from .grounding import NEUTRAL_FALLBACK, acknowledged_completion_lines, grounded_text
 from .memory_index import MemoryIndex
 from .neighborhood_bridge import NeighborhoodBridge
 from .outbound import AIControlOwner
@@ -31,6 +32,7 @@ from .perception_bridge import DEVELOPMENT_PERCEPTION_CAPABILITY
 from .protocol import Command
 from .providers import create_provider, effective_provider_settings, persist_provider_configuration
 from .roles import ROLE_POLICIES, TABLE_VERSION, ownership_from_facts, revalidate
+from .runtime_dispatch import DispatchRuntime
 from .runtime_outcomes import OutcomeRuntime
 from .runtime_pin import PinRuntime
 from .runtime_skills import SkillRuntime
@@ -76,13 +78,19 @@ async def sentence_chunks(provider, context, max_chars):
                 sentence, buffer = buffer[:end], buffer[end:]
                 if sentence.strip():
                     yield sentence
-            if len(buffer) >= 400:
-                split = buffer.rfind(" ", 0, 400)
-                split = split if split > 0 else 400
-                yield buffer[:split] + " "
-                buffer = buffer[split:].lstrip()
     if buffer.strip():
         yield buffer
+
+
+def delivery_chunks(sentence):
+    """Split only after the complete sentence has passed grounding."""
+    while len(sentence) > DISPLAY_MAX_CHARS:
+        end = sentence.rfind(" ", 0, DISPLAY_MAX_CHARS) + 1
+        end = end or DISPLAY_MAX_CHARS
+        yield sentence[:end]
+        sentence = sentence[end:]
+    if sentence:
+        yield sentence
 
 
 @dataclass
@@ -137,7 +145,9 @@ class Session:
     trace: deque = field(default_factory=lambda: deque(maxlen=200))
 
 
-class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRuntime):
+class Runtime(
+    SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRuntime, DispatchRuntime
+):
     def __init__(
         self,
         settings,
@@ -456,6 +466,9 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         session.command_seq = command["seq"]
         command.update(
             state="queued",
+            _epoch=session.epoch,
+            _branch_id=session.branch_id,
+            _protagonist_id=session.request.protagonist_id,
             _game_datetime=session.game_datetime,
             _created_at_utc=self.utc_now(),
             _record_delivery=self.provider.name != "disabled",
@@ -951,9 +964,8 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     or not self.conversation_policy.check(actor, session.world).allowed
                 ):
                     continue
-                text = display_text(effect.text, DISPLAY_MAX_CHARS)
-                if not text.strip():
-                    continue
+                text = grounded_text(display_text(effect.text))
+                text = display_text(text if text.strip() else NEUTRAL_FALLBACK, DISPLAY_MAX_CHARS)
                 turn_id = self.id_factory("trigger")
                 # Authored speech is still only a queued command until its delivery acknowledgment.
                 command = self.command(
@@ -1360,6 +1372,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     and o["session_id"] == session.id
                     and o["protagonist_id"] == event.protagonist_id
                 ][-8:],
+                completion_lines=acknowledged_completion_lines(session, actor_id),
             )
             session.trace.append({"turn_id": turn_id, "actor_id": actor_id, **context_trace})
             if self.provider.name != "disabled":
@@ -1389,6 +1402,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             text = ""
             index = 0
             delivery_seconds = 0.0
+            sentence_refused = False
             async with (
                 asyncio.timeout(30),
                 aclosing(
@@ -1403,28 +1417,42 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                         break
                     # Subtitles, speech, receipts, and memories all use the displayed text.
                     chunk = display_text(chunk)
+                    safe = grounded_text(
+                        chunk, completion_lines=acknowledged_completion_lines(session, actor_id)
+                    )
+                    if safe != chunk:
+                        session.trace.append({"turn_id": turn_id, "grounding": "sentence_refused"})
+                        sentence_refused = True
+                    chunk = safe
                     if not chunk.strip():
                         continue
-                    duration = max(3, min(15, len(chunk) / 12))
-                    if index >= 20 or delivery_seconds + duration > 100:
-                        break
-                    delivery_seconds += duration
-                    text += chunk
-                    await self.deliver_dialogue_chunk(
-                        session,
-                        actor_id,
-                        {
-                            "text": chunk,
-                            "speaker": actor["display_name"],
-                            "scene_id": scene_id,
-                            "turn_id": turn_id,
-                            "chunk_index": index,
-                            "final": False,
-                        },
-                    )
-                    index += 1
+                    if sentence_refused and text[-1:].isspace():
+                        chunk = chunk.lstrip()
+                    sentence_refused = False
+                    for part in delivery_chunks(chunk):
+                        duration = max(3, min(15, len(part) / 12))
+                        if index >= 20 or delivery_seconds + duration > 100:
+                            break
+                        delivery_seconds += duration
+                        text += part
+                        await self.deliver_dialogue_chunk(
+                            session,
+                            actor_id,
+                            {
+                                "text": part,
+                                "speaker": actor["display_name"],
+                                "scene_id": scene_id,
+                                "turn_id": turn_id,
+                                "chunk_index": index,
+                                "final": False,
+                            },
+                        )
+                        index += 1
+                    else:
+                        continue
+                    break
             if not text.strip():
-                text = "I'm not sure what to say right now."
+                text = NEUTRAL_FALLBACK
                 await self.deliver_dialogue_chunk(
                     session,
                     actor_id,
@@ -1450,10 +1478,26 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     "final": True,
                 },
             )
+            if session.closed or session.epoch != epoch:
+                return
+            current_actor = session.actors.get(actor_id, {})
+            eligible = [
+                action for action in self.policy.eligible(
+                    current_actor, session.world, current_actor.get("allowed_actions", []),
+                    event.payload["consent"],
+                ) if action in eligible
+            ]
+            action_context = {
+                **context,
+                "eligible_actions": {
+                    action: context["eligible_actions"][action] for action in eligible
+                },
+            }
             try:
                 async with asyncio.timeout(20):
                     proposal = (
-                        await self.provider.action(context, text, eligible) if eligible else None
+                        await self.provider.action(action_context, text, eligible)
+                        if eligible else None
                     )
             except Exception:
                 proposal = None

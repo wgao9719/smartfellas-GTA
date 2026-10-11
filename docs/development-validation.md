@@ -1,5 +1,69 @@
 # Development validation
 
+## Dialogue-grounding merge on Windows — 2026-10-11
+
+Completed the in-progress merge of `win/fix-dialogue-grounding` (`4fefcd5` and
+`82f7067`) into `win/validation` in the `integration` worktree on TOWER-PENGU.
+The existing Python QA service was left running; live fixtures used dynamically
+allocated loopback ports and cleaned up their own processes. No test bound port
+8765. No adapter source changed and no GTA, microphone, or native action result
+was verified.
+
+The two reported social failures reproduced: the gate already removed the
+unsupported claims, but the tests expected only the retold source as a carrier.
+Retention also tracks the speaker's recalled invitation decision. Both sources
+must remain linked to retained sentences for actor-local forgetting under
+`SPECS.md` §9.3/§18; exact-quote metadata must clear when grounding changes a
+retelling under §10 and the agent-design conversation/storyline rules. The two
+expectations now include `social_decision_0`. Production gating, derivation, and
+scrub code did not need an additional change beyond merging the two branches.
+Five combined regressions cover either carrier's deletion before/after delivery,
+speaker content/FTS scrubbing, unchanged listener hearing, replay suppression,
+and a wholly filtered fallback independent of its erased inputs.
+
+Broader validation reproduced two further fixture interactions and corrected
+their setup without relaxing their assertions:
+
+- `test_foreground_derivations_use_only_memories_in_final_bounded_context`:
+  mandatory `speech_constraints` metadata left no room for either memory under
+  the old 2,048-byte allowance. Add the serialized policy size to that fixture's
+  budget, still require exactly one of two memories to survive, verify the final
+  byte bound, and check that only retained recall creates a derivation.
+- `test_every_command_emits_and_requires_schema_version[action.execute-payload3]`:
+  its literal `policy_version="test"` was correctly revoked by dispatch
+  reauthorization. Use the current `POLICY_VERSION` so this schema test exercises
+  a deliverable action; stale-policy refusal remains covered by dispatch tests.
+
+The runtime merge preserves both `TABLE_VERSION` and `DispatchRuntime` imports.
+The social source fixture preserves both `remember` and `source_text` parameters.
+Both branches' documentation sections remain present.
+
+Commands ran from the integration worktree with this process-local environment:
+
+```powershell
+$env:PATH = 'C:\Users\Brian\.lls-tools\uv;' + $env:PATH
+$env:LLS_DOTNET = 'C:\Users\Brian\Documents\Github\smartfellas-GTA\.dotnet\dotnet.exe'
+$env:RestoreSources = 'https://api.nuget.org/v3/index.json'
+```
+
+| Command | Observed result |
+|---|---|
+| `uv run --frozen pytest -W error tests/test_social.py -k 'unbacked_retelling_is_gated_without_false_quote_metadata or retelling_checks_grounding_before_display_clipping'` | Reproduced: 2 failed, 1 passed, 75 deselected. |
+| `uv run --frozen pytest -W error tests/test_social.py tests/test_social_replay_erasure.py tests/test_runtime_erasure.py tests/test_retention.py tests/test_retention_maintenance.py` | First run: 120 passed, 1 failed (bounded-context fixture). After fixture correction: 121 passed in 7.67s. |
+| `uv run --frozen pytest -W error tests/test_command_schema.py` | Reproduced invalid-policy fixture: 4 passed, 1 failed. |
+| `uv run --frozen pytest -W error tests/test_command_schema.py tests/test_runtime_dispatch.py` | After policy-fixture correction: 31 passed in 3.13s. |
+| `uv run --frozen ruff check service tests tools` | All checks passed on both runs, including after the last test change. |
+| `uv run --frozen pytest -W error` | First run: 2,172 passed, 1 skipped, 1 failed in 209.61s; only the invalid-policy schema fixture failed. Final complete rerun: **2,173 passed, 1 skipped in 210.71s**. The skip is the opt-in real whisper.cpp test. |
+| `& $env:LLS_DOTNET test adapter/LivingNPC.Core.Tests/LivingNPC.Core.Tests.csproj --configuration Release` | 451 passed, 0 failed, 0 skipped. |
+| `uv run --frozen python tests/live_bridge_check.py` | Passed: 2 delivered text events, final marker acknowledged, display-safe subtitles. |
+| `uv run --frozen python tests/live_bridge_check.py --speech` | Passed: synthetic PTT start/stop, 2 audio/text chunks, 2 delivery acknowledgments. |
+| `uv run --frozen python tests/live_bridge_check.py --pin` | Passed: pin persisted, 8 durable memories, ambient officer purged. |
+| `uv run --frozen python tests/live_bridge_crash_check.py` | Passed: reconnect, stale-action refusal, ambient-history purge, started receipt retained, no invented completion. |
+| `uv run --frozen python tests/live_social_check.py` | Passed: 3 participants, 6 delivered turns, 12 reported memories. |
+| `uv run --frozen python tests/live_social_check.py --autonomous` | Passed: 2 participants, 2 automatically initiated/delivered turns, 2 reported memories. |
+| `uv run --frozen python tests/live_social_adaptation_check.py` | Passed: 2 confirmed encounters, 2 derived speaker lines erased, independent hearing preserved across 4 fixture service processes. |
+| `uv run --frozen python tests/live_action_outcome_check.py` | Passed: 2 service outcomes and 2 private outcome memories after restart; duplicate cancellation suppressed, late completion rejected, no uninvolved-actor outputs. |
+
 ## Erasure/session-cleanup integration on Windows
 
 The [integration record](erasure-retention-integration.md) documents merging
@@ -8,7 +72,9 @@ retention to v6. Fresh databases create v6 directly. Final Windows checks passed
 Ruff, **1,633 pytest tests** (1 opt-in skip), **412 C# tests**, both GameAdapter builds
 with zero warnings, and every requested live check except the known upstream
 crash-recovery memory assertion. The 200-turn simulated load and fake demo passed.
-The crash check remains separately owned and was not modified.
+That historical run left the crash check separately owned and unmodified; the
+later "Crash-check retention correction" below records its repair. The current
+dialogue-grounding integration reran it successfully.
 
 ## Windows privacy fixes — 2026-10-11
 
@@ -40,6 +106,115 @@ No adapter files changed, so this task did not rerun C# or live bridge checks.
 No GTA, Steam, or Rockstar process was launched. These results do not verify native
 GTA behavior, physical audio, or provider quality. See the [privacy policy](privacy-retention.md)
 for historical derivation, durable-memory, and backup limits.
+
+## Ambient dialogue scope on Windows
+
+2026-10-11 follow-up to `4fefcd5`, in the same `dialogue-grounding` worktree on
+`win/fix-dialogue-grounding`, using its existing `.venv`, Python 3.12.14 and
+uv 0.12.17. The first gate matched arbitrary past-tense verbs, money words and
+canonical names, dropping harmless background flavor. This conflicted with
+`SPECS.md` sections 0.2, 3 and 14.4 and the agent-design ambient-personality rule.
+
+Before production edits, this command reproduced all 12 reported false positives:
+
+```powershell
+& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen pytest -W error tests/test_grounding.py -k reported_ambient_false_positives -q --tb=short
+```
+
+Result: **12 failed, 36 deselected**. The initial corpus rate test also failed:
+98/196 false positives (50.00%) and 21/120 false negatives (17.50%). Twenty
+independent minimal pairs then expanded the corpus to 216 ordinary and 140
+adversarial lines. Evaluating the original `4fefcd5` function from `git show`
+against that expanded corpus measured 114/216 false positives (52.78%) and 25/140
+false negatives (17.86%). No old source was restored or modified for that comparison.
+
+Additional review regressions reproduced four nearby false positives (money
+worries, a payment plan, and figurative point/spot wording) and two false negatives
+(a free car repair and payment for a job): 6 failed, 65 passed before their fixes.
+Those cases now pass alongside the corpus, mixed-clause boundaries, and an
+intention following a social-media mention.
+
+The [narrowed gate](dialogue-grounding.md#measured-vocabulary-scope) measures
+**0/216 false positives (0.00%) and 0/140 false negatives (0.00%)**. Every ordinary
+line must pass unchanged and every adversarial line must be removed; the aggregate
+regression separately enforces the requested ≤2% false-positive / 0% false-negative
+thresholds. These rates describe a checked-in regression corpus, not a general
+semantic guarantee.
+
+Five existing fixture occurrences were corrected to express prohibited claims:
+
+- `test_bridge.py::test_ungrounded_sentence_never_reaches_delivery_or_memory`:
+  “That haircut costs twenty dollars” became “Your haircut costs twenty dollars”;
+  “I already moved the car to the docks” became “I've reached the requested spot.”
+- `test_bridge.py::test_grounding_completion_needs_corresponding_completed_ack`:
+  the same generic moved-car line became the requested-spot completion.
+- `test_runtime_social.py::test_social_grounding_removes_only_unbacked_claim_sentences`:
+  “The haircut costs fifty dollars” became “Your haircut costs fifty dollars.”
+- `test_grounding.py::test_grounding_refuses_claim_paraphrases`:
+  “That haircut is twenty” became “Your haircut is twenty.”
+
+All original bare haircut prices and the unrequested car-movement line now appear
+in the ordinary corpus. No receipt, dispatch, actor-safety or fallback assertion
+was weakened. Plain-text streaming, sentence delivery, receipt-backed completion,
+and dispatch reauthorization remain in place. No adapter changes or GTA checks.
+
+Final checks against the follow-up source changes:
+
+| Command | Observed result |
+|---|---|
+| `& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen pytest -W error tests/test_grounding_corpus.py tests/test_grounding.py -q -s --tb=short` | 428 passed; printed false positives 0/216 (0.00%), false negatives 0/140 (0.00%). |
+| `& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen ruff check service tests tools` | All checks passed. |
+| `& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen pytest -W error` | 1,850 passed, 1 skipped, 0 failed in 186.77 seconds. The skip is the opt-in real whisper.cpp binary test. |
+
+The full suite used `LLS_DOTNET` pointing to the documented local .NET 10 SDK
+and `RestoreSources=https://api.nuget.org/v3/index.json`. No native capability,
+real model, audio hardware, or GTA behavior was verified by this follow-up.
+
+## Dialogue grounding on Windows
+
+2026-10-11, TOWER-PENGU, Windows PowerShell 5.1, Python 3.12.14, uv 0.12.17.
+Worktree: `smartfellas-GTA-wt/dialogue-grounding`, branch
+`win/fix-dialogue-grounding`. A separate `.venv` was created first with:
+
+```powershell
+& 'C:\Users\Brian\.lls-tools\uv\uv.exe' sync --frozen --group dev --python 'C:\Users\Brian\AppData\Roaming\uv\python\cpython-3.12.14-windows-x86_64-none\python.exe'
+```
+
+Both assigned findings reproduced before their production changes. Commands below
+used `& 'C:\Users\Brian\.lls-tools\uv\uv.exe'` as the executable:
+
+| Arguments | Before-fix result |
+|---|---|
+| `run --frozen pytest -W error tests/test_bridge.py -k 'ungrounded or grounding' -q` | 17 failed, 3 passed, 67 deselected. Invented claims reached delivery; the small-talk negatives passed. |
+| `run --frozen pytest -W error tests/test_runtime_dispatch.py -q` | 21 failed, 3 passed. Changed authorization still reached command polling. |
+| `run --frozen pytest tests/test_runtime_social.py -k grounding -q` | 9 failed, 3 passed, 18 deselected. Social narrative claims reached delivery. |
+
+Additional regressions reproduced unsafe retellings, authored remarks, long-sentence
+clipping, and direct claim paraphrases before their corresponding fixes. A preliminary
+full-suite run during regression development reported 3 failed, 1,436 passed,
+1 skipped: its loaded long-social-output fixtures still hit the default 500-character
+raw provider bound. Final fixtures explicitly configure the supported 1,000-character
+bound to exercise grounding before the independent 500-character display limit.
+
+Final checks against all source changes:
+
+| Command | Observed result |
+|---|---|
+| `& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen ruff check service tests tools` | All checks passed. |
+| `& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen pytest -W error` | 1,458 passed, 1 skipped, 0 failed in 177.06 seconds. The skip is the opt-in real whisper.cpp binary test. |
+| `git diff --check` and `git diff --cached --check` | Passed. |
+
+The final suite includes the additional action-stage eligibility refresh regression;
+the preceding complete run passed 1,457 tests with the same single skip. A new
+regression first showed that eligibility computed before speech could survive into
+the action-selector call; it now passes with eligibility refreshed after speech.
+
+See [dialogue grounding and dispatch checks](dialogue-grounding.md) for the policy,
+receipt correlation, paths covered, and vocabulary limitations. No `adapter/` files
+changed; this fix does not claim a new C# build, native action, audio-device, or GTA
+verification. No game or launcher was started, and no cloud provider was configured.
+
+The earlier sections below retain their original dates and evidence boundaries.
 
 Date: 2026-10-10. Environment: macOS 27.0, arm64, Python 3.12.4, uv 0.12.17, .NET SDK 10.0.100.
 

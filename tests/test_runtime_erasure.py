@@ -6,6 +6,7 @@ import pytest
 from test_bridge import client as client
 from test_bridge import open_ready, utterance
 
+from service.lls.grounding import speech_constraints
 from service.lls.protocol import Ack
 from service.lls.providers import FakeProvider
 
@@ -80,8 +81,12 @@ async def test_foreground_derivations_use_only_memories_in_final_bounded_context
     runtime = client.app.state.runtime
     repo = runtime.repo
     session = runtime.sessions[sid]
+    # Preserve room for one recalled memory alongside the required speech policy.
+    constraints_bytes = len(json.dumps(
+        {"speech_constraints": speech_constraints()}, ensure_ascii=False,
+    ).encode("utf-8"))
     runtime.settings = runtime.settings.model_copy(
-        update={"context_byte_budget": 2048, "memory_token_budget": 2048}
+        update={"context_byte_budget": 2048 + constraints_bytes, "memory_token_budget": 2048}
     )
     provider = ParaphraseProvider()
     runtime.provider = provider
@@ -115,6 +120,9 @@ async def test_foreground_derivations_use_only_memories_in_final_bounded_context
     retained = {memory["memory_id"] for memory in provider.context["memories"]}
     assert len(retained) == 1
     assert provider.context["context_truncated"]
+    assert len(json.dumps(provider.context, ensure_ascii=False).encode("utf-8")) <= (
+        runtime.settings.context_byte_budget
+    )
     command = next(
         command for command in session.commands.values()
         if command["kind"] == "dialogue.chunk" and command["payload"]["text"]

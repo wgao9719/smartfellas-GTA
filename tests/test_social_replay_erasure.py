@@ -18,6 +18,7 @@ from test_social import (
 )
 from test_social import scene as scene
 
+from service.lls.grounding import NEUTRAL_FALLBACK
 from service.lls.social import SocialError
 from service.lls.social_adaptation import SocialAdaptation
 from service.lls.social_storage import SocialStore
@@ -299,6 +300,67 @@ async def test_forgetting_retold_source_keeps_listener_hearing(scene):
     assert memories(scene, "bea") == hearing
     # The retained canonical speaker event still proves Bea's own hearing.
     assert contacts(scene, "bea")["avery"]["source_event_ids"] == [heard]
+
+
+@pytest.mark.parametrize("forgotten", ["source", "social_decision_0"])
+async def test_filtered_retelling_erasure_scrubs_speaker_and_preserves_hearing(scene, forgotten):
+    source_memory(
+        scene, "avery", memory_id="source:memory",
+        source_text="Lester has a mission for you. Nice weather today.",
+    )
+    await invite(scene)
+    line = await scene.engine.generate_turn("scene", "avery", retell_event_id="source")
+    assert line.text == "Nice weather today."
+    assert line.retell_event_id is None
+    heard = (await deliver(scene, line, ("bea",)))["heard"]["bea"]["event_id"]
+    spoken = scene.engine.store.event_id("session", receipt(line).event_id, "avery")
+    hearing = scene.repo.export_actor("profile", "bea")
+    assert scene.repo.delete_memory("profile", forgotten + ":memory")
+    assert scene.repo.get_memory("profile", spoken + ":memory") is None
+    assert line.text not in json.dumps(ordinary_context(scene, "avery"))
+    assert indexed_owners(scene, "weather") == ["bea"]
+    events = {row["event_id"]: row for row in scene.repo.export_profile("profile")["events"]}
+    assert events[spoken]["content_redacted"]
+    assert line.text not in json.dumps(events[spoken])
+    if forgotten == "source":
+        assert events["source"]["content_redacted"]
+        assert "Lester" not in json.dumps(scene.repo.export_actor("profile", "avery"))
+    assert events[heard]["payload"]["reported_event_id"] is None
+    assert events[heard]["payload"]["retelling_lineage"] == []
+    # Replaying erased proof preserves existing hearing, without adding a new listener.
+    assert set(scene.engine.store.delivered(
+        scene.start, line, receipt(line), [witness(scene, "bea"), witness(scene, "clay")], GAME,
+    )) == {"bea"}
+    assert scene.repo.export_actor("profile", "bea") == hearing
+    assert speech_memories(scene, "clay") == []
+
+
+@pytest.mark.parametrize("forgotten", ["source", "social_decision_0"])
+async def test_filtered_retelling_rechecks_carriers_before_delivery(scene, forgotten):
+    source_memory(
+        scene, "avery", memory_id="source:memory",
+        source_text="Lester has a mission for you. Nice weather today.",
+    )
+    await invite(scene)
+    line = await scene.engine.generate_turn("scene", "avery", retell_event_id="source")
+    assert line.text == "Nice weather today."
+    assert line.retell_event_id is None
+    assert scene.repo.delete_memory("profile", forgotten + ":memory")
+    with pytest.raises(SocialError, match="forgotten words"):
+        await deliver(scene, line, ("bea",))
+    assert indexed_owners(scene, "weather") == []
+
+
+async def test_wholly_filtered_retelling_fallback_is_independent_of_erased_sources(scene):
+    source = source_memory(scene, "avery", source_text="Lester has a mission for you.")
+    await invite(scene)
+    line = await scene.engine.generate_turn("scene", "avery", retell_event_id="source")
+    assert line.text == NEUTRAL_FALLBACK
+    assert line.retell_event_id is None
+    assert line.carrier_event_ids == ()
+    assert scene.repo.delete_memory("profile", source["memory_id"])
+    assert scene.repo.delete_memory("profile", "social_decision_0:memory")
+    assert (await deliver(scene, line, ("bea",)))["heard"]["bea"]["text"] == NEUTRAL_FALLBACK
 
 
 async def test_delivery_refuses_reply_from_forgotten_words(scene):

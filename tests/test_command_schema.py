@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from service.lls.actions import POLICY_VERSION
 from service.lls.protocol import Command
 from tests.test_bridge import client as client
 from tests.test_bridge import open_ready
@@ -21,7 +22,7 @@ from tests.test_bridge import open_ready
         (
             "action.execute",
             {
-                "action_id": "face_player", "arguments": {}, "policy_version": "test",
+                "action_id": "face_player", "arguments": {}, "policy_version": POLICY_VERSION,
                 "scene_id": "scene-1", "consent": True, "turn_id": "turn-1",
             },
         ),

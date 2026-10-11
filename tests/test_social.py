@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from service.lls.gateway_config import DailyBudget, GatewayConfig, ModelPrice
+from service.lls.grounding import NEUTRAL_FALLBACK, speech_constraints
 from service.lls.perception import DeliveredUtterance, Witness
 from service.lls.providers import create_provider
 from service.lls.settings import Settings
@@ -207,6 +208,7 @@ def source_memory(
     protagonist="franklin",
     branch=None,
     remember=True,
+    source_text="The pier is quiet.",
     **memory_fields,
 ):
     event_time = event_time or GAME - timedelta(minutes=30)
@@ -223,7 +225,7 @@ def source_memory(
             "provenance": "reported",
             "confidence": 0.6,
             "payload": {
-                "text": "The pier is quiet.",
+                "text": source_text,
                 "teller_id": "other",
                 "secret_underlying_fact": "The hidden package is under crate 4.",
             },
@@ -585,6 +587,51 @@ async def test_exact_quote_retelling_preserves_lineage_without_hidden_payload(sc
     assert "secret_underlying_fact" not in json.dumps(report)
     assert "crate 4" not in json.dumps(scene.recorder.contexts)
     assert len(speech_memories(scene, "clay")) == 1
+
+
+@pytest.mark.parametrize("safe_sentence", ["", " Nice weather today."])
+async def test_unbacked_retelling_is_gated_without_false_quote_metadata(scene, safe_sentence):
+    source_memory(scene, "avery", source_text="Lester has a mission for you." + safe_sentence)
+    await invite(scene)
+    utterance = await scene.engine.generate_turn("scene", "avery", retell_event_id="source")
+    assert "Lester" not in utterance.text
+    assert utterance.retell_event_id is None
+    if safe_sentence:
+        assert utterance.text.strip() == safe_sentence.strip()
+        assert utterance.carrier_event_ids == ("source", "social_decision_0")
+    else:
+        assert utterance.text == NEUTRAL_FALLBACK
+        assert utterance.carrier_event_ids == ()
+    result = await deliver(scene, utterance, ("bea",))
+    event_id = result["heard"]["bea"]["event_id"]
+    event = next(row for row in scene.repo.export_profile("profile")["events"]
+                 if row["event_id"] == event_id)
+    assert event["payload"]["text"] == utterance.text
+    assert event["payload"]["reported_event_id"] is None
+    assert event["payload"]["retelling_lineage"] == []
+
+
+async def test_social_prompt_uses_grounded_speech_constraints_without_action_outcomes(scene):
+    await invite(scene)
+    await scene.engine.generate_turn("scene", "avery")
+    context = scene.recorder.contexts[-1]
+    assert context["speech_constraints"] == speech_constraints()
+    assert context["speech_constraints"]["acknowledged_completion_lines"] == []
+
+
+async def test_retelling_checks_grounding_before_display_clipping(scene):
+    scene.engine.config.max_text_characters = 1000
+    source_memory(
+        scene, "avery",
+        source_text="word " * 110 + "and you earned a cash reward. Nice weather today.",
+    )
+    await invite(scene)
+    utterance = await scene.engine.generate_turn("scene", "avery", retell_event_id="source")
+    assert utterance.text == "Nice weather today."
+    assert utterance.retell_event_id is None
+    assert utterance.carrier_event_ids == ("source", "social_decision_0")
+    result = await deliver(scene, utterance, ("bea",))
+    assert result["heard"]["bea"]["text"] == utterance.text
 
 
 @pytest.mark.parametrize(
