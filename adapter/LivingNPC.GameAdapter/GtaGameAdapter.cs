@@ -15,12 +15,15 @@ namespace LivingNPC.GameAdapter
         private sealed class Binding
         {
             public Ped Ped = null!;
-            public string ActorId = "", Instance = "", Kind = "ambient_ephemeral", Name = "Nearby resident";
+            // Fits locals and visitors alike until the persona shares a name.
+            public string ActorId = "", Instance = "", Kind = "ambient_ephemeral", Name = "Passerby";
             public RuntimeBindingGuard Guard = null!;
             public long Generation;
             public bool ModOwned = false, TookPersistence;
             public PedFacts? Facts;
             public int FactsFrame = -1;
+            public ActorActivity? Activity;
+            public double ActivityAt;
         }
         private sealed class TaskRecord
         {
@@ -143,7 +146,7 @@ namespace LivingNPC.GameAdapter
             {
                 if (registered.TryGetValue(candidate.Handle, out var existing)) return SelectBinding(existing);
                 var ped = nearby[candidate.Handle];
-                if (bindings.Count >= 36) return TargetFailed("target_binding_limit", "runtime binding limit reached. Try again after leaving the area.");
+                if (bindings.Count >= BindingRetention.MaxBindings) return TargetFailed("target_binding_limit", "runtime binding limit reached. Try again after leaving the area.");
                 var id = Guid.NewGuid().ToString();
                 var binding = new Binding { Ped = ped, ActorId = id, Instance = Guid.NewGuid().ToString(), Generation = generation };
                 var sample = ReadBindingSample(binding);
@@ -205,17 +208,25 @@ namespace LivingNPC.GameAdapter
         public string[] PruneBindings(long generation)
         {
             OnScriptThread();
+            // A ped keeps its identity until the game releases it, however far the player walks.
             foreach (var binding in bindings.Values.ToArray())
             {
                 // Every tick, including pins and actors that are not selected.
                 binding.Facts = null;
                 try
                 {
-                    if (binding.Generation == generation && Valid(binding) && (binding.ModOwned || binding.Ped.Position.DistanceTo(Game.Player.Character.Position) <= 60)) continue;
+                    if (binding.Generation == generation && Valid(binding)) continue;
                 }
                 catch (Exception) { binding.Guard.Invalidate(); }
                 DropBinding(binding);
             }
+            // Past the cap, release the farthest ambient actors; never the selection or a pin.
+            var releasable = new List<KeyValuePair<string, float>>();
+            var hasPlayer = TryPosition(Game.Player.Character, out var player);
+            foreach (var binding in bindings.Values.Where(b => !b.ModOwned && b.ActorId != SelectedActorId))
+                releasable.Add(new KeyValuePair<string, float>(binding.ActorId,
+                    hasPlayer && TryPosition(binding.Ped, out var position) ? position.DistanceTo(player) : float.NaN));
+            foreach (var actorId in BindingRetention.Evict(bindings.Count, releasable)) DropBinding(bindings[actorId]);
             var removed = dropped.ToArray(); dropped.Clear(); return removed;
         }
         // FR-ID-03: the same actor id becomes mod-owned. Any refusal drops the binding.
@@ -280,12 +291,32 @@ namespace LivingNPC.GameAdapter
             var facts = Sample(ped, binding); var classified = PedClassifier.Classify(facts);
             return new ActorState { ActorId = actorId, RuntimeInstanceId = binding.Instance, Name = binding.Name, Handle = ped.Handle, Generation = binding.Generation,
                 Exists = true, Alive = !ped.IsDead, MissionEntity = facts?.MissionEntity ?? true, Ownership = classified.Ownership, Policy = classified.Policy,
-                Role = classified.Role, RoleReason = classified.Reason, Facts = facts, Kind = binding.Kind,
+                Role = classified.Role, RoleReason = classified.Reason, Facts = facts, Activity = SampleActivity(binding), Kind = binding.Kind,
                 Busy = ped.IsInVehicle() || ped.IsRagdoll || ped.IsFleeing || ped.IsOnFire,
                 InCombat = ped.IsInCombat, CanMove = !ped.IsInVehicle() && !ped.IsRagdoll,
                 ModFollowing = tasks.Values.Any(t => t.ActorId == actorId && t.Action == "follow_player"),
                 ObservedThreat = Function.Call<bool>(Hash.IS_PLAYER_FREE_AIMING_AT_ENTITY, Game.Player.Handle, ped.Handle),
                 Distance = pos.DistanceTo(Game.Player.Character.Position), X = pos.X, Y = pos.Y, Z = pos.Z };
+        }
+        // Narrative only. Resolve runs every tick, so samples are reused for 250 ms.
+        private static ActorActivity? SampleActivity(Binding binding)
+        {
+            var now = MonotonicMilliseconds();
+            if (binding.Activity != null && now - binding.ActivityAt < 250) return binding.Activity;
+            binding.ActivityAt = now;
+            try
+            {
+                var ped = binding.Ped; string? scenario = null;
+                if (Function.Call<bool>(Hash.IS_PED_USING_ANY_SCENARIO, ped.Handle))
+                {
+                    scenario = ActorActivity.OtherScenario;
+                    foreach (var (name, label) in ActorActivity.Scenarios)
+                        if (Function.Call<bool>(Hash.IS_PED_USING_SCENARIO, ped.Handle, name)) { scenario = label; break; }
+                }
+                return binding.Activity = new ActorActivity { Movement = ActorActivity.MovementName(ped.IsSprinting, ped.IsRunning, ped.IsWalking, ped.IsStopped),
+                    Scenario = scenario, OnPhone = Function.Call<bool>(Hash.IS_PED_RUNNING_MOBILE_PHONE_TASK, ped.Handle), Swimming = ped.IsSwimming, Injured = ped.IsInjured };
+            }
+            catch (Exception) { return binding.Activity = null; }
         }
         public bool Start(Command command, ActorState actor, string actionId, JObject arguments)
         {

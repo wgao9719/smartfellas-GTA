@@ -16,12 +16,17 @@ import sqlite3
 import tempfile
 import threading
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from . import salience
+
 PROVENANCES = {"directly_observed", "heard", "reported", "system_fact", "unverified"}
+# Summaries combine only firsthand lines, weakest first. Hearsay keeps its exact line.
+FIRSTHAND = ("heard", "directly_observed", "system_fact")
+MAX_SUMMARY_LINES = 32
 ACTOR_KINDS = {
     "curated_persistent",
     "spawned_persistent",
@@ -971,7 +976,7 @@ class Repository:
         text: str,
         source_event_ids: list[str],
         provenance: str,
-        importance: float = 0.5,
+        importance: float | None = None,
         confidence: float = 1.0,
         *,
         session_id: str | None = None,
@@ -980,10 +985,51 @@ class Repository:
         decay_days: float | None = None,
         memory_id: str | None = None,
     ) -> dict:
+        with self._lock, self.connection:
+            return self._add_memory(
+                profile_id,
+                branch_id,
+                actor_id,
+                protagonist_id,
+                game_datetime,
+                text,
+                source_event_ids,
+                provenance,
+                importance,
+                confidence,
+                session_id=session_id,
+                visibility_scope=visibility_scope,
+                expires_at=expires_at,
+                decay_days=decay_days,
+                memory_id=memory_id,
+            )
+
+    def _add_memory(
+        self,
+        profile_id: str,
+        branch_id: str,
+        actor_id: str,
+        protagonist_id: str | None,
+        game_datetime: str,
+        text: str,
+        source_event_ids: list[str],
+        provenance: str,
+        importance: float | None = None,
+        confidence: float = 1.0,
+        *,
+        session_id: str | None = None,
+        visibility_scope: str = "private",
+        expires_at: str | None = None,
+        decay_days: float | None = None,
+        memory_id: str | None = None,
+    ) -> dict:
+        """Caller holds the repository lock and owns the write transaction."""
         stamp, protagonist = _date(game_datetime), _protagonist(protagonist_id)
         if not text.strip() or visibility_scope != "private":
             raise ValueError("episodic memories require text and private visibility")
-        importance, confidence = _unit(importance, "importance"), _unit(confidence, "confidence")
+        if importance is not None:
+            importance = _unit(importance, "importance")
+        confidence = _unit(confidence, "confidence")
         expiry = _date(expires_at) if expires_at else None
         if expiry is not None and expiry <= stamp:
             raise ValueError("memory expiry must follow its creation")
@@ -994,55 +1040,76 @@ class Repository:
                 [" ".join(text.casefold().split()), sorted(source_event_ids), protagonist]
             ).encode()
         ).hexdigest()
-        with self._lock, self.connection:
-            actor = self._actor_session(profile_id, actor_id, session_id)
-            session = session_id if actor["actor_kind"] == "ambient_ephemeral" else None
-            sources = self._sources(
-                profile_id, branch_id, stamp, source_event_ids, provenance, protagonist
+        actor = self._actor_session(profile_id, actor_id, session_id)
+        session = session_id if actor["actor_kind"] == "ambient_ephemeral" else None
+        sources = self._sources(
+            profile_id, branch_id, stamp, source_event_ids, provenance, protagonist
+        )
+        if any(source.get("content_redacted") for source in sources):
+            raise ValueError("source event content was erased or expired")
+        self._require_observer(actor_id, sources, provenance)
+        confidence = min(confidence, *(source["confidence"] for source in sources))
+        lineage = self._lineage(profile_id, branch_id, stamp)
+        old = self.connection.execute(
+            "SELECT * FROM memories WHERE profile_id=? AND actor_id=? AND fingerprint=?",
+            (profile_id, actor_id, fingerprint),
+        ).fetchall()
+        for row in old:
+            if (
+                row["branch_id"] in lineage
+                and row["game_datetime"] <= lineage[row["branch_id"]]
+            ):
+                return self._memory_dict(row)
+        if importance is None:
+            importance = self._salience(profile_id, actor_id, text.strip(), sources, lineage)
+        identifier = memory_id or str(uuid4())
+        self._touch(profile_id, branch_id, stamp)
+        self.connection.execute(
+            "INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                identifier,
+                profile_id,
+                actor_id,
+                protagonist,
+                branch_id,
+                stamp,
+                text.strip(),
+                provenance,
+                importance,
+                confidence,
+                visibility_scope,
+                session,
+                expiry,
+                decay_days,
+                fingerprint,
+                _now(),
+            ),
+        )
+        self.connection.executemany(
+            "INSERT INTO memory_sources VALUES(?,?,?)",
+            [(identifier, profile_id, event_id) for event_id in source_event_ids],
+        )
+        return self.get_memory(profile_id, identifier)
+
+    def _salience(
+        self,
+        profile_id: str,
+        actor_id: str,
+        text: str,
+        sources: list[dict],
+        lineage: dict[str, str],
+    ) -> float:
+        # Only identical lines already visible in this timeline count as repeats.
+        repeats = sum(
+            1
+            for row in self.connection.execute(
+                "SELECT branch_id,game_datetime FROM memories "
+                "WHERE profile_id=? AND actor_id=? AND text=?",
+                (profile_id, actor_id, text),
             )
-            if any(source.get("content_redacted") for source in sources):
-                raise ValueError("source event content was erased or expired")
-            self._require_observer(actor_id, sources, provenance)
-            confidence = min(confidence, *(source["confidence"] for source in sources))
-            lineage = self._lineage(profile_id, branch_id, stamp)
-            old = self.connection.execute(
-                "SELECT * FROM memories WHERE profile_id=? AND actor_id=? AND fingerprint=?",
-                (profile_id, actor_id, fingerprint),
-            ).fetchall()
-            for row in old:
-                if (
-                    row["branch_id"] in lineage
-                    and row["game_datetime"] <= lineage[row["branch_id"]]
-                ):
-                    return self._memory_dict(row)
-            identifier = memory_id or str(uuid4())
-            self._touch(profile_id, branch_id, stamp)
-            self.connection.execute(
-                "INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    identifier,
-                    profile_id,
-                    actor_id,
-                    protagonist,
-                    branch_id,
-                    stamp,
-                    text.strip(),
-                    provenance,
-                    importance,
-                    confidence,
-                    visibility_scope,
-                    session,
-                    expiry,
-                    decay_days,
-                    fingerprint,
-                    _now(),
-                ),
-            )
-            self.connection.executemany(
-                "INSERT INTO memory_sources VALUES(?,?,?)",
-                [(identifier, profile_id, event_id) for event_id in source_event_ids],
-            )
-            return self.get_memory(profile_id, identifier)
+            if row["branch_id"] in lineage and row["game_datetime"] <= lineage[row["branch_id"]]
+        )
+        return salience.score(sources, repeats=repeats)
 
     def _memory_dict(self, row: sqlite3.Row) -> dict:
         data = dict(row)
@@ -1082,7 +1149,9 @@ class Repository:
         *,
         token_budget: int = 512,
         session_id: str | None = None,
+        collapse_summaries: bool = True,
     ) -> list[dict]:
+        """Rank visible memories. A selected summary hides the lines it consolidates."""
         stamp, protagonist = _date(game_datetime), _protagonist(protagonist_id)
         if limit < 0 or token_budget < 0:
             raise ValueError("retrieval limits cannot be negative")
@@ -1129,18 +1198,21 @@ class Repository:
                     (current - datetime.fromisoformat(row["game_datetime"])).total_seconds()
                     / 86400,
                 )
-                decay = math.exp(-age_days / (row["decay_days"] or 30))
+                decay = math.exp(
+                    -age_days / (row["decay_days"] or salience.decay_days(row["importance"]))
+                )
                 relevance = (
                     1 + math.log1p(lexical[row["memory_id"]]) if row["memory_id"] in lexical else 0
                 )
                 score = relevance * 4 + row["importance"] * 2 + row["confidence"] + decay
                 ranked.append((score, row))
             ranked.sort(key=lambda entry: (-entry[0], entry[1]["memory_id"]))
-            result, used, seen = [], 0, set()
+            covers = self.summary_cover(profile_id, actor_id) if collapse_summaries else {}
+            result, used, seen, covered = [], 0, set(), set()
             for score, row in ranked:
                 key = " ".join(row["text"].casefold().split())
                 cost = self.token_cost(row["text"])
-                if key in seen or used + cost > token_budget:
+                if key in seen or row["memory_id"] in covered or used + cost > token_budget:
                     continue
                 if len(result) >= limit:
                     break
@@ -1148,6 +1220,7 @@ class Repository:
                 data.update(retrieval_score=score, token_cost=cost)
                 result.append(data)
                 seen.add(key)
+                covered.update(covers.get(row["memory_id"], ()))
                 used += cost
             return result
 
@@ -1216,6 +1289,200 @@ class Repository:
                 } for reply in replies)
             return result
 
+    def summary_cover(self, profile_id: str, actor_id: str) -> dict[str, set[str]]:
+        """Map each of this actor's summaries to the memories it consolidates."""
+        covers: dict[str, set[str]] = {}
+        with self._lock:
+            for row in self.connection.execute(
+                "SELECT s.summary_id,s.memory_id FROM summary_sources s "
+                "JOIN memories m ON m.memory_id=s.summary_id "
+                "WHERE m.profile_id=? AND m.actor_id=?",
+                (profile_id, actor_id),
+            ):
+                covers.setdefault(row["summary_id"], set()).add(row["memory_id"])
+        return covers
+
+    def consolidation_batch(
+        self,
+        profile_id: str,
+        branch_id: str,
+        protagonist_id: str,
+        game_datetime: str,
+        *,
+        min_batch: int,
+        max_batch: int,
+        episode_gap_minutes: float,
+        lookback_days: float,
+        max_text_bytes: int,
+    ) -> dict | None:
+        """Return the oldest settled episode of unsummarized firsthand lines, if any.
+
+        Only persistent actors qualify. An episode is a run of one actor's lines with
+        no gap longer than episode_gap_minutes. The newest run waits for that gap to
+        pass after its last line, unless it already holds max_batch lines. A batch
+        takes the episode's oldest lines that fit max_text_bytes once serialized.
+        """
+        if not 2 <= min_batch <= max_batch <= MAX_SUMMARY_LINES:
+            raise ValueError("summary batches require 2 to 32 lines")
+        stamp, protagonist = _date(game_datetime), _protagonist(protagonist_id)
+        current = datetime.fromisoformat(stamp)
+        earliest = (current - timedelta(days=lookback_days)).isoformat()
+        gap = timedelta(minutes=episode_gap_minutes)
+        with self._lock:
+            lineage = self._lineage(profile_id, branch_id, stamp)
+
+            def visible(row):
+                return (
+                    row["branch_id"] in lineage
+                    and row["game_datetime"] <= lineage[row["branch_id"]]
+                )
+
+            covered = {
+                row["memory_id"]
+                for row in self.connection.execute(
+                    "SELECT s.memory_id,m.branch_id,m.game_datetime FROM summary_sources s "
+                    "JOIN memories m ON m.memory_id=s.summary_id WHERE m.profile_id=?",
+                    (profile_id,),
+                )
+                if visible(row)
+            }
+            rows = self.connection.execute(
+                "SELECT m.* FROM memories m JOIN actors a "
+                "ON a.profile_id=m.profile_id AND a.actor_id=m.actor_id "
+                "WHERE m.profile_id=? AND m.protagonist_id=? AND m.session_id IS NULL "
+                "AND a.actor_kind NOT IN ('ambient_ephemeral','protagonist') "
+                "AND m.provenance IN ('system_fact','directly_observed','heard') "
+                "AND m.game_datetime>=? AND m.game_datetime<=? "
+                "AND NOT EXISTS (SELECT 1 FROM summary_sources s WHERE s.summary_id=m.memory_id) "
+                "ORDER BY m.actor_id,m.game_datetime,m.rowid",
+                (profile_id, protagonist, earliest, stamp),
+            ).fetchall()
+            episodes: list[list[sqlite3.Row]] = []
+            for row in rows:
+                if (
+                    not visible(row)
+                    or row["memory_id"] in covered
+                    or (row["expires_at"] and row["expires_at"] <= stamp)
+                ):
+                    continue
+                last = episodes[-1][-1] if episodes else None
+                if (
+                    last is None
+                    or last["actor_id"] != row["actor_id"]
+                    or datetime.fromisoformat(row["game_datetime"])
+                    - datetime.fromisoformat(last["game_datetime"])
+                    > gap
+                ):
+                    episodes.append([])
+                episodes[-1].append(row)
+            for index, episode in enumerate(episodes):
+                following = episodes[index + 1] if index + 1 < len(episodes) else None
+                settled = (
+                    following is not None and following[0]["actor_id"] == episode[0]["actor_id"]
+                ) or (
+                    current - datetime.fromisoformat(episode[-1]["game_datetime"]) > gap
+                )
+                if len(episode) < max_batch and not (settled and len(episode) >= min_batch):
+                    continue
+                taken, size = [], 0
+                for row in episode[:max_batch]:
+                    # Leave room for each line's index, time, and provenance.
+                    size += len(_json(row["text"]).encode("utf-8")) + 128
+                    if size > max_text_bytes:
+                        break
+                    taken.append(row)
+                if len(taken) >= min_batch:
+                    return {
+                        "actor_id": episode[0]["actor_id"],
+                        "memories": [self._memory_dict(row) for row in taken],
+                    }
+            return None
+
+    def add_summary(
+        self,
+        profile_id: str,
+        branch_id: str,
+        actor_id: str,
+        memory_ids: list[str],
+        text: str,
+        importance: float,
+        *,
+        expected_texts: list[str] | None = None,
+    ) -> dict:
+        """Store one paraphrase of an actor's own firsthand lines with their sources.
+
+        The summary cites every event its lines cite and keeps the weakest provenance
+        and lowest confidence among them. Erasing any line or event erases it.
+        expected_texts rejects a summary of lines edited after it was requested.
+        """
+        if not 2 <= len(memory_ids) <= MAX_SUMMARY_LINES or len(set(memory_ids)) != len(
+            memory_ids
+        ):
+            raise ValueError("a summary consolidates 2 to 32 distinct memories")
+        with self._lock, self.connection:
+            lines = [self.get_memory(profile_id, memory_id) for memory_id in memory_ids]
+            if any(line is None or line["actor_id"] != actor_id for line in lines):
+                raise ValueError("a summary consolidates only this actor's memories")
+            if expected_texts is not None and [line["text"] for line in lines] != expected_texts:
+                raise ValueError("summarized memories changed during generation")
+            protagonists = {line["protagonist_id"] for line in lines}
+            sessions = {line["session_id"] for line in lines}
+            if len(protagonists) != 1 or None in protagonists or len(sessions) != 1:
+                raise ValueError("a summary stays within one protagonist and session")
+            if any(line["provenance"] not in FIRSTHAND for line in lines):
+                raise ValueError("only firsthand memories can be summarized")
+            stamp = max(line["game_datetime"] for line in lines)
+            lineage = self._lineage(profile_id, branch_id, stamp)
+            if any(
+                line["branch_id"] not in lineage
+                or line["game_datetime"] > lineage[line["branch_id"]]
+                or (line["expires_at"] and line["expires_at"] <= stamp)
+                for line in lines
+            ):
+                raise ValueError("summarized memories are absent from this timeline")
+            placeholders = ",".join("?" for _ in memory_ids)
+            if self.connection.execute(
+                f"SELECT 1 FROM summary_sources WHERE summary_id IN ({placeholders}) LIMIT 1",
+                memory_ids,
+            ).fetchone():
+                raise ValueError("summaries cannot be summarized again")
+            for row in self.connection.execute(
+                "SELECT m.branch_id,m.game_datetime FROM summary_sources s "
+                "JOIN memories m ON m.memory_id=s.summary_id "
+                f"WHERE m.profile_id=? AND s.memory_id IN ({placeholders})",
+                (profile_id, *memory_ids),
+            ):
+                if row["branch_id"] in lineage and (
+                    row["game_datetime"] <= lineage[row["branch_id"]]
+                ):
+                    raise ValueError("a memory already belongs to a visible summary")
+            events = sorted({event for line in lines for event in line["source_event_ids"]})
+            if len(events) > 64:
+                raise ValueError("a summary cites at most 64 source events")
+            provenance = min((line["provenance"] for line in lines), key=FIRSTHAND.index)
+            summary = self._add_memory(
+                profile_id,
+                branch_id,
+                actor_id,
+                lines[0]["protagonist_id"],
+                stamp,
+                text,
+                events,
+                provenance,
+                importance,
+                min(line["confidence"] for line in lines),
+                session_id=lines[0]["session_id"],
+                memory_id="summary_"
+                + hashlib.sha256(
+                    _json([profile_id, branch_id, sorted(memory_ids)]).encode()
+                ).hexdigest(),
+            )
+            self.connection.executemany(
+                "INSERT OR IGNORE INTO summary_sources VALUES(?,?)",
+                [(summary["memory_id"], memory_id) for memory_id in memory_ids],
+            )
+            return summary
+
     def update_memory(
         self,
         profile_id: str,
@@ -1265,6 +1532,13 @@ class Repository:
                     memory_id,
                 ),
             )
+            if (body, capped_confidence) != (old["text"], old["confidence"]):
+                # A corrected line makes every paraphrase of it stale. The line becomes
+                # eligible for a fresh summary.
+                for (summary_id,) in self.connection.execute(
+                    "SELECT summary_id FROM summary_sources WHERE memory_id=?", (memory_id,)
+                ).fetchall():
+                    self._delete_memory(profile_id, summary_id)
             return self.get_memory(profile_id, memory_id)
 
     def _audit(self, profile_id: str, operation: str, object_id: str) -> None:
@@ -1437,6 +1711,8 @@ class Repository:
 
         Derivations stay within one actor. Other actors' memories of hearing a derived
         line are their own experiences, and canonical events remain their proof.
+        A summary cites its lines' events but derives nothing, so erasing it alone
+        leaves those lines.
         """
         closure, pending, seen = [memory_id], [memory_id], {memory_id}
         while pending:
@@ -1449,9 +1725,11 @@ class Repository:
             ).fetchall()
             # An intermediate event may not have a memory yet (or ever). Walk event
             # dependencies independently so that it cannot break the erasure chain.
-            for event_id in self._actor_event_closure(
+            # A summary cites its lines' events but derives nothing, so it walks no events.
+            events = () if self._is_summary(identifier) else self._actor_event_closure(
                 profile_id, memory["actor_id"], memory["source_event_ids"]
-            ):
+            )
+            for event_id in events:
                 rows.extend(self.connection.execute(
                     "SELECT m.memory_id FROM memory_sources s JOIN memories m "
                     "ON m.memory_id=s.memory_id WHERE s.profile_id=? AND s.event_id=? "
@@ -1464,6 +1742,11 @@ class Repository:
                     pending.append(found)
         return closure
 
+    def _is_summary(self, memory_id: str) -> bool:
+        return self.connection.execute(
+            "SELECT 1 FROM summary_sources WHERE summary_id=? LIMIT 1", (memory_id,)
+        ).fetchone() is not None
+
     def _delete_memory(self, profile_id: str, memory_id: str) -> bool:
         if self.get_memory(profile_id, memory_id) is None:
             return False
@@ -1471,7 +1754,11 @@ class Repository:
             memory = self.get_memory(profile_id, identifier)
             if memory is None:
                 continue
-            self._scrub_actor_events(profile_id, memory["actor_id"], memory["source_event_ids"])
+            # A summary paraphrases lines that remain; their events stay those lines' proof.
+            if not self._is_summary(identifier):
+                self._scrub_actor_events(
+                    profile_id, memory["actor_id"], memory["source_event_ids"]
+                )
             if self.connection.execute(
                 "DELETE FROM memories WHERE profile_id=? AND memory_id=?", (profile_id, identifier)
             ).rowcount:

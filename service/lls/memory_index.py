@@ -11,6 +11,7 @@ import json
 import math
 from datetime import datetime
 
+from . import salience
 from .embeddings import OpenAIEmbeddingProvider, normalized_vector
 from .outbound import joined_job, raise_if_cancelling
 from .storage import _date, _protagonist
@@ -64,6 +65,8 @@ class MemoryIndex:
                 limit=self.config.max_candidates,
                 token_budget=2**63 - 1,
                 session_id=scope[5],
+                # Summaries and their lines compete here. Final selection collapses them.
+                collapse_summaries=False,
             )
             valid = []
             for memory in candidates:
@@ -210,7 +213,10 @@ class MemoryIndex:
                     base = (
                         memory["importance"] * 2
                         + memory["confidence"]
-                        + math.exp(-age_days / (memory["decay_days"] or 30))
+                        + math.exp(
+                            -age_days
+                            / (memory["decay_days"] or salience.decay_days(memory["importance"]))
+                        )
                     )
                     # BM25 is corpus-dependent and unbounded. Bound its contribution
                     # when combining it with cosine similarity, which is in [-1, 1].
@@ -220,16 +226,18 @@ class MemoryIndex:
                 memory["retrieval_method"] = "semantic" if vector else "lexical"
                 ranked.append(memory)
             ranked.sort(key=lambda memory: (-memory["retrieval_score"], memory["memory_id"]))
-            result, used, seen = [], 0, set()
+            covers = repo.summary_cover(scope[0], scope[2])
+            result, used, seen, covered = [], 0, set(), set()
             for memory in ranked:
                 key = " ".join(memory["text"].casefold().split())
                 cost = repo.token_cost(memory["text"])
-                if key in seen or used + cost > token_budget:
+                if key in seen or memory["memory_id"] in covered or used + cost > token_budget:
                     continue
                 if len(result) >= limit:
                     break
                 result.append(memory)
                 seen.add(key)
+                covered.update(covers.get(memory["memory_id"], ()))
                 used += cost
             return result
 

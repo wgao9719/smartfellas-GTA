@@ -18,11 +18,11 @@ from service.lls.__main__ import (
 from service.lls.app import create_app
 from service.lls.bridge_limits import LIMITS_PATH, MAX_BODY_BYTES, MAX_COMMANDS
 from service.lls.display import is_display_safe
+from service.lls.personas import ambient_persona, names_in_use
 from service.lls.protocol import ActionProposal, Event, VoiceControl
 from service.lls.providers import FakeProvider
 from service.lls.roles import joaat
 from service.lls.runtime import now
-from service.lls.runtime_pin import default_pin_name
 from service.lls.settings import Settings
 from service.lls.storage import Repository
 
@@ -350,6 +350,59 @@ async def test_context_includes_only_scoped_knowledge_relationships_and_text_fre
     assert trace["relationship_event_ids"] == ["own"]
     assert "private-text-" not in json.dumps(list(session.trace))
     assert "A private player sentence." not in json.dumps(list(session.trace))
+
+
+async def test_ambient_actor_speaks_with_generated_persona_and_latest_activity(client):
+    provider = ContextProvider()
+    client.app.state.runtime.provider = provider
+    sid, actor = await open_ready(
+        client, actor_overrides={"activity": {"movement": "walking", "scenario": "coffee"}}
+    )
+    session = client.app.state.runtime.sessions[sid]
+    stored = client.app.state.repository.get_actor("fake-demo", "npc-1", session_id=sid)
+    expected = ambient_persona("npc-1", joaat("a_m_y_business_01"))
+    assert stored["persona"] == expected and stored["display_name"] == "Neighbor"
+    assert (stored["occupation"], stored["short_bio"]) == (
+        expected["occupation"],
+        expected["short_bio"],
+    )
+    actor.update(seq=3, event_id="running-snapshot")
+    actor["payload"]["activity"] = {"movement": "running", "on_phone": True}
+    response = await client.post(
+        "/v1/bridge/events:batch", json={"session_id": sid, "events": [actor]}
+    )
+    assert response.status_code == 200, response.text
+    assert (await utterance(client, sid, seq=4))[0].status_code == 200
+    await session.task
+    context = provider.contexts[0]
+    assert json.loads(context["actor"]["persona"]) == expected
+    assert context["actor"]["current_activity"] == ["running", "talking on a phone"]
+    again = client.app.state.repository.get_actor("fake-demo", "npc-1", session_id=sid)
+    assert again["persona"] == expected
+
+
+@pytest.mark.asyncio
+async def test_ambient_persona_never_reuses_a_stored_actors_name(client):
+    repo = client.app.state.repository
+    natural = ambient_persona("npc-1", joaat("a_m_y_business_01"))["name"]
+    repo.register_actor(
+        "fake-demo",
+        {
+            "actor_id": "namesake",
+            "actor_kind": "curated_persistent",
+            "display_name": natural,
+            "persona": {},
+            "control_policy": "ambient",
+            "allowed_actions": [],
+        },
+    )
+    sid, _ = await open_ready(client)
+    stored = repo.get_actor("fake-demo", "npc-1", session_id=sid)
+    others = [a for a in repo.list_actors("fake-demo", session_id=sid) if a["actor_id"] != "npc-1"]
+    assert stored["persona"]["name"] != natural
+    assert stored["persona"] == ambient_persona(
+        "npc-1", joaat("a_m_y_business_01"), names_in_use(others)
+    )
 
 
 @pytest.mark.parametrize("status", ["rejected", "expired", "started"])
@@ -1670,6 +1723,8 @@ async def test_retarget_after_removal_gets_a_fresh_identity_without_prior_memori
 
 
 PIN_FLAGS = ["fake_game", "actor_pin"]
+# The fixture actor's generated persona names the pin.
+PIN_NAME = ambient_persona("npc-1", joaat("a_m_y_business_01"))["name"]
 
 
 async def request_pin(client, sid, seq, *, instance="ped-1", actor="npc-1"):
@@ -1692,7 +1747,7 @@ async def test_pin_request_queues_cancel_then_pin(client):
     queued = queued_after(session, before)
     assert [c["kind"] for c in queued] == ["scene.cancel", "actor.pin"]
     assert queued[1]["payload"] == {
-        "display_name": default_pin_name("npc-1"),
+        "display_name": PIN_NAME,
         "actor_kind": "spawned_persistent",
     }
     assert (queued[1]["actor_id"], queued[1]["runtime_instance_id"]) == ("npc-1", "ped-1")
@@ -1727,7 +1782,7 @@ async def test_pinned_conversation_survives_session_close(client):
     assert (await client.post(path, json=ack)).status_code == 422
     ack["observed"] = {"actor_id": "npc-1"}
     assert (await client.post(path, json=ack)).json()["status"] == "completed"
-    name = default_pin_name("npc-1")
+    name = PIN_NAME
     status = [c for c in session.commands.values() if c["kind"] == "status"][-1]
     assert status["actor_id"] is None
     assert status["payload"]["message"] == (
@@ -1821,7 +1876,7 @@ async def test_adapter_rejection_leaves_one_saved_unembodied_identity(client):
     assert response.json()["status"] == "rejected"
     status = [c for c in session.commands.values() if c["kind"] == "status"][-1]
     assert status["payload"]["message"] == (
-        f"Saved as {default_pin_name('npc-1')}, but this pedestrian is no longer available."
+        f"Saved as {PIN_NAME}, but this pedestrian is no longer available."
     )
     assert "npc-1" not in session.actors and session.pins["npc-1"]["state"] == "unembodied"
     rows = repo.connection.execute(

@@ -90,6 +90,8 @@ The service closes each HTTP client after its request. Consent revocation and pr
 The candidate window uses existing lexical relevance, importance, confidence, and recency ranking.
 Semantic ranking operates within that bounded window. It does not promise exhaustive recall across every stored memory.
 The service combines bounded lexical relevance with cosine similarity, importance, confidence, and decay.
+Decay follows each memory's importance. Final selection hides lines covered by a selected episode summary.
+See [Memory importance and episode summaries](memory-consolidation.md).
 Existing duplicate suppression and memory token limits still apply.
 
 The index checks profile, actor, protagonist, branch ancestry, game time, expiry, session, private visibility, and canonical source events.

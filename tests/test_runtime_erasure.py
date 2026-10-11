@@ -81,13 +81,19 @@ async def test_foreground_derivations_use_only_memories_in_final_bounded_context
     runtime = client.app.state.runtime
     repo = runtime.repo
     session = runtime.sessions[sid]
-    # Preserve room for one recalled memory alongside the required speech policy.
+    # Preserve room for one recalled memory alongside the required speech policy
+    # and the actor's generated persona.
     constraints_bytes = len(json.dumps(
         {"speech_constraints": speech_constraints()}, ensure_ascii=False,
     ).encode("utf-8"))
-    runtime.settings = runtime.settings.model_copy(
-        update={"context_byte_budget": 2048 + constraints_bytes, "memory_token_budget": 2048}
-    )
+    persona = repo.get_actor("fake-demo", "npc-1", session_id=sid)["persona"]
+    persona_bytes = len(json.dumps(
+        {"persona": json.dumps(persona, ensure_ascii=False)}, ensure_ascii=False,
+    ).encode("utf-8"))
+    runtime.settings = runtime.settings.model_copy(update={
+        "context_byte_budget": 2048 + constraints_bytes + persona_bytes,
+        "memory_token_budget": 2048,
+    })
     provider = ParaphraseProvider()
     runtime.provider = provider
     sources = []

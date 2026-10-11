@@ -223,7 +223,7 @@ namespace LivingNPC.GameAdapter
                 distance = actor.Distance, mission_entity = actor.MissionEntity, busy = actor.Busy, in_combat = actor.InCombat, can_move = actor.CanMove,
                 mod_following = actor.ModFollowing, observed_threat = actor.ObservedThreat,
                 position = new { x = actor.X, y = actor.Y, z = actor.Z }, name = actor.Name, actor_kind = actor.Kind,
-                role_class = PedRoleTable.WireName(actor.Role), role_reason = actor.RoleReason, ped_facts = actor.Facts });
+                role_class = PedRoleTable.WireName(actor.Role), role_reason = actor.RoleReason, ped_facts = actor.Facts, activity = actor.Activity });
             if (reliable) { if (!bridge.Events.TryAdd(snapshot)) { game.ShowStatus("error", "Living Los Santos: observation queue is full."); return null; } }
             else bridge.Snapshots.ReplaceOldest(snapshot);
             return snapshot;

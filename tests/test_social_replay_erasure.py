@@ -233,7 +233,10 @@ async def topic_line(scene):
     await invite(scene)
     line = await scene.engine.generate_turn("scene", "bea")
     assert line.text == "avery, you said: I enjoy quiet streets. What do you think now?"
-    assert set(line.carrier_event_ids) == {sources[-1], "social_decision_0"}
+    # Salience ranks a repeated line below its first hearing, so recall may also put the
+    # older identical copy in the prompt; then it is carried too.
+    assert {sources[-1], "social_decision_0"} <= set(line.carrier_event_ids)
+    assert set(line.carrier_event_ids) <= {*sources, "social_decision_0"}
     return sources, line
 
 

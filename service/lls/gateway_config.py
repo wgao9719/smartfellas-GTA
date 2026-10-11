@@ -101,6 +101,7 @@ class GatewayConfig(StrictModel):
     dialogue_output_tokens: int = Field(default=300, ge=1, le=4096)
     action_output_tokens: int = Field(default=200, ge=1, le=4096)
     skill_output_tokens: int = Field(default=1200, ge=128, le=4096)
+    memory_output_tokens: int = Field(default=400, ge=64, le=2048)
     max_concurrent_requests: int = Field(default=2, ge=1, le=8)
     local_fallback: LocalFallback | None = None
     circuit_failure_limit: int = Field(default=3, ge=1, le=10)

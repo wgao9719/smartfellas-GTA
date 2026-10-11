@@ -28,6 +28,7 @@ namespace LivingNPC.Core
         public PedRole Role;
         public string RoleReason = "unclassified", Kind = "ambient_ephemeral";
         public PedFacts? Facts;
+        public ActorActivity? Activity;
     }
     public enum EffectStatus { Running, Completed, Failed, TakenOver }
     public sealed class EffectObservation

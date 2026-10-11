@@ -27,7 +27,8 @@ long seq = 0;
 EventEnvelope Envelope(string kind, string? actorId, object payload) => new() { SessionId = bridge.Session.SessionId, Seq = ++seq, Kind = kind, ActorId = actorId, ProtagonistId = "franklin", GameDatetime = request.GameDatetime, RuntimeGeneration = generation, Payload = payload };
 var worldPayload = new { online = false, mission_active = false, cutscene_active = false, random_event_active = false, paused = false, protagonist_id = "franklin" };
 var actorPayload = new { runtime_handle = 42, runtime_instance_id = "probe-instance", ownership = "ambient", control_policy = "ambient", exists = true, alive = true, distance = 2, mission_entity = false, busy = false, position = new { x = 0, y = 0, z = 0 }, name = "Probe ~r~Neighbor<C>",
-    role_class = "civilian", role_reason = "civilian_evidence", ped_facts = new PedFacts { ModelHash = Joaat.Hash("a_m_y_business_01"), PedType = 4, RelationshipGroupHash = Joaat.Hash("CIVMALE"), Human = true } };
+    role_class = "civilian", role_reason = "civilian_evidence", ped_facts = new PedFacts { ModelHash = Joaat.Hash("a_m_y_business_01"), PedType = 4, RelationshipGroupHash = Joaat.Hash("CIVMALE"), Human = true },
+    activity = new ActorActivity { Movement = "still", Scenario = "coffee" } };
 bridge.Events.TryAdd(Envelope("world.snapshot", null, worldPayload));
 var actorSnapshot = Envelope("actor.snapshot", "probe-npc", actorPayload);
 bridge.Events.TryAdd(actorSnapshot);

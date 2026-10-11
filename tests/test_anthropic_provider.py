@@ -138,6 +138,7 @@ def test_rig_gateway_file_prices_the_default_model_with_thinking_room():
     config = GatewayConfig.model_validate_json(path.read_text(encoding="utf-8"))
     assert MODEL in config.prices
     assert config.dialogue_output_tokens >= 1024 and config.action_output_tokens >= 512
+    assert config.memory_output_tokens >= 512
     assert config.background.max_requests == 0
     script = path.with_name("start-service.ps1").read_text(encoding="utf-8")
     assert "[string]$Model = '" + MODEL + "'" in script
@@ -353,6 +354,36 @@ async def test_incomplete_or_invalid_grounding_verdict_raises(claude_factory, re
     provider = claude_factory(lambda _: response)
     with pytest.raises(ProviderResponseError):
         await provider.classify_grounding("Ask at the docks for paid work.")
+
+
+async def test_memory_summary_uses_structured_output_and_local_bounds(claude_factory):
+    requests = []
+    replies = [
+        '{"text": "A regular ordered a large black coffee before his interview.", '
+        '"importance": 0.6}',
+        '{"text": "Too important.", "importance": 3}',
+    ]
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        return reply(replies[len(requests) - 1])
+
+    provider = claude_factory(handle)
+    provider.gate.config.background.max_requests = 10
+    provider.gate.config.background.max_estimated_usd = 1
+    context = {"memories": [{"text": "The player said: Large coffee, black."}],
+               "base_importance": 0.5}
+    summary = await provider.memory_summary(context)
+    assert summary == {
+        "text": "A regular ordered a large black coffee before his interview.",
+        "importance": 0.6,
+    }
+    schema = requests[0]["output_config"]["format"]["schema"]
+    assert schema["required"] == ["text", "importance"]
+    assert not keys(schema) & {"minimum", "maximum", "minLength", "maxLength"}
+    assert requests[0]["max_tokens"] == provider.gate.config.memory_output_tokens
+    with pytest.raises(ProviderResponseError, match="invalid memory summary"):
+        await provider.memory_summary(context)
 
 
 async def test_effort_can_be_omitted_for_models_without_it(claude_factory):

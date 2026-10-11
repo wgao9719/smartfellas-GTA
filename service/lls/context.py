@@ -3,6 +3,7 @@
 import json
 
 from .action_registry import ACTION_DESCRIPTIONS
+from .activity import describe
 from .grounding import speech_constraints
 
 
@@ -112,11 +113,14 @@ def build_context(
         and not recent_sources.intersection(item["source_event_ids"])
     ]
     persona = json.dumps(actor.get("persona", {}), ensure_ascii=False)
+    activity = describe(snapshot.get("activity"))
     context = {
         "actor": {
             "actor_id": actor["actor_id"],
             "display_name": actor["display_name"],
             "persona": clip_utf8(persona, 4000),
+            # What the game showed this actor doing at the latest snapshot.
+            **({"current_activity": activity} if activity else {}),
         },
         "protagonist_id": protagonist_id,
         "input": input_text,

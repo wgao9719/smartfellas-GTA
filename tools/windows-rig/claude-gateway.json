@@ -8,5 +8,6 @@
   "dialogue_output_tokens": 2048,
   "action_output_tokens": 1024,
   "skill_output_tokens": 2048,
+  "memory_output_tokens": 1024,
   "max_concurrent_requests": 2
 }

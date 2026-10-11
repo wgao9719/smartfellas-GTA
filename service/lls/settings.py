@@ -10,6 +10,7 @@ from pydantic import Field, field_validator, model_validator
 
 from .embeddings import EmbeddingConfig
 from .gateway_config import HOSTED_PROVIDERS, GatewayConfig, hosted_endpoint
+from .memory_consolidation import MemoryConsolidationConfig
 from .neighborhood_scheduler import NeighborhoodSchedulerConfig
 from .protocol import StrictModel
 from .skill_scheduler import SkillSchedulerConfig
@@ -54,6 +55,9 @@ class Settings(StrictModel):
     model_response_bytes: int = Field(default=262144, ge=1024, le=1048576)
     context_byte_budget: int = Field(default=12000, ge=2048, le=48000)
     memory_token_budget: int = Field(default=512, ge=64, le=2048)
+    memory_consolidation: MemoryConsolidationConfig = Field(
+        default_factory=MemoryConsolidationConfig
+    )
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     knowledge_token_budget: int = Field(default=512, ge=64, le=2048)
     dialogue_model: str = ""
@@ -189,6 +193,9 @@ class Settings(StrictModel):
             ),
             anthropic_effort=os.environ.get("LLS_ANTHROPIC_EFFORT", "medium"),
             ai_gateway=cls.gateway_file(cls.env_path("LLS_AI_GATEWAY_FILE")),
+            memory_consolidation=MemoryConsolidationConfig(
+                enabled=os.environ.get("LLS_MEMORY_SUMMARIES", "0") == "1"
+            ),
             embedding=EmbeddingConfig(
                 provider=os.environ.get("LLS_EMBEDDING_PROVIDER", "disabled"),
                 model=os.environ.get("LLM_EMBEDDING_MODEL", ""),

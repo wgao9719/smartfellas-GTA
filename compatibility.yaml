@@ -49,6 +49,7 @@ adapter_features:
   actor_pin: UNVERIFIED
   pin_persistence: DEV_ONLY_UNVERIFIED
   whisper_key: UNVERIFIED
+  actor_activity: UNVERIFIED  # docs/actions/ambient-persona-and-activity.md
   display_rule: 1
 acceptance:
   baseline_five_minutes: UNVERIFIED

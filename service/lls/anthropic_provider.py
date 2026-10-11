@@ -13,6 +13,7 @@ from .providers import (
     ACTION_GUIDANCE,
     ACTION_REPAIR,
     GROUNDING_SYSTEM,
+    SUMMARY_SYSTEM,
     SYSTEM,
     ProviderResponseError,
     bounded_bytes,
@@ -36,6 +37,13 @@ GROUNDING_VERDICT = {
     "additionalProperties": False,
     "required": ["verdict"],
     "properties": {"verdict": {"type": "string", "enum": ["yes", "no"]}},
+}
+# MemorySummary without its bounds, which parse_summary still enforces.
+MEMORY_SUMMARY = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["text", "importance"],
+    "properties": {"text": {"type": "string"}, "importance": {"type": "number"}},
 }
 # Structured outputs reject these keywords; local validation still enforces the bounds.
 UNSUPPORTED_SCHEMA_KEYS = frozenset({
@@ -408,6 +416,30 @@ class AnthropicProvider:
                         messages.append({"role": "assistant", "content": content[:2000]})
                     messages.append({"role": "user", "content": ACTION_REPAIR})
         return None
+
+    async def memory_summary(self, context, *, budget_class="background"):
+        from .memory_consolidation import MAX_SUMMARY_RESPONSE_BYTES, parse_summary
+
+        payload = self.payload(
+            model=self.action_model,
+            max_tokens=self.gate.config.memory_output_tokens,
+            system=SUMMARY_SYSTEM + " text has at most 600 characters; importance is 0 to 1.",
+            messages=[{"role": "user", "content": self.context_json(context)}],
+            schema=MEMORY_SUMMARY,
+        )
+        async with asyncio.timeout(self.settings.model_timeout_seconds):
+            content, stop_reason = await self.complete(
+                payload, budget_class=budget_class, limit=self.settings.model_response_bytes
+            )
+        try:
+            if stop_reason not in COMPLETE_STOPS:
+                raise ProviderResponseError("memory summary was not completed")
+            if len(content.encode()) > MAX_SUMMARY_RESPONSE_BYTES:
+                raise ProviderResponseError("memory summary exceeds its byte limit")
+            summary = parse_summary(content)
+        except (ValueError, TypeError) as exc:
+            raise ProviderResponseError("invalid memory summary response") from exc
+        return summary.model_dump(mode="json")
 
     async def skill_candidate(self, context, *, budget_class="background"):
         from .skills import MAX_SOURCE_BYTES, parse_definition

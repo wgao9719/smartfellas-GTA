@@ -22,13 +22,13 @@ G0 is not done. No game, loader, or SHVDN combination is currently certified by 
 
 14. Check `http://127.0.0.1:8765/health`.
 15. Start Story Mode and inspect the latest `scripts/LivingNPC/LivingNPC-*.log` for `adapter_loaded`.
-16. Read the save/profile warning and press F10 only after checking that the configured profile and save label match the loaded save. Then press F6 near an ordinary pedestrian. Expect `Target: Nearby resident (Available)`.
+16. Read the save/profile warning and press F10 only after checking that the configured profile and save label match the loaded save. Then press F6 near an ordinary pedestrian. Expect `Target: Passerby (Available)`.
 17. Press F7 to enter a message.
 18. Hold N to request microphone capture.
 19. Release N to stop capture and start transcription.
 20. Hold B to request a whispered capture. Release B to stop it.
 21. Start a typed message with `/w ` to whisper it. Start it with `//` to send a literal leading slash.
-22. Press F8 twice within 5 seconds to pin the selected pedestrian. Expect `Pinned as Resident ....`
+22. Press F8 twice within 5 seconds to pin the selected pedestrian. Expect `Pinned as <persona name>`.
 23. Press Backspace to cancel the current interaction.
 
 The service defaults to AI disabled. The fake provider is for simulation tests. A hosted provider requires explicit configuration and cloud consent. PTT may report that speech is unavailable until microphone and transcription support is configured. The adapter shows `Recording` only after a service status confirms it, and `Recording (whispering)` for a whisper capture.

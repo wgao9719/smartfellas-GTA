@@ -10,6 +10,7 @@ Living Los Santos is a GTA V Legacy Story Mode project for interactive, persiste
 - Automatic action expiry and cancellation produce durable service facts. These facts do not confirm native completion or withdrawal.
 - SQLite stores actor identities, memories, scoped knowledge, relationships, and timeline branches. Older-save branches exclude future memories.
 - Optional semantic memory retrieval shares provider budgets and cloud consent. Disabled or unavailable embeddings use lexical retrieval.
+- Memory importance comes from source event types, and less important memories fade sooner. Optional background summaries condense persistent characters' firsthand episodes and stay linked to their lines.
 - The pilot pack contains 12 original characters. Spawn locations and voice assets remain unverified placeholders.
 - The C# adapter builds for `net48` on macOS. Its HTTP workers remain separate from the GTA script thread.
 - The simulated C# adapter exercises the real Python HTTP service. Core tests cover stale identities, cancellation, and action restrictions.
@@ -31,11 +32,13 @@ Living Los Santos is a GTA V Legacy Story Mode project for interactive, persiste
 - Optional automatic skill practice learns from external action receipts, revises candidates, and retains acknowledged trials for later bounded practice.
 - The local dashboard supports character inspection, memory edits, export, backups, save timeline selection, and live session diagnostics.
 - The dashboard can pin an eligible live pedestrian, label pinned pedestrians, and forget a pinned character with typed confirmation.
+- Each ambient pedestrian gets a generated persona seeded by its actor id. Its civilian model supplies only presentation, age band, and clothing. Pinning keeps the persona and uses its name.
+- The adapter samples the selected pedestrian's movement, ambient scenario, and phone use. Dialogue context describes them as the actor's current activity. The [capability sheet](docs/actions/ambient-persona-and-activity.md) lists the unverified natives.
 - Provider controls persist configured-price budgets, cloud consent, and an explicit local fallback. Revocation cancels active remote requests.
 
 AI starts disabled. The fake provider requires explicit development selection. Hosted AI requires explicit cloud opt-in and model configuration. Release adapter builds advertise no native action capabilities while game validation remains pending.
 
-The [semantic memory guide](docs/semantic-memory.md) explains optional embeddings, shared budgets, and lexical fallback.
+The [semantic memory guide](docs/semantic-memory.md) explains optional embeddings, shared budgets, and lexical fallback. The [memory consolidation guide](docs/memory-consolidation.md) covers importance scoring and episode summaries.
 
 ## Run the service
 

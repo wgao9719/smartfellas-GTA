@@ -54,7 +54,7 @@ The service applies the rule before speech synthesis, queuing, delivery receipts
 
 The registry grants no capabilities. Every executor is marked unverified. The adapter's native capability gate and live-state policy remain separate. G0 additionally limits face/wait durations to five seconds.
 
-Transient bindings now leave the registry after despawn, identity mismatch, script takeover, or distance beyond 60 meters. The adapter queues `actor.removed` for the service. The service then releases that runtime binding. A recycled handle can bind a new identity, which never sees the old identity's memories. A released ambient identity cannot bind any entity again. Cancellation records remain for 125 seconds, beyond the 120-second speech command window. Saturation fails closed instead of evicting an active cancellation record.
+Transient bindings now leave the registry after despawn, identity mismatch, or script takeover. Distance alone never releases one. Near the 36-binding cap, the adapter releases the farthest bindings that are neither selected nor pinned. The adapter queues `actor.removed` for the service. The service then releases that runtime binding. A recycled handle can bind a new identity, which never sees the old identity's memories. A released ambient identity cannot bind any entity again. Cancellation records remain for 125 seconds, beyond the 120-second speech command window. Saturation fails closed instead of evicting an active cancellation record.
 
 ## Historical registration validation (withdrawn implementation)
 

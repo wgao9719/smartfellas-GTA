@@ -234,6 +234,7 @@ class SocialRuntime:
             await self.skill_scheduler.join(session, erase=erase)
         if self.neighborhood.scheduler is not None:
             await self.neighborhood.scheduler.join(session, erase=erase)
+        await self.memory_consolidator.join(session, erase=erase)
         await self.stop_session_skills(session, erase=erase)
         await self.stop_session_speech(session, erase=erase)
         await self.stop_session_social(session, erase=erase)
