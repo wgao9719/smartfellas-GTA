@@ -32,6 +32,10 @@ The service defaults to AI disabled. The fake provider is for simulation tests. 
 
 The [speech runtime configuration](speech-coordinator.md#runtime-configuration) selects local speech programs, models, and audio devices. Startup does not open the microphone. Audio runs on the service computer, including a Mac during Tailscale development.
 
+Path settings such as `LLS_DATABASE`, `LLS_WHISPER_MODEL`, and `LLS_PIPER_EXECUTABLE` expand `~` and `%VAR%` variables. The expanded path must be absolute, including its drive. The service refuses to start with a relative path instead of resolving it against the working directory.
+
+Windows lists each audio endpoint once per host API under the same name. A configured device name selects one of them as described in [device selection](speech-probes.md#device-selection).
+
 The adapter refuses actions in Online, missions, cutscenes, random events, loading screens, and unknown protagonist states. It limits targeting to the pilot civilian model allowlist. It never adopts a mission ped. These checks still require rig tests.
 
 ## Provisional native action test
@@ -65,6 +69,8 @@ The distance describes the sampled path. It cannot measure movement between samp
 7. Compare the logged informational version with `scripts/adapter-build.json`.
 
 If the loader locks a DLL, close GTA before deployment. The deployment tool stores replaced files under `LivingNPC-backup/<timestamp>/`. Restore one complete bundle from that directory when a build fails. Do not mix SHVDN binaries across releases.
+
+SHVDN loads every DLL below `scripts`. Local deployment therefore stages files in a temporary `lls-stage-*` directory beside `scripts`, on the same volume. An interrupted deployment can leave that directory behind, but never a second adapter copy inside `scripts`. Delete a leftover `lls-stage-*` directory after the interrupted deployment ends.
 
 The default profile is `default`. Use a distinct `ProfileId` for each save lineage when automatic timeline association is ambiguous. G0 must test full in-game dates after restart and rewind. Same-date divergent saves remain an explicit selection case.
 
@@ -105,6 +111,8 @@ WARNING: Keep the bridge token private. Share it only with the authorized servic
      --ssh-target "$LLS_WINDOWS_USER@$LLS_WINDOWS_TAILSCALE_IP" \
      --remote-scripts "$LLS_WINDOWS_SCRIPTS"
    ```
+
+   SFTP uploads the bundle, a deployment script, and its JSON parameters to `lls-upload-<timestamp>` in the SSH user's home. SSH then runs `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lls-upload-<timestamp>/deploy.ps1`. This short command needs no quoting under the default `cmd.exe` shell or a PowerShell `DefaultShell`. The script reads the scripts path from the JSON data and removes its upload directory after success or failure. The tool also removes the upload through SFTP after a failed transfer or launch. A Group Policy execution policy overrides `Bypass` and stops the script.
 
 6. Preserve the deployment receipt and staged `adapter-build.json` in the G0 evidence directory.
 7. Create the installed INI from its template if no INI exists.
