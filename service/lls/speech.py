@@ -16,10 +16,21 @@ import threading
 import time
 import wave
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 MAX_AUDIO_SECONDS = 30
 MAX_PROCESS_OUTPUT = 2 * 1024 * 1024
+# Speech programs inherit no secrets, proxies, or service settings. Windows keeps what CPython,
+# .NET, PowerShell, COM/SAPI registrations (REG_EXPAND_SZ paths), and native tools resolve.
+WINDOWS_ENVIRONMENT = frozenset(
+    "SYSTEMROOT WINDIR SYSTEMDRIVE TEMP TMP PATH PATHEXT COMSPEC USERPROFILE LOCALAPPDATA APPDATA "
+    "PROGRAMDATA ALLUSERSPROFILE PROGRAMFILES PROGRAMFILES(X86) PROGRAMW6432 COMMONPROGRAMFILES "
+    "COMMONPROGRAMFILES(X86) COMMONPROGRAMW6432 NUMBER_OF_PROCESSORS PROCESSOR_ARCHITECTURE".split()
+)
+POSIX_ENVIRONMENT = frozenset({"PATH", "HOME", "TMPDIR", "LANG"})
+SECRET_MARKERS = ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL", "PROXY")
+# PortAudio lists each Windows endpoint once per host API. A name resolves within one of them.
+WINDOWS_HOST_APIS = ("Windows WASAPI", "MME", "Windows DirectSound", "Windows WDM-KS")
 
 
 class SpeechUnavailable(RuntimeError):
@@ -73,13 +84,27 @@ def require_file(value: str | Path, label: str) -> Path:
     return path
 
 
+def child_environment(extra=None) -> dict[str, str]:
+    """Operating-system variables only, plus explicit ``extra`` values for this child."""
+    windows = os.name == "nt"
+    allowed = WINDOWS_ENVIRONMENT if windows else POSIX_ENVIRONMENT
+    inherited = {
+        name: value
+        for name, value in os.environ.items()
+        if ((name.upper() if windows else name) in allowed or not windows and name[:3] == "LC_")
+        and not any(marker in name.upper() for marker in SECRET_MARKERS)
+    }
+    return {**inherited, **(extra or {})}
+
+
 async def run_program(argv, *, stdin: bytes = b"", timeout: float = 60, env=None) -> bytes:
-    """Run an owned process tree without a shell or inherited-pipe cleanup waits."""
+    """Run an owned process tree without a shell, inherited secrets, or pipe cleanup waits."""
     from .speech_process import ProcessFailure, run_owned
 
+    environment = child_environment(env)
     try:
         return await run_owned(
-            argv, stdin=stdin, timeout=timeout, env=env, max_output=MAX_PROCESS_OUTPUT
+            argv, stdin=stdin, timeout=timeout, env=environment, max_output=MAX_PROCESS_OUTPUT
         )
     except ProcessFailure as exc:
         raise SpeechUnavailable(str(exc)) from exc
@@ -165,6 +190,20 @@ class Piper:
         return info
 
 
+def windows_powershell() -> str:
+    """Windows PowerShell from the real system directory, never from PATH or the working one."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetSystemDirectoryW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint]
+    kernel32.GetSystemDirectoryW.restype = ctypes.c_uint
+    buffer = ctypes.create_unicode_buffer(260)
+    length = kernel32.GetSystemDirectoryW(buffer, len(buffer))
+    if not 0 < length < len(buffer):
+        raise SpeechUnavailable("The Windows system directory is unavailable.")
+    return str(PureWindowsPath(buffer.value, "WindowsPowerShell", "v1.0", "powershell.exe"))
+
+
 class WindowsSapi:
     """Optional installed Windows voice fallback, with no cloud dependency."""
 
@@ -178,21 +217,103 @@ class WindowsSapi:
             raise SpeechUnavailable("Audio destination already exists.")
         with tempfile.TemporaryDirectory(prefix="lls-sapi-") as temporary:
             output = Path(temporary) / "speech.wav"
-            environment = {**os.environ, "LLS_SAPI_TEXT": text, "LLS_SAPI_WAV": str(output)}
+            environment = {"LLS_SAPI_TEXT": text, "LLS_SAPI_WAV": str(output)}
+            # Text and path stay data. A pinned format passes inspect_wav for every voice.
             script = (
                 "Add-Type -AssemblyName System.Speech; "
+                "$format=New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo -ArgumentList "
+                "22050,([System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen),"
+                "([System.Speech.AudioFormat.AudioChannel]::Mono); "
                 "$speaker=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                "try {$speaker.SetOutputToWaveFile($env:LLS_SAPI_WAV); "
+                "try {$speaker.SetOutputToWaveFile($env:LLS_SAPI_WAV,$format); "
                 "$speaker.Speak($env:LLS_SAPI_TEXT)} finally {$speaker.Dispose()}"
             )
             await run_program(
-                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                [windows_powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
                 env=environment,
             )
             info = inspect_wav(output)
             with target.open("xb") as stream:
                 stream.write(output.read_bytes())
         return info
+
+
+def device_selector(value: str):
+    """Parse a configured device: empty selects the default, and digits select an index."""
+    value = value.strip()
+    return int(value) if value.isdecimal() else value or None
+
+
+def select_device(sd, selector, kind: str):
+    """Resolve a configured device to a PortAudio index and stream settings without opening it.
+
+    ``None`` keeps PortAudio's default device. A name resolves within one host API, in
+    ``WINDOWS_HOST_APIS`` order and then PortAudio order. Exact names precede ordered
+    fragments, as in sounddevice. ``"<host API>:<name>"`` restricts the search to that host
+    API. WASAPI shared mode converts 16 kHz capture and 22.05 kHz playback.
+    """
+    if selector is None:
+        return None, None
+    hostapis = [api["name"] for api in sd.query_hostapis()]
+    devices = list(sd.query_devices())
+    if type(selector) is int:
+        if not 0 <= selector < len(devices) or devices[selector][f"max_{kind}_channels"] < 1:
+            raise SpeechUnavailable(f"Audio {kind} device {selector} does not exist.")
+        index = selector
+    else:
+        index = _match_device(selector, kind, hostapis, devices)
+    if hostapis[devices[index]["hostapi"]] == "Windows WASAPI":
+        return index, sd.WasapiSettings(auto_convert=True)
+    return index, None
+
+
+def _match_device(selector, kind, hostapis, devices):
+    aliases = {}
+    for api, label in enumerate(hostapis):
+        aliases.setdefault(label.lower(), api)
+        aliases.setdefault(label.lower().removeprefix("windows "), api)
+    prefix, colon, rest = selector.partition(":")
+    scope = aliases.get(prefix.strip().lower()) if colon and rest.strip() else None
+    query = (selector if scope is None else rest).strip().lower()
+    rank = {label: position for position, label in enumerate(WINDOWS_HOST_APIS)}
+    order = sorted(range(len(hostapis)), key=lambda api: (rank.get(hostapis[api], len(rank)), api))
+    for exact in (True, False):
+        for api in order if scope is None else [scope]:
+            found = [
+                device["index"]
+                for device in devices
+                if device["hostapi"] == api
+                and device[f"max_{kind}_channels"] > 0
+                and _device_matches(device["name"], hostapis[api], query, exact)
+            ]
+            if len(found) == 1:
+                return found[0]
+            if found:
+                raise SpeechUnavailable(
+                    f"Audio {kind} device {selector!r} matches {hostapis[api]} devices {found}. "
+                    "Select one by index."
+                )
+    raise SpeechUnavailable(f"No audio {kind} device matches {selector!r}.")
+
+
+def _device_matches(name, hostapi, query, exact):
+    full = f"{name}, {hostapi}".lower()
+    if exact:
+        return query in {name.lower(), full}
+    position = 0
+    for fragment in query.split():
+        position = full.find(fragment, position)
+        if position < 0:
+            return False
+        position += len(fragment)
+    return True
+
+
+def device_failure(label: str, error: Exception) -> str:
+    """The driver's reason on one bounded line. Denied permission is one cause among several."""
+    detail = "".join(c for c in " ".join(str(error).split()) if c.isprintable())[:200]
+    reason = "permission was denied" if isinstance(error, PermissionError) else "is unavailable"
+    return f"{label} {reason}: {detail or type(error).__name__}."
 
 
 class Microphone:
@@ -276,12 +397,14 @@ class Microphone:
             try:
                 if is_canceled():
                     raise SpeechUnavailable("Microphone capture was canceled.")
+                device, settings = select_device(sd, self.device, "input")
                 stream = sd.RawInputStream(
                     samplerate=16000,
                     channels=1,
                     dtype="int16",
-                    device=self.device,
+                    device=device,
                     callback=capture,
+                    extra_settings=settings,
                 )
                 with self.lock:
                     self.stream = stream
@@ -311,9 +434,7 @@ class Microphone:
                         self.frames.clear()
                 if isinstance(exc, SpeechUnavailable):
                     raise
-                raise SpeechUnavailable(
-                    "Microphone is unavailable or permission was denied."
-                ) from exc
+                raise SpeechUnavailable(device_failure("Microphone", exc)) from exc
 
     def _close(self, *, abort):
         with self.lock:
@@ -437,13 +558,15 @@ async def play_wav(path: str | Path, device=None, *, on_started=None):
 
     def open_output():
         nonlocal stream
+        index, settings = select_device(sd, device, "output")
         stream = sd.RawOutputStream(
             samplerate=info.sample_rate,
             channels=info.channels,
             dtype="int16",
-            device=device,
+            device=index,
             callback=output,
             finished_callback=finished.set,
+            extra_settings=settings,
         )
         stream.start()
 
@@ -486,7 +609,9 @@ async def play_wav(path: str | Path, device=None, *, on_started=None):
         raise
     except Exception as exc:
         failed = True
-        raise SpeechUnavailable("Audio playback device is unavailable.") from exc
+        if isinstance(exc, SpeechUnavailable):
+            raise
+        raise SpeechUnavailable(device_failure("Audio playback device", exc)) from exc
     finally:
         canceled.set()
         if stream is not None:
@@ -500,7 +625,12 @@ async def probe(args):
             import sounddevice as sd
         except ImportError as exc:
             raise SpeechUnavailable("Install the speech dependency group first.") from exc
-        return {"devices": list(sd.query_devices()), "game_verified": False}
+        hostapis = [api["name"] for api in sd.query_hostapis()]
+        return {
+            "hostapis": hostapis,
+            "devices": [{**d, "hostapi_name": hostapis[d["hostapi"]]} for d in sd.query_devices()],
+            "game_verified": False,
+        }
     if args.command == "record":
         mic = Microphone(args.device)
         try:
@@ -531,7 +661,7 @@ def main():
     record = commands.add_parser("record")
     record.add_argument("--output", type=Path, required=True)
     record.add_argument("--seconds", type=int, choices=range(1, 31), default=5)
-    record.add_argument("--device", type=int)
+    record.add_argument("--device", type=device_selector)
     stt = commands.add_parser("transcribe")
     stt.add_argument("--executable", type=Path, required=True)
     stt.add_argument("--model", type=Path, required=True)
@@ -544,7 +674,7 @@ def main():
     tts.add_argument("--output", type=Path, required=True)
     play = commands.add_parser("play")
     play.add_argument("--audio", type=Path, required=True)
-    play.add_argument("--device", type=int)
+    play.add_argument("--device", type=device_selector)
     args = parser.parse_args()
     if args.command == "synthesize" and args.provider == "piper":
         if not args.executable or not args.model:

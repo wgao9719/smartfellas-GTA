@@ -12,7 +12,7 @@ The service provides a local whisper.cpp adapter, a local Piper adapter, and a W
    uv sync --group dev --group speech
    ```
 
-2. List the available audio devices.
+2. List the available audio devices. Each entry includes its numeric index and host API name.
 
    ```sh
    uv run --group speech python -m service.lls.speech devices
@@ -23,6 +23,21 @@ The service provides a local whisper.cpp adapter, a local Piper adapter, and a W
 5. Select a licensed Piper voice with its matching `.onnx.json` configuration.
 
 No command below contacts a hosted AI provider. Device permission, model compatibility, latency, and audible output require checks on the Windows rig.
+
+Speech programs receive only operating-system variables, such as `PATH`, the temporary directory, and locale settings on macOS, or the system, profile, and program directories on Windows. They never receive `LLS_` or `LLM_` settings, tokens, keys, passwords, or proxy settings. GPU selection variables are also withheld.
+
+## Device selection
+
+The `--device` option and the `LLS_INPUT_DEVICE` and `LLS_OUTPUT_DEVICE` settings accept these values:
+
+- An empty value selects the system default device without enumerating devices.
+- A number selects that device index from the device list.
+- A name selects a device by name, such as `Microphone (USB Audio)`.
+- `<host API>:<name>` restricts a name to one host API, such as `WASAPI:Microphone (USB Audio)` or `MME:Microphone (USB Audio)`. The `Windows ` prefix of a host API name is optional.
+
+Windows lists each endpoint once per host API under the same name. A name therefore resolves within one host API. The search order is Windows WASAPI, MME, Windows DirectSound, Windows WDM-KS, and then any other host API in PortAudio order. Matching ignores case. An exact name match takes precedence over a partial match. A partial match uses sounddevice rules: space-separated fragments must appear in order in `<name>, <host API>`. Two matches in the first matching host API fail with their indexes. Select one by index in that case.
+
+A WASAPI device opens in shared mode with automatic sample-rate and channel conversion. That conversion allows 16 kHz capture and 22.05 kHz Piper playback when the Windows mixer uses another format. Other host APIs open without extra settings. Device errors report the driver's reason instead of assuming denied permission.
 
 ## Microphone and recognition
 
@@ -64,7 +79,7 @@ Cancellation joins device cleanup before another capture can start. A stalled na
    uv run --group speech python -m service.lls.speech play --audio voice-test.wav
    ```
 
-Windows also supports a separate installed-voice probe.
+Windows also supports a separate installed-voice probe. It runs Windows PowerShell from the system directory, never from `PATH` or the working directory. SAPI writes 22.05 kHz, 16-bit mono PCM for every installed voice. The text reaches PowerShell as an environment value, never as script source.
 
 ```powershell
 uv run python -m service.lls.speech synthesize --provider sapi --text 'Hello. This is the Windows fallback voice.' --output sapi-test.wav
@@ -74,6 +89,6 @@ The output is system audio. It does not prove spatial audio or lip sync in GTA. 
 
 ## Evidence to collect on the rig
 
-Record the executable versions, model checksums, voice licenses, audio devices, and selected compute backend. Run the probes while GTA is active. Record recognition accuracy, elapsed times, audible output, and cancellation behavior. Repeat microphone denial and device removal checks.
+Record the executable versions, model checksums, voice licenses, audio devices, host APIs, and selected compute backend. Verify 16 kHz capture and 22.05 kHz playback through a WASAPI device selected by name and by index. Run the probes while GTA is active. Record recognition accuracy, elapsed times, audible output, and cancellation behavior. Repeat microphone denial and device removal checks.
 
 Automated tests use generated silent WAV fixtures and controlled fake devices. They check process cancellation, output bounds, malformed audio, missing confidence, microphone cleanup, and overwrite protection. They do not verify a real microphone, real voice model, Windows SAPI, or GTA.

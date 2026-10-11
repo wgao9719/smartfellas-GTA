@@ -1,5 +1,10 @@
 import importlib.util
 import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -140,14 +145,181 @@ def test_stage_rejects_core_from_a_different_build(tmp_path):
         DEPLOY.stage(build, tmp_path / "uncreated", "Debug")
 
 
-def test_ssh_deploy_uses_exact_file_mapping_without_overwriting_ini(tmp_path, monkeypatch):
-    import base64
+LONG_SCRIPTS = r"C:\Program Files (x86)\Steam\steamapps\common\Grand Theft Auto V\scripts"
+UPLOADED = (*DEPLOY.FILES, "adapter-build.json", "deploy.ps1", "deploy.json")
+REAL_RUN = subprocess.run
 
+
+def openssh(monkeypatch, home, *, failing=None, remote=None, corrupt=None):
+    """Emulate SFTP batches in an SSH home directory. Optionally run the remote command."""
+    calls, batches = [], []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if len(calls) - 1 == failing:
+            if kwargs.get("check"):
+                raise subprocess.CalledProcessError(255, command)
+            return subprocess.CompletedProcess(command, 255)
+        if command[0] == "ssh":
+            if remote is None:
+                return subprocess.CompletedProcess(command, 0)
+            return REAL_RUN(remote(" ".join(command[2:])), cwd=home, check=kwargs.get("check"))
+        batch = Path(command[command.index("-b") + 1]).read_text()
+        batches.append(batch)
+        for line in batch.splitlines():
+            verb, *paths = shlex.split(line)
+            if verb == "mkdir":
+                (home / paths[0]).mkdir()
+            elif verb == "put":
+                shutil.copyfile(paths[0], home / paths[1])
+                if corrupt and paths[1].endswith("/" + corrupt):
+                    (home / paths[1]).write_bytes(b"corrupted in transit")
+            elif verb == "-rm" and (home / paths[0]).exists():
+                (home / paths[0]).unlink()
+            elif verb == "-rmdir" and (home / paths[0]).exists():
+                (home / paths[0]).rmdir()
+        return subprocess.CompletedProcess(command, 0)
+
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(DEPLOY.subprocess, "run", run)
+    return calls, batches
+
+
+def uploaded(home, calls):
+    upload = calls[1][-1].split("/")[0]
+    return upload, json.loads((home / upload / "deploy.json").read_text(encoding="ascii"))
+
+
+def test_ssh_deploy_uses_exact_file_mapping_without_overwriting_ini(tmp_path, monkeypatch):
     _, staged, _ = bundle(tmp_path)
-    calls = []
-    monkeypatch.setattr(DEPLOY.subprocess, "run", lambda command, **kwargs: calls.append(command))
-    DEPLOY.deploy_ssh(staged, "player@100.64.1.2", r"C:\GTA\scripts")
-    script = base64.b64decode(calls[-1][-1]).decode("utf-16le")
-    assert "Relative='LivingNPC\\LivingNPC.ini.example'" in script
-    assert "Relative='LivingNPC.ini'" not in script
-    assert "Get-ChildItem -LiteralPath $src -File" not in script
+    calls, _ = openssh(monkeypatch, tmp_path / "home")
+    DEPLOY.deploy_ssh(staged, "player@100.64.1.2", r"C:\GTA\scripts\\")
+    upload, plan = uploaded(tmp_path / "home", calls)
+    mapping = {entry["source"]: entry["relative"] for entry in plan["files"]}
+    assert mapping == {
+        **{name: name for name in (*DEPLOY.FILES, "adapter-build.json")},
+        "LivingNPC.ini.example": "LivingNPC\\LivingNPC.ini.example",
+    }
+    assert plan["destination"] == r"C:\GTA\scripts" and plan["backup"] == upload[11:]
+    for entry in plan["files"]:
+        content = (tmp_path / "home" / upload / entry["source"]).read_bytes()
+        assert content == (staged / entry["source"]).read_bytes()
+        assert entry["sha256"] == DEPLOY.sha256(staged / entry["source"])
+    assert sorted(path.name for path in (tmp_path / "home" / upload).iterdir()) == sorted(UPLOADED)
+
+
+def test_ssh_deploy_command_stays_short_and_unquoted_for_long_game_paths(tmp_path, monkeypatch):
+    _, staged, _ = bundle(tmp_path)
+    calls, batches = openssh(monkeypatch, tmp_path / "home")
+    DEPLOY.deploy_ssh(staged, "player@100.64.1.2", LONG_SCRIPTS)
+    assert [call[:2] for call in calls] == [["sftp", "-b"], ["ssh", "player@100.64.1.2"]]
+    upload, plan = uploaded(tmp_path / "home", calls)
+    remote = calls[1][2:]
+    # cmd.exe, Windows OpenSSH's default shell, rejects command lines over 8191 characters.
+    assert len(" ".join(remote)) < 200
+    assert remote == [*DEPLOY.REMOTE_COMMAND, f"{upload}/deploy.ps1"]
+    assert remote[-2:] == ["-File", f"{upload}/deploy.ps1"]
+    # No token needs quoting or escaping under cmd.exe, PowerShell, or a POSIX shell.
+    assert all(re.fullmatch(r"[A-Za-z0-9._/-]+", token) for token in remote)
+    assert re.fullmatch(r"lls-upload-[0-9]{20}", upload)
+    # Spaces and parentheses travel as JSON data, never through a shell or script source.
+    assert plan["destination"] == LONG_SCRIPTS
+    script = (tmp_path / "home" / upload / "deploy.ps1").read_text(encoding="ascii")
+    assert script == DEPLOY.REMOTE_SCRIPT and "Program Files" not in script
+    assert not any("Program Files" in token for call in calls for token in call)
+    assert "Program Files" not in batches[0]
+
+
+@pytest.mark.parametrize("failing", [0, 1], ids=["upload", "launch"])
+def test_failed_ssh_deploy_removes_remote_upload(tmp_path, monkeypatch, failing):
+    _, staged, _ = bundle(tmp_path)
+    home = tmp_path / "home"
+    calls, batches = openssh(monkeypatch, home, failing=failing)
+    with pytest.raises(subprocess.CalledProcessError):
+        DEPLOY.deploy_ssh(staged, "player@100.64.1.2", LONG_SCRIPTS)
+    assert [call[0] for call in calls] == (["sftp", "ssh", "sftp"] if failing else ["sftp", "sftp"])
+    upload = batches[-1].splitlines()[-1].split()[-1]
+    assert batches[-1].splitlines() == [f'-rm "{upload}/{name}"' for name in UPLOADED] + [
+        f"-rmdir {upload}"
+    ]
+    assert not list(home.iterdir())
+
+
+def test_remote_script_reads_values_as_data_and_removes_only_its_upload():
+    script = DEPLOY.REMOTE_SCRIPT
+    assert script.isascii() and "$src = $PSScriptRoot" in script
+    assert "ConvertFrom-Json" in script and "Invoke-Expression" not in script
+    cleanup = script[script.rindex("} finally {") :]
+    assert "-match '^lls-upload-\\d+$'" in cleanup
+    assert "Remove-Item -LiteralPath $src -Recurse -Force" in cleanup
+
+
+def powershell_remote(shell):
+    """Run the SSH command as Windows OpenSSH would through its configured DefaultShell."""
+    if shell == "cmd":
+        return lambda command: ["cmd.exe", "/c", command]
+    return lambda command: ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="runs the deployment script with Windows PowerShell")
+@pytest.mark.parametrize("shell", ["cmd", "powershell"])
+def test_windows_default_shells_run_deploy_script_and_remove_upload(tmp_path, monkeypatch, shell):
+    _, staged, _ = bundle(tmp_path)
+    scripts = tmp_path / "Program Files (x86)" / "Grand Theft Auto V" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "LivingNPC.Core.dll").write_bytes(b"old core")
+    openssh(monkeypatch, tmp_path / "home", remote=powershell_remote(shell))
+    DEPLOY.deploy_ssh(staged, "player@100.64.1.2", str(scripts))
+    for name in (*DEPLOY.FILES, "adapter-build.json"):
+        target = scripts / DEPLOY.installed_path(name)
+        assert target.read_bytes() == (staged / name).read_bytes()
+    (backup,) = (scripts.parent / "LivingNPC-backup").iterdir()
+    assert (backup / "LivingNPC.Core.dll").read_bytes() == b"old core"
+    assert not list((tmp_path / "home").iterdir()) and not list(scripts.rglob("*.incoming"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="runs the deployment script with Windows PowerShell")
+def test_windows_deploy_script_rejects_corrupt_upload_and_rolls_back_locked_dll(
+    tmp_path, monkeypatch
+):
+    _, staged, _ = bundle(tmp_path)
+    scripts = tmp_path / "game" / "scripts"
+    scripts.mkdir(parents=True)
+    for name in DEPLOY.FILES:
+        (scripts / DEPLOY.installed_path(name)).parent.mkdir(exist_ok=True)
+        (scripts / DEPLOY.installed_path(name)).write_bytes(b"old:" + name.encode())
+    shell = powershell_remote("cmd")
+    openssh(monkeypatch, tmp_path / "home", remote=shell, corrupt="LivingNPC.pdb")
+    with pytest.raises(subprocess.CalledProcessError):
+        DEPLOY.deploy_ssh(staged, "player@100.64.1.2", str(scripts))
+    assert not (scripts.parent / "LivingNPC-backup").exists()
+    assert not list((tmp_path / "home").iterdir())
+    openssh(monkeypatch, tmp_path / "home", remote=shell)
+    # Python opens files without FILE_SHARE_DELETE, like a loader holding the DLL.
+    with (scripts / "LivingNPC.Core.dll").open("rb"):
+        with pytest.raises(subprocess.CalledProcessError):
+            DEPLOY.deploy_ssh(staged, "player@100.64.1.2", str(scripts))
+    for name in DEPLOY.FILES:
+        assert (scripts / DEPLOY.installed_path(name)).read_bytes() == b"old:" + name.encode()
+    assert not (scripts / "adapter-build.json").exists() and not list(scripts.rglob("*.incoming"))
+    assert not list((tmp_path / "home").iterdir())
+
+
+def test_local_staging_keeps_partial_copies_outside_the_loader_tree(tmp_path, monkeypatch):
+    """SHVDN loads every DLL below scripts, including an interrupted staging copy."""
+    _, staged, scripts = bundle(tmp_path)
+    (scripts / "LivingNPC.GameAdapter.dll").write_bytes(b"old")
+    staged_dlls, original = [], DEPLOY.shutil.copy2
+
+    def copy(source, target):
+        result = original(source, target)
+        if Path(target).parent.name.startswith("lls-stage-"):
+            assert Path(target).parent.parent == scripts.parent
+            staged_dlls.append(sorted(p.name for p in scripts.rglob("*.dll")))
+        return result
+
+    monkeypatch.setattr(DEPLOY.shutil, "copy2", copy)
+    DEPLOY.deploy_local(staged, scripts)
+    assert staged_dlls == [["LivingNPC.GameAdapter.dll"]] * (len(DEPLOY.FILES) + 1)
+    assert not list(scripts.parent.glob("lls-stage-*"))
+    assert (scripts / "LivingNPC.GameAdapter.dll").read_bytes().startswith(b"new:")
