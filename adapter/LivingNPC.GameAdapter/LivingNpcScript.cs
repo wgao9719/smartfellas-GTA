@@ -126,7 +126,8 @@ namespace LivingNPC.GameAdapter
             profileConfirmation.Observe(world, bridge?.RequiresReconnect == true);
             if (!world.Safe)
             {
-                if (bridge != null) { CancelInput(); bridge.Dispose(); bridge = null; controller = null; game.Reset(); }
+                CancelInput();
+                if (bridge != null) { bridge.Dispose(); bridge = null; controller = null; game.Reset(); }
                 game.ShowStatus("disabled", "Living Los Santos: unavailable in the current game state."); game.Render(null); return;
             }
             if (!profileConfirmation.Confirmed)
@@ -213,20 +214,20 @@ namespace LivingNPC.GameAdapter
             if (targetSnapshot == null) { input.Reset(); return false; }
             return true;
         }
-        private bool Control(string kind)
+        private bool Control(string kind, string? canceledScene = null)
         {
-            if (bridge == null || !input.Bound) return false;
-            object payload = kind == "scene.cancel" ? (object)new { scene_id = input.SceneId } : input.ControlPayload()!;
-            if (bridge.Controls.TryAdd(Event(kind, input.ActorId, payload))) return true;
+            if (bridge == null || kind != "scene.cancel" && !input.Bound) return false;
+            object payload = kind == "scene.cancel" ? (object)new { scene_id = canceledScene } : input.ControlPayload()!;
+            if (bridge.Controls.TryAdd(Event(kind, kind == "scene.cancel" ? null : input.ActorId, payload))) return true;
             bridge.RequiresReconnect = true;
             game.ShowStatus("error", "Living Los Santos: control queue is full. Reconnecting to stop input.");
             return false;
         }
-        private void CancelInput()
+        private void CancelInput(bool clearTarget = true)
         {
-            controller?.Cancel(input.SceneId);
-            if (input.Bound) Control("scene.cancel");
-            input.Reset(); targetSnapshot = null; typing = null;
+            input.Cancel(controller, scene => Control("scene.cancel", scene), game.ClearSelection, clearTarget);
+            if (clearTarget) pinConfirmation.Disarm();
+            targetSnapshot = null; typing = null;
             game.ShowStatus("canceled", "Living Los Santos: conversation canceled.");
         }
         private void OnKeyDown(object sender, KeyEventArgs args)
@@ -239,7 +240,7 @@ namespace LivingNPC.GameAdapter
             }
             if (!profileConfirmation.Confirmed) return;
             if ((args.KeyCode == pttKey || args.KeyCode == whisperKey) && typing == null && !heldTalkKeys.Add(args.KeyCode)) return;
-            if (args.KeyCode == cancelKey && typing == null || args.KeyCode == Keys.Escape && typing != null)
+            if (ConversationInput.ShouldCancel(typing != null, args.KeyCode == cancelKey, args.KeyCode == Keys.Escape))
             {
                 CancelInput(); return;
             }
@@ -270,15 +271,15 @@ namespace LivingNPC.GameAdapter
                 CancelInput();
                 PruneAndPublish();
                 if (bridge == null) return;
-                var actor = game.SelectNearest(generation, out var refusal); SendSnapshot(actor); LogClassification(actor ?? refusal);
+                var actor = game.SelectTarget(generation, out var refusal); SendSnapshot(actor); LogClassification(actor ?? refusal);
                 game.ShowStatus("target", actor != null ? "Target: " + actor.Name + " (" + PedClassifier.Availability(actor, game.ReadWorld(), generation) + ")"
                     : refusal != null ? "Nearest: " + PedRoleTable.Label(refusal.Role) + " — not available" : "No nearby resident is available."); return;
             }
             if (args.KeyCode == pinKey) { RequestPin(); return; }
-            if (args.KeyCode == textKey) { CancelInput(); if (LockTarget()) typing = ""; return; }
+            if (args.KeyCode == textKey) { CancelInput(clearTarget: false); if (LockTarget()) typing = ""; return; }
             if ((args.KeyCode == pttKey || args.KeyCode == whisperKey) && !input.PushToTalkHeld)
             {
-                CancelInput();
+                CancelInput(clearTarget: false);
                 if (LockTarget() && input.StartPushToTalk((int)args.KeyCode, args.KeyCode == whisperKey))
                 {
                     pendingPttDeadline = DateTimeOffset.UtcNow.AddSeconds(5);
@@ -296,7 +297,7 @@ namespace LivingNPC.GameAdapter
             var press = pinConfirmation.Press(actor!.ActorId, actor.RuntimeInstanceId, DateTimeOffset.UtcNow);
             if (press == PinPress.Pending) { game.ShowStatus("pin", "Living Los Santos: a pin request is still waiting for the service."); return; }
             if (press == PinPress.Armed) { game.ShowStatus("pin", "Living Los Santos: press " + pinKey + " again within 5 seconds to pin " + actor.Name + "."); return; }
-            CancelInput();
+            CancelInput(clearTarget: false);
             if (!bridge.Events.TryAdd(Event("actor.pin_requested", actor.ActorId, new { runtime_instance_id = actor.RuntimeInstanceId })))
             { pinConfirmation.Reset(); game.ShowStatus("error", "Living Los Santos: input queue is full."); return; }
             game.ShowStatus("pin", "Living Los Santos: pinning " + actor.Name + ".");

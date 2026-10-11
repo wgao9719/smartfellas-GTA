@@ -20,6 +20,7 @@ TextKey=F7
 PttKey=N
 ; Hold to whisper. Verify on the rig that B does not conflict with a game binding.
 WhisperKey=B
+; Outside typing, cancel and clear selection. Escape remains reserved for GTA pause.
 CancelKey=Back
 ; Press twice within 5 seconds to pin the selected pedestrian. Check for key conflicts on the rig.
 PinKey=F8
