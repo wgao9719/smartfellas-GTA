@@ -275,6 +275,7 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
                 "profiles": await runtime.db("list_profiles"),
                 "sessions": sessions,
                 "session_cleanup": runtime.cleanup_diagnostics(),
+                "snapshots": runtime.snapshot_diagnostics(),
                 "provider": runtime.provider.name,
                 "speech": "unverified",
                 "game_verified": False,

@@ -133,6 +133,7 @@
     <h2 id="diagnostics-title">Live session</h2>
     <p id="cleanup-status" role="status"></p>
     <pre id="cleanup-details" hidden></pre>
+    <details><summary>Database snapshots</summary><pre id="snapshot-status"></pre></details>
     <div class="toolbar">
       <label for="diagnostic-session">Session<select id="diagnostic-session"><option value="">No sessions</option></select></label>
       <button id="refresh-diagnostics">Refresh session</button>
@@ -383,6 +384,7 @@
     el('cleanup-status').className=data.session_cleanup.status==='pending'?'warning':'muted small';
     el('cleanup-details').hidden=data.session_cleanup.status!=='pending';
     el('cleanup-details').textContent=JSON.stringify(data.session_cleanup,null,2);
+    el('snapshot-status').textContent=JSON.stringify(data.snapshots,null,2);
     const selectedSession=el('diagnostic-session').value;
     el('diagnostic-session').replaceChildren();
     for(const session of data.sessions){const option=document.createElement('option');

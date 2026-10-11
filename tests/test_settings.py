@@ -34,6 +34,32 @@ def windows(monkeypatch):
     )
 
 
+def test_snapshot_settings_defaults_and_environment(monkeypatch):
+    settings = Settings.from_env()
+    assert settings.snapshot_interval_seconds == 3600
+    assert settings.snapshot_retention_count == 24
+    monkeypatch.setenv("LLS_SNAPSHOT_INTERVAL_SECONDS", "120.5")
+    monkeypatch.setenv("LLS_SNAPSHOT_RETENTION_COUNT", "3")
+    settings = Settings.from_env()
+    assert settings.snapshot_interval_seconds == 120.5
+    assert settings.snapshot_retention_count == 3
+    monkeypatch.setenv("LLS_SNAPSHOT_INTERVAL_SECONDS", "0")
+    assert Settings.from_env().snapshot_interval_seconds == 0
+
+
+@pytest.mark.parametrize("name,value", [
+    ("LLS_SNAPSHOT_INTERVAL_SECONDS", "-1"),
+    ("LLS_SNAPSHOT_INTERVAL_SECONDS", "nan"),
+    ("LLS_SNAPSHOT_INTERVAL_SECONDS", "inf"),
+    ("LLS_SNAPSHOT_RETENTION_COUNT", "0"),
+    ("LLS_SNAPSHOT_RETENTION_COUNT", "1001"),
+])
+def test_invalid_snapshot_settings_are_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError):
+        Settings.from_env()
+
+
 def test_speech_gates_parse_from_the_environment_and_validate(monkeypatch):
     speech = Settings.from_env().speech
     assert (speech.minimum_dialogue_confidence, speech.silence_dbfs) == (0.3, -60)

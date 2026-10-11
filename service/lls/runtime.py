@@ -10,6 +10,7 @@ from collections import OrderedDict, deque
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -164,6 +165,13 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             self.configuration_lock = asyncio.Lock()
             self.clock = clock
             self.utc_now = utc_now
+            self.snapshot_task = None
+            self.snapshot_stopping = False
+            self.snapshot_next_at = clock() + self.settings.snapshot_interval_seconds
+            self.snapshot_last_success_at = None
+            self.snapshot_last_success_path = None
+            self.snapshot_last_failure_at = None
+            self.snapshot_last_error_type = None
             self.id_factory = id_factory
             self.trigger_engine = trigger_engine
             self.policy = ActionPolicy(clock=clock)
@@ -1784,6 +1792,58 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             ):
                 del self.sessions[sid]
 
+    def snapshot_diagnostics(self):
+        return {
+            "enabled": self.settings.snapshot_interval_seconds > 0 and self.repo.path != ":memory:",
+            "running": self.snapshot_task is not None and not self.snapshot_task.done(),
+            "interval_seconds": self.settings.snapshot_interval_seconds,
+            "retention_count": self.settings.snapshot_retention_count,
+            "last_success_at": self.snapshot_last_success_at,
+            "last_success_path": self.snapshot_last_success_path,
+            "last_failure_at": self.snapshot_last_failure_at,
+            "last_error_type": self.snapshot_last_error_type,
+        }
+
+    def snapshot_if_due(self):
+        interval = self.settings.snapshot_interval_seconds
+        if (
+            self.snapshot_stopping or interval == 0 or self.repo.path == ":memory:"
+            or self.clock() < self.snapshot_next_at
+            or self.snapshot_task is not None and not self.snapshot_task.done()
+        ):
+            return
+        self.snapshot_task = asyncio.create_task(self.take_snapshot())
+
+    async def take_snapshot(self):
+        try:
+            path = await self.thread_job(self.write_snapshot)
+        except Exception as exc:
+            self.snapshot_last_failure_at = self.utc_now().isoformat()
+            # Exception messages can contain private paths or database contents.
+            self.snapshot_last_error_type = type(exc).__name__
+        else:
+            self.snapshot_last_success_at = self.utc_now().isoformat()
+            self.snapshot_last_success_path = str(path)
+        finally:
+            # Slow or failed backups never cause a catch-up burst.
+            self.snapshot_next_at = self.clock() + self.settings.snapshot_interval_seconds
+
+    def write_snapshot(self):
+        directory = Path(self.repo.path).resolve().parent / "snapshots"
+        stamp = self.utc_now().strftime("%Y%m%dT%H%M%S%fZ")
+        path = directory / f"lls-{stamp}-{secrets.token_hex(4)}.sqlite3"
+        self.repo.backup(path)
+        # Only successful publications rotate this service's scheduled snapshots.
+        # Always keep the new snapshot even if the wall clock moved backwards.
+        previous = sorted(
+            (p for p in directory.glob("lls-*.sqlite3") if p != path),
+            key=lambda p: (p.stat().st_mtime_ns, p.name),
+            reverse=True,
+        )
+        for old in previous[self.settings.snapshot_retention_count - 1:]:
+            old.unlink()
+        return path
+
     async def maintain(self):
         while True:
             await asyncio.sleep(1)
@@ -1809,8 +1869,12 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                 self.skill_scheduler.tick()
             self._skills_first = not self._skills_first
             await self.expire_sessions()
+            self.snapshot_if_due()
 
     async def shutdown(self):
+        self.snapshot_stopping = True
+        if self.snapshot_task is not None:
+            await asyncio.gather(self.snapshot_task, return_exceptions=True)
         for session in list(self.sessions.values()):
             try:
                 await self.close_session(session)

@@ -90,6 +90,25 @@ If the loader locks a DLL, close GTA before deployment. The deployment tool stor
 
 SHVDN loads every DLL below `scripts`. Local deployment therefore stages files in a temporary `lls-stage-*` directory beside `scripts`, on the same volume. An interrupted deployment can leave that directory behind, but never a second adapter copy inside `scripts`. Delete a leftover `lls-stage-*` directory after the interrupted deployment ends.
 
+## Database snapshots and restore
+
+The service database is separate from the adapter and GTA saves. Its Windows default is `%LOCALAPPDATA%\LivingLosSantos\lls.sqlite3`; `LLS_DATABASE` can select another absolute path. Periodic snapshots are stored in the database directory's `snapshots` subdirectory, by default `%LOCALAPPDATA%\LivingLosSantos\snapshots`. Each published file is named `lls-<UTC timestamp>-<random>.sqlite3` and contains all profiles and service database settings.
+
+`LLS_SNAPSHOT_INTERVAL_SECONDS` defaults to `3600` (one hour). Set it to `0` to disable periodic snapshots. The first snapshot is due one interval after startup; later intervals begin when the preceding attempt finishes. `LLS_SNAPSHOT_RETENTION_COUNT` defaults to `24` and accepts `1` through `1000`; after a successful publication, older periodic snapshots are removed until that count remains. Restart the service after changing either setting. In-memory databases do not produce periodic snapshots. The dashboard's manual database backup still writes to the database directory's `backups` subdirectory; those backups are not rotated automatically.
+
+The maintenance loop runs at most one periodic snapshot at a time in a worker thread. SQLite's online backup API copies a consistent database while WAL writes continue. The copy is written to a temporary file in the snapshot directory, then published with an atomic replacement only after copying succeeds. Copy or publication failure leaves previously published snapshots intact. Failures record the exception type and retry at the next interval without stopping the service.
+
+The dashboard's snapshot diagnostics and authenticated local admin overview (`/v1/admin/overview`) report `enabled`, `running`, `interval_seconds`, `retention_count`, `last_success_at`, `last_success_path`, `last_failure_at`, and `last_error_type` in the `snapshots` object. Diagnostics cover the current service lifetime. A later success updates the success fields while retaining the last failure fields. Check both timestamps and the failure type when diagnosing missing snapshots, including disk-space or directory-permission failures.
+
+To restore a selected snapshot or manual backup:
+
+1. Stop the service completely and confirm its process has exited. Do not replace a database while any service instance is using it.
+2. Identify the database path from `LLS_DATABASE`, or use the default above. Preserve the current database and any matching `-wal` and `-shm` sidecars together in a separate recovery directory. For example, `lls.sqlite3`, `lls.sqlite3-wal`, and `lls.sqlite3-shm` belong to the same set. Do not leave old sidecars beside the replacement database.
+3. Copy the selected `.sqlite3` snapshot to the configured database path, keeping the original snapshot. A completed snapshot is a standalone database; it does not need the live database's WAL or SHM files.
+4. Restart the service, inspect the local dashboard for the expected profiles and memories, and confirm the save/profile association before reopening a game session.
+
+Restoring replaces all profiles and database settings with their state at snapshot time; later changes are lost. Deleting a profile or memory from the live database does not remove it from existing snapshots or manual backups. Remove retained copies separately when erasure is required. Disabling snapshots does not delete existing files. These copies share the database's disk and do not protect against loss of that disk. Automated consistency and failure tests are development evidence; actual power-loss recovery and GTA behavior still require rig verification.
+
 ## Save/profile association
 
 There is no default profile. Set `[Service]` `ProfileId` to the profile you choose for the loaded Story Mode save and `SaveSlot` to a stable manual label for that save lineage. Use a distinct profile and label for a different lineage, including different slots saved at the same game date/time. These fields do not identify a save automatically; the adapter has no verified stable engine save GUID. Reload the adapter after changing the INI.
