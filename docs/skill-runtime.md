@@ -29,7 +29,7 @@ All routes use the session bearer token:
 | Route | Additional fields | Result |
 |---|---|---|
 | `POST /v1/bridge/skills/generate` | `skill_id`, `version`, optional `action_class`, optional `revises` | A persisted candidate, or no candidate |
-| `POST /v1/bridge/skills/trial` | `candidate_id` | A persisted interpreter outcome with canonical receipt sources |
+| `POST /v1/bridge/skills/trial` | `candidate_id` | A persisted simulated refusal/failure, or a bridge trial outcome with canonical receipt sources |
 | `POST /v1/bridge/skills/adopt` | `trial_id` | Actor-private adoption after a completed acknowledged trial |
 | `POST /v1/bridge/skills/execute` | `skill_id` | Execution of the actor's current retained revision |
 
@@ -52,6 +52,17 @@ Every body also supplies these common fields:
 Generation uses `SkillLearner` and the configured provider gateway's background budget.
 The runtime does not bypass cloud consent, provider limits, or candidate validation.
 A revision must refer to the actor's earlier visible candidate or trial.
+
+Every manual trial first runs the same recorded simulated preflight as automatic practice.
+The actual interpreter checks the complete candidate with simulated zero-distance primitive receipts.
+A later guard or policy refusal therefore prevents even an earlier action from reaching the bridge.
+An unsuccessful preflight returns its persisted simulated trial for revision, without dispatching commands.
+
+The passing preflight belongs to the candidate and carries a fingerprint of its source, transitive dependencies, and action registry.
+Before bridge dispatch, the runtime requires that actor-visible passing record and matching current fingerprints.
+It rechecks that authorization before each primitive; compilation alone cannot authorize a bridge trial.
+Changed immutable implementations require new versions and another successful preflight.
+Simulated completion does not establish native feasibility or permit bridge adoption.
 
 Trial and execution requests remain pending while the adapter polls commands and submits acknowledgments through the existing bridge routes.
 They do not receive arbitrary executor callbacks from HTTP clients.
