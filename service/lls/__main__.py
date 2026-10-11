@@ -18,6 +18,8 @@ from .settings import Settings
 def fixture_session():
     return {
         "profile_id": "fake-demo",
+        "save_slot": "fake-slot",
+        "profile_confirmed": True,
         "protagonist_id": "franklin",
         "runtime_generation": 1,
         "game_datetime": "2013-09-17T12:00:00",

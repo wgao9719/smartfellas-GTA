@@ -51,7 +51,7 @@ Transient bindings now leave the registry after despawn, identity mismatch, scri
 6. Test deploy, reload, DLL lock behavior, and rollback.
 7. Test loopback and authenticated Tailscale development networking.
 8. Test text, PTT, microphone permission, subtitles, and audio.
-9. Test service restart, game reload, protagonist switching, and save rewind.
+9. Test first-load profile selection, service restart, continuing the same save, game reload, protagonist switching, save rewind, and different-slot saves with equal game date/time. Verify the warning and manual confirmation precede each new session, and a mismatched association opens no session.
 10. Complete 20 interactions and a 20-minute soak.
 11. Repeat the build, deployment, and reload on a second Mac.
 
@@ -63,6 +63,8 @@ The compile reference does not establish compatibility with a current GTA build.
 
 Curated spawn/reconciliation, verified pin persistence, controller input, persistent identity binding, full native action coverage, and complete input accessibility remain incomplete. Native status values, heading conditions, decorator reliability, mission ownership, random events, and pause behavior require recorded tests.
 
-The adapter cannot detect every save-load boundary from dates alone. It detects loading state, protagonist changes, and a full-date rewind. An explicit profile and optional parent branch selection remain necessary for ambiguous saves.
+The adapter cannot detect every save-load boundary from dates alone. It detects loading state, protagonist changes, and a full-date rewind; these native signals still need rig verification. No verified stable engine save GUID is available. There is no default profile: configure `ProfileId` and a stable manual `SaveSlot` label in the INI, then read the warning and press `ConfirmProfileKey` (default F10) before every new bridge session, including transport reconnects and protagonist switches. The service requires explicit confirmation and a matching stored association before attaching memories; unknown or different saves require a matching explicit selection or a new profile. A nonempty stored association cannot be changed through session-open. See [Save/profile association](windows-runtime.md#saveprofile-association).
+
+An earlier full game date still creates a timeline branch that excludes future records. Optional `ParentBranchId` selection resolves existing timeline ambiguity after the profile/save association check. Equal-time divergent saves cannot be inferred from the date, and a missed load boundary remains a rig limit. Reload the adapter and select the correct association if the save change was not detected. Protagonist switches within one save retain its profile and save label; memory and relationship isolation remains per protagonist.
 
 The subtitle presenter displays one queued chunk at a time. It acknowledges exactly the rendered text, with `display_rule`, only after a render pass. Its receipt does not prove that the player read it. Audio timing and interrupted delivery require further integration before the speech gate can pass.

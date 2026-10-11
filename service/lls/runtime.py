@@ -152,6 +152,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             self.repo = repository
             self.sessions = {}
             self.selected_branches = {}
+            self.profile_warning = None
             self.profile_locks = {}
             self.open_lock = asyncio.Lock()
             self.configuration_lock = asyncio.Lock()
@@ -292,6 +293,16 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
     async def open(self, request):
         await self.expire_sessions()
         async with self.open_lock:
+            if (
+                not (request.profile_id or "").strip()
+                or not (request.save_slot or "").strip()
+                or not request.profile_confirmed
+            ):
+                self.profile_warning = (
+                    "Confirm the profile and save slot for this load before attaching memories. "
+                    "A different or unknown save needs explicit selection or a new profile."
+                )
+                raise HTTPException(409, self.profile_warning)
             async with self.profile_lock(request.profile_id):
                 return await self._open_locked(request)
 
@@ -300,6 +311,14 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             raise HTTPException(429, "session limit reached")
         if request.manifest.service_host_mode == "dev_lan" and not self.settings.dev_lan:
             raise HTTPException(403, "dev-LAN unavailable")
+        try:
+            await self.db("create_profile", request.profile_id, save_slot=request.save_slot)
+        except ValueError:
+            self.profile_warning = (
+                "This profile belongs to another save slot. Select the matching profile "
+                "or a new profile before attaching memories; the association was not changed."
+            )
+            raise HTTPException(409, self.profile_warning) from None
         session_id = self.id_factory("ses")
         branch = await self.db(
             "start_session",
@@ -317,6 +336,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         session.last_activity = self.clock()
         session.game_datetime = request.game_datetime.isoformat()
         self.sessions[session.id] = session
+        self.profile_warning = None
         # Closed sessions cannot accumulate forever.
         for sid in list(self.sessions):
             if len(self.sessions) > self.settings.max_sessions * 2 and self.sessions[sid].closed:

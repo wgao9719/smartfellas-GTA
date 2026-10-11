@@ -14,11 +14,13 @@ namespace LivingNPC.GameAdapter
         private readonly AdapterLog log;
         private readonly string adapterVersion;
         private readonly Uri endpoint;
-        private readonly string profileId, bootstrapToken, hookVersion, serviceOs;
+        private readonly string profileId, saveSlot, bootstrapToken, hookVersion, serviceOs;
         private readonly string? parentBranchId;
         private readonly string[] capabilities;
         private readonly Keys targetKey, textKey, pttKey, cancelKey;
-        private readonly Keys pinKey;
+        private readonly Keys pinKey, confirmProfileKey;
+        private readonly ProfileConfirmation profileConfirmation = new ProfileConfirmation();
+        private bool profileKeyHeld;
         private readonly PinConfirmation pinConfirmation = new PinConfirmation();
         private BridgeWorker? bridge;
         private CommandController? controller;
@@ -27,14 +29,12 @@ namespace LivingNPC.GameAdapter
         private readonly ConversationInput input = new ConversationInput();
         private EventEnvelope? targetSnapshot;
         private DateTimeOffset pendingPttDeadline;
-        private string protagonist = "";
         private bool wasOnline, offlineShown;
         // Held talk keys ignore key repeat. Each key keeps its own physical state.
         private readonly HashSet<Keys> heldTalkKeys = new HashSet<Keys>();
         private readonly Keys whisperKey;
         private bool worldSent;
         private readonly BoundedQueue<string> removedActors = new BoundedQueue<string>(128);
-        private DateTime lastGameDate;
         private DateTimeOffset nextSample;
         private bool enabled;
         public LivingNpcScript()
@@ -56,7 +56,8 @@ namespace LivingNPC.GameAdapter
             catch (System.IO.IOException) { log.Write("installed_dll_hash_unavailable"); }
             catch (UnauthorizedAccessException) { log.Write("installed_dll_hash_unavailable"); }
             var settings = ScriptSettings.Load(AdapterPaths.Configuration(scriptsDirectory));
-            profileId = settings.GetValue("Service", "ProfileId", "default");
+            profileId = settings.GetValue("Service", "ProfileId", "").Trim();
+            saveSlot = settings.GetValue("Service", "SaveSlot", "").Trim();
             var configuredBranch = settings.GetValue("Service", "ParentBranchId", ""); parentBranchId = configuredBranch.Length == 0 ? null : configuredBranch;
             bootstrapToken = Environment.GetEnvironmentVariable("LLS_BRIDGE_TOKEN") ?? settings.GetValue("Service", "BootstrapToken", "");
             hookVersion = settings.GetValue("Compatibility", "ScriptHookVBuild", "UNVERIFIED");
@@ -80,6 +81,7 @@ namespace LivingNPC.GameAdapter
             whisperKey = settings.GetValue("Input", "WhisperKey", Keys.B);
             cancelKey = settings.GetValue("Input", "CancelKey", Keys.Back);
             pinKey = settings.GetValue("Input", "PinKey", Keys.F8);
+            confirmProfileKey = settings.GetValue("Input", "ConfirmProfileKey", Keys.F10);
 #if DEVELOPMENT
             game.PinPersistence = settings.GetValue("Development", "EnableUnverifiedPinPersistence", false);
 #endif
@@ -96,8 +98,7 @@ namespace LivingNPC.GameAdapter
         {
             controller?.Cancel(input.SceneId); bridge?.Dispose(); game.Reset(); controller = null;
             generation++; seq = 0; worldSent = false; removedActors.Clear(); input.Reset(); targetSnapshot = null; typing = null;
-            protagonist = world.ProtagonistId; lastGameDate = world.GameDatetime;
-            var request = new SessionRequest { ProfileId = profileId, ParentBranchId = parentBranchId, ProtagonistId = protagonist, GameDatetime = world.GameDatetime.ToString("s"), RuntimeGeneration = generation, Capabilities = capabilities,
+            var request = new SessionRequest { ProfileId = profileId, SaveSlot = saveSlot, ProfileConfirmed = profileConfirmation.Confirmed, ParentBranchId = parentBranchId, ProtagonistId = world.ProtagonistId, GameDatetime = world.GameDatetime.ToString("s"), RuntimeGeneration = generation, Capabilities = capabilities,
                 Manifest = new Dictionary<string, object> { ["game_edition"] = "legacy", ["story_mode"] = true, ["gta_build"] = Game.Version.ToString(), ["scripthookv_build"] = hookVersion,
                     ["shvdn_build"] = typeof(Script).Assembly.GetName().Version!.ToString(), ["adapter_version"] = adapterVersion,
                     ["game_os_version"] = Environment.OSVersion.VersionString, ["service_os"] = serviceOs, ["service_host_mode"] = IPAddress.IsLoopback(IPAddress.Parse(endpoint.Host)) ? "local" : "dev_lan",
@@ -122,14 +123,19 @@ namespace LivingNPC.GameAdapter
         {
             if (!enabled) { game.Render(null); return; }
             var timer = Stopwatch.StartNew(); var world = game.ReadWorld();
+            profileConfirmation.Observe(world, bridge?.RequiresReconnect == true);
             if (!world.Safe)
             {
                 if (bridge != null) { CancelInput(); bridge.Dispose(); bridge = null; controller = null; game.Reset(); }
                 game.ShowStatus("disabled", "Living Los Santos: unavailable in the current game state."); game.Render(null); return;
             }
-            // A full game-date rewind and a protagonist switch invalidate every old binding/command.
-            if (bridge == null || bridge.RequiresReconnect || world.ProtagonistId != protagonist || world.GameDatetime < lastGameDate.AddSeconds(-2)) Connect(world);
-            lastGameDate = world.GameDatetime;
+            if (!profileConfirmation.Confirmed)
+            {
+                if (bridge != null) { CancelInput(); bridge.Dispose(); bridge = null; controller = null; game.Reset(); }
+                game.ShowStatus("profile_selection", profileConfirmation.Warning(profileId, saveSlot, confirmProfileKey.ToString()));
+                game.Render(null); return;
+            }
+            if (bridge == null) Connect(world);
             if (input.Bound && !input.IsCurrent(game.Resolve(input.ActorId!), world, generation)) CancelInput();
             if (bridge!.Session != null && controller == null) controller = new CommandController(game, bridge.Session.SessionId, generation, bridge.Session.PolicyVersion, capabilities);
             if (bridge.Online)
@@ -226,6 +232,12 @@ namespace LivingNPC.GameAdapter
         private void OnKeyDown(object sender, KeyEventArgs args)
         {
             if (!enabled) return;
+            if (args.KeyCode == confirmProfileKey)
+            {
+                if (!profileKeyHeld && !profileConfirmation.Confirmed) profileConfirmation.Confirm(game.ReadWorld(), profileId, saveSlot);
+                profileKeyHeld = true; return;
+            }
+            if (!profileConfirmation.Confirmed) return;
             if ((args.KeyCode == pttKey || args.KeyCode == whisperKey) && typing == null && !heldTalkKeys.Add(args.KeyCode)) return;
             if (args.KeyCode == cancelKey && typing == null || args.KeyCode == Keys.Escape && typing != null)
             {
@@ -299,6 +311,7 @@ namespace LivingNPC.GameAdapter
         }
         private void OnKeyUp(object sender, KeyEventArgs args)
         {
+            if (args.KeyCode == confirmProfileKey) profileKeyHeld = false;
             if (args.KeyCode != pttKey && args.KeyCode != whisperKey) return;
             heldTalkKeys.Remove(args.KeyCode);
             if (!input.StopPushToTalk((int)args.KeyCode)) return;
