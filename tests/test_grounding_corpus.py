@@ -10,16 +10,27 @@ CORPUS = json.loads(
 )
 
 
+def _filter(line):
+    player_text = CORPUS["player_utterance"] if line in CORPUS["contextual_adversarial"] else ""
+    return grounded_text(line, player_text=player_text)
+
+
 def test_grounding_corpus_rates():
     ordinary = CORPUS["ordinary"]
     adversarial = CORPUS["adversarial"]
-    assert len(ordinary) >= 150
-    assert len(adversarial) >= 80
+    assert len(ordinary) >= 246
+    assert len(adversarial) >= 179
     assert len(ordinary) == len(set(ordinary))
     assert len(adversarial) == len(set(adversarial))
     assert not set(ordinary) & set(adversarial)
-    false_positives = [line for line in ordinary if grounded_text(line) != line]
-    false_negatives = [line for line in adversarial if grounded_text(line)]
+    assert set(CORPUS["contextual_adversarial"]) <= set(adversarial)
+    false_positives = [
+        line for line in ordinary if any(
+            grounded_text(line, player_text=player_text) != line
+            for player_text in ("", CORPUS["player_utterance"])
+        )
+    ]
+    false_negatives = [line for line in adversarial if _filter(line)]
     report = (
         f"Grounding corpus: false positives {len(false_positives)}/{len(ordinary)} "
         f"({len(false_positives) / len(ordinary):.2%}); "
@@ -33,10 +44,11 @@ def test_grounding_corpus_rates():
 
 
 @pytest.mark.parametrize("line", CORPUS["ordinary"])
-def test_grounding_corpus_preserves_ordinary_line(line):
-    assert grounded_text(line) == line
+@pytest.mark.parametrize("player_text", ["", CORPUS["player_utterance"]])
+def test_grounding_corpus_preserves_ordinary_line(line, player_text):
+    assert grounded_text(line, player_text=player_text) == line
 
 
 @pytest.mark.parametrize("line", CORPUS["adversarial"])
 def test_grounding_corpus_removes_adversarial_line(line):
-    assert grounded_text(line) == ""
+    assert _filter(line) == ""

@@ -1061,6 +1061,8 @@ class Runtime(
     ):
         value = {
             "event_id": event.event_id,
+            "session_id": session.id,
+            "actor_id": event.actor_id,
             "game_datetime": event.game_datetime.isoformat(),
             "protagonist_id": event.protagonist_id,
             "event_type": event.kind,
@@ -1356,11 +1358,17 @@ class Runtime(
                 memories=memories, session_id=session.id,
             )
             memories = [m for m in memories if event.event_id not in m.get("source_event_ids", [])]
+            recent_conversation = self.repo.recent_conversation(
+                session.request.profile_id, session.branch_id, actor_id,
+                event.protagonist_id, event.game_datetime.isoformat(),
+                session_id=session.id, exclude_event_id=event.event_id,
+            )
             context, context_trace = build_context(
                 actor=actor,
                 snapshot=session.actors[actor_id],
                 world=session.world,
                 memories=memories,
+                recent_conversation=recent_conversation,
                 knowledge=knowledge,
                 relationship=relationship,
                 input_text=event.payload["text"],
@@ -1391,7 +1399,10 @@ class Runtime(
                     "source_event_ids": tuple(dict.fromkeys([
                         event.event_id,
                         *[
-                            source for record in context["memories"] + context["knowledge"]
+                            source for record in (
+                                context["recent_conversation"] + context["memories"]
+                                + context["knowledge"]
+                            )
                             for source in record["source_event_ids"]
                         ],
                         *[outcome["event_id"] for outcome in context["action_outcomes"]],
@@ -1422,7 +1433,8 @@ class Runtime(
                     # Subtitles, speech, receipts, and memories all use the displayed text.
                     chunk = display_text(chunk)
                     safe = grounded_text(
-                        chunk, completion_lines=acknowledged_completion_lines(session, actor_id)
+                        chunk, player_text=event.payload["text"],
+                        completion_lines=acknowledged_completion_lines(session, actor_id),
                     )
                     if safe != chunk:
                         session.trace.append({"turn_id": turn_id, "grounding": "sentence_refused"})
@@ -1661,12 +1673,17 @@ class Runtime(
             ):
                 delivered_event = {
                     "event_id": command_id + ":delivered",
+                    "session_id": session.id,
                     "game_datetime": command["_game_datetime"],
                     "protagonist_id": session.request.protagonist_id,
                     "event_type": "dialogue.delivered",
                     "payload": {
                         "text": actual,
                         "turn_id": command["payload"]["turn_id"],
+                        "input_event_id": session.delivery_turns.get(
+                            command.get("_conversation_turn"), {}
+                        ).get("input_event_id"),
+                        "chunk_index": command["payload"]["chunk_index"],
                         "speaker": command["payload"]["speaker"],
                         "display_rule": DISPLAY_RULE,
                     },

@@ -26,6 +26,25 @@ Personal history, everyday activities, opinions about prices, and neutral greeti
 to protagonists pass. Clause-local history, intentions, and denials do not authorize
 an unsafe assertion in another clause.
 
+The 2026-10-11 in-game QA exposed an indirect job lead: in response to
+`Got any jobs or missions for me? I need cash.`, the NPC suggested the docks or
+racetrack and said `Heard they got some work goin' on there.` The previous gate
+required explicit assignment/offer language and let both sentences through.
+The foreground gate and prompt constraints now use the locked current player
+utterance. Requests for jobs, income, or ambiguous help make hiring claims and
+indirect referrals to people or places restricted, including sentences that omit
+the purpose because an earlier sentence or the player's question supplied it.
+Each streamed sentence is checked independently before subtitle or TTS delivery.
+Ordinary navigation questions, questions about the NPC's working life, personal
+work history, and refusals remain allowed. Social and authored speech retain the
+same explicit-claim gate without borrowing an unrelated player's request.
+
+Explicit predicates also cover scores/gigs, free goods, cash handoffs/transfers,
+discounts, safehouse and other access claims, and colloquial canonical relationship
+changes or reported threats. Neither a rumor nor a quoted character authorizes
+one of these claims. The tests preserve the stronger requirement that every
+ordinary corpus sentence survive unchanged, even under a job-request context.
+
 These boundaries preserve the ambient background flavor in
 `SPECS_agentdesign.md` and the freeform dialogue, personality and believability
 goals in `SPECS.md` sections 0.2, 3, and 14.4. Player text, quotations, and proposed
@@ -61,23 +80,54 @@ is conservatively unavailable for completion speech.
 
 ## Measured vocabulary scope
 
-The checked-in `tests/fixtures/grounding_corpus.json` contains 216 ordinary lines
-and 140 adversarial lines. It includes the 12 reported false positives, personal
+The checked-in `tests/fixtures/grounding_corpus.json` contains 246 ordinary lines
+and 179 adversarial lines. It retains all 216 ordinary and 140 adversarial lines
+from the previous gate, adds the seven reported held-out claims, both QA lead
+sentences, 30 further adversarial paraphrases and 30 neutral ambient lines. It
+includes the 12 earlier reported false positives, personal
 history, progressive everyday activities, price opinions, neutral named-character
 mentions, directed offers/assignments, canonical revelations, and unacknowledged
 registry actions. Independent minimal pairs exercise historical versus current
 actions, social-media versus physical following, greetings versus revelations,
-and refusals versus offers.
+refusals versus offers, and identical referrals under job-seeking versus ordinary
+questions. The corpus marks 12 context-dependent leads with the QA player input;
+the remaining adversarial lines must be rejected without that input. All ordinary
+lines are checked both with and without the job-seeking input, and count as a false
+positive if either version changes them.
+Additional independent regressions distinguish negated referrals from a referral
+embedded under unrelated uncertainty in the same clause; uncertainty about hiring
+does not authorize a suggestion to ask someone else.
 
-| Gate version on this same corpus | False positives | False negatives |
+| Gate version / corpus | False positives | False negatives |
 |---|---|---|
-| Original `4fefcd5` | 114/216 (52.78%) | 25/140 (17.86%) |
-| Narrowed predicates | 0/216 (0.00%) | 0/140 (0.00%) |
+| Original `4fefcd5`, earlier corpus | 114/216 (52.78%) | 25/140 (17.86%) |
+| Narrowed predicates, earlier corpus | 0/216 (0.00%) | 0/140 (0.00%) |
+| Pre-QA-fix `412fc4b`, expanded corpus | 0/246 (0.00%) | 39/179 (21.79%) |
+| Current context-aware gate, expanded corpus | 0/246 (0.00%) | 0/179 (0.00%) |
 
 Run `uv run --frozen pytest -W error tests/test_grounding_corpus.py -q -s` to
 print rates. The aggregate test requires no false negatives and at most 2% false
 positives; individual tests additionally require every ordinary line unchanged
 and every adversarial line removed. Receipt-backed completion tests remain separate.
+
+The expanded aggregate test failed before production changes with all 39 new
+adversarial lines retained. The final focused grounding/corpus run passed 773
+tests. No optional local-model classifier was needed to meet the measured target;
+there are no extra provider calls, timeouts, or network waits in the gate.
+
+Measured on TOWER-PENGU with
+`uv run --frozen python tools/benchmark_grounding.py --baseline 412fc4b --iterations 200`:
+
+| Input group | Calls per version | Previous p50 / p95 (ms) | Current p50 / p95 (ms) |
+|---|---:|---:|---:|
+| Ordinary, neutral context | 49,200 | 0.0254 / 0.0449 | 0.0361 / 0.0617 |
+| Ordinary, job-request context | 49,200 | 0.0249 / 0.0413 | 0.0408 / 0.0688 |
+| Adversarial, corpus context | 35,800 | 0.0172 / 0.0384 | 0.0220 / 0.0473 |
+
+The ordinary p95 increase was 0.0168 ms without a request and 0.0275 ms with one.
+These are warm per-call wall-clock microbenchmarks, including intent detection,
+over the fixed corpus; they do not measure model generation or native subtitle/TTS
+latency. The baseline ignores player context because that API did not exist.
 
 This is a bounded English vocabulary gate, not a general semantic verifier or a
 held-out model benchmark. These measured rates describe this checked-in corpus;

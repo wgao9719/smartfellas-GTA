@@ -27,10 +27,15 @@ _PERSON = (
     r"ron|wade|martin|madrazo|chop)\b"
 )
 _STORY_SUBJECT = rf"{_PERSON}(?:\s+and\s+(?:{_PERSON}|i|my (?:sister|brother|mother|father)))?"
-_JOB = r"(?:missions?|jobs?|work|quests?|objectives?|assignments?|heists?)"
+_JOB = (
+    r"(?:missions?|jobs?|work|quests?|objectives?|assignments?|heists?|scores?|gigs?|"
+    r"side hustles?|paid errands?|opportunities)"
+)
 _MONEY = r"(?:cash|money|rewards?|payments?|payouts?|discounts?|prices?|dollars?|bucks)"
 _SERVICE = r"(?:car|vehicle|bike|weapon|outfit|haircut|repair|ride|service|coffee|meal|drink)"
 _AMOUNT = r"(?:[$£€]?\d+|one|two|three|four|five|ten|twenty|fifty|hundred|thousand)"
+_CASH_AMOUNT = rf"(?:{_AMOUNT}|a couple|a few)\s+(?:hundred|thousand|grand|dollars?|bucks)"
+_ACCESS = r"(?:garage|shop|store|weapon|workshop|club|access|entry|safehouse|apartment|hangar)"
 
 # Category words alone are background flavor. These predicates require an
 # assignment, transaction, service result or access claim directed at the player.
@@ -43,6 +48,9 @@ _MISSION = _patterns(
     rf"{_PERSON}\s+(?:needs?|wants?|asks?|asked) you to\s+"
     r"(?:rob|steal|collect|deliver|rescue|kill|retrieve)\b",
     rf"\byou\b.*\b(?:collect|deliver|steal|rob)\b.*\b{_PERSON}'s {_JOB}\b",
+    rf"\b{_JOB}\b.*\bif you(?:'re| are) interested\b",
+    rf"\b(?:hook|set|fix) you up\b.*\b{_JOB}\b",
+    r"\b(?:spot|position)\s+(?:open|waiting|available)\s+for you\b",
 )
 _ECONOMY = _patterns(
     rf"\byour\s+(?:(?:new|next|permanent)\s+)?{_MONEY}\s+"
@@ -64,6 +72,13 @@ _ECONOMY = _patterns(
     rf"\bcharge you\s+(?:only\s+)?{_AMOUNT}\b",
     rf"\byours for\s+{_AMOUNT}\b",
     rf"\byour\s+{_SERVICE}\b.*\b(?:at no charge|on the house|for free)\b",
+    rf"\b(?:give|lend|offer) you\b.*\b{_SERVICE}\b.*\b(?:free|on the house)\b",
+    rf"\b(?:here(?:'s| is)|take|slip you|hand you|spot you|lend you)\b.*{_CASH_AMOUNT}\b",
+    r"\b(?:yours|you get|you buy)\b.*\b(?:on the house|half off|\w+ percent off)\b",
+    rf"\byou (?:could|can|might)\s+(?:make|earn)\b.*{_CASH_AMOUNT}\b",
+    r"\b(?:wired|sent|transferred|deposited)\b.*\byour (?:bank|account|wallet)\b",
+    r"\byour cut\b.*\b(?:waiting|ready|paid|wallet|account)\b",
+    rf"\b{_CASH_AMOUNT}\b.*\bfor (?:you|your trouble)\b",
 )
 _SERVICE_OUTCOME = _patterns(
     rf"\b(?:repaired|fixed|serviced|delivered|purchased|bought|sold)\s+your\s+"
@@ -76,10 +91,13 @@ _SERVICE_OUTCOME = _patterns(
 )
 _UNLOCK = _patterns(
     r"\byou(?:'ve| have)?\s+(?:now\s+)?unlocked\b",
-    r"\byour\s+(?:garage|shop|store|weapon|workshop|club|access|entry)\b.*"
+    rf"\byour\s+{_ACCESS}\b.*"
     r"\b(?:unlocked|available|accessible|approved|granted)\b",
     r"\b(?:unlocked|available|accessible)\b.*\bfor you\b",
     r"\byou\s+(?:now have access|can now (?:use|enter|access))\b",
+    rf"\b{_ACCESS}\b.*\byours to (?:use|enter|keep)\b",
+    r"\b(?:opened|unlocked)\b.*\byou can (?:go|enter|use|access)\b",
+    r"\byou (?:have|now have) permission to (?:enter|use|access)\b",
 )
 
 # Match the named subject's predicate, not a name anywhere in a sentence about
@@ -97,6 +115,41 @@ _STORY = _patterns(
     r"(?:allies|ally|enemies|partners?)\b.*\bnow\b",
     rf"{_STORY_SUBJECT}\s+(?:are|is)\s+now\s+(?:your\s+)?"
     r"(?:(?:trusted|loyal|business)\s+)?(?:allies|ally|enemies|partners?)\b",
+    rf"{_STORY_SUBJECT}\s+(?:(?:has|have|had|just|finally)\s+)*"
+    r"(?:made up|patched things up|forgiv(?:en|es)|forgave|sold you out|put a hit out)\b",
+    rf"{_STORY_SUBJECT}\s+(?:is|are)\s+(?:(?:now|best|close)\s+)*friends again\b",
+    rf"{_PERSON}\s+(?:(?:told|warned) me (?:he|she) |said (?:he|she) )?"
+    rf"(?:wants? (?:you|{_PERSON}) dead|plans? to kill (?:you|{_PERSON}))\b",
+    rf"{_PERSON}\s+(?:is |has been )?leaving\s+{_PERSON}\s+for\s+{_PERSON}",
+)
+
+# A request for income/help makes recommendations and indirect availability
+# claims into player leads, even when a streamed sentence omits "for you".
+_OPPORTUNITY_TOPIC = re.compile(
+    rf"\b(?:{_JOB}|money|cash|pay|income|bucks|rent|bills|hiring)\b"
+)
+_REQUEST = re.compile(
+    r"\b(?:got|have|know|need|want|looking|find|where|any|help|hiring|"
+    r"make|earn|give|lend|put|after)\b"
+)
+_OPPORTUNITY = _patterns(
+    rf"\b(?:they(?:'ve)? (?:got|have)|has|offer(?:ing|s)?|find)\s+"
+    rf"(?:(?:some|a|any|new|paid|easy)\s+)*{_JOB}\b",
+    r"\b(?:is|are|be|'re)\s+(?:still |always |currently )?hiring\b",
+    r"\b(?:an? opening|vacanc(?:y|ies)|taking (?:people|workers) on)\b",
+    r"\bneeds?\s+(?:(?:a|an|some|extra|spare|pair of)\s+)*"
+    r"(?:hands|drivers|workers|help|staff)\b",
+    r"\b(?:cash|money|bucks|paycheck)\b.*\b(?:to be made|waiting|available)\b",
+)
+_REFERRAL = _patterns(
+    r"\b(?:check out|check with|check the|ask around|head (?:down|over|to)|"
+    r"talk to|speak to|ask the|try the|visit the|go (?:to|around)|look (?:at|around))\b",
+    r"\b(?:come back|worth a look|(?:person|one|guy) to talk to)\b",
+)
+_RHETORICAL_REFERRAL = re.compile(r"\bwhy (?:(?:don't|do not) you|you (?:don't|do not))\s*$")
+_OPPORTUNITY_DENIAL = re.compile(
+    r"\b(?:don't|do not|can't|cannot)\s+(?:know|say|promise|offer|find|point)\b|"
+    r"\b(?:not saying|no (?:jobs?|work|leads?|openings)|isn't hiring|aren't hiring)\b"
 )
 
 _COMPLETION = _patterns(
@@ -162,10 +215,23 @@ def _completion_claim(text):
     return False
 
 
-def _restricted_claim(text):
+def _restricted_claim(text, *, seeking_opportunity=False):
     if _STORY.search(text) or _completion_claim(text):
         return True
+    # Access claims may join two predicates before naming their beneficiary.
+    if re.search(r"\b(?:unlocked|accessible|available) and (?:ready|waiting) for you\b", text):
+        return True
     for clause in _CLAUSES.split(text):
+        if seeking_opportunity:
+            for match in _REFERRAL.finditer(clause):
+                prefix = clause[:match.start()]
+                if not _DENIAL_PREFIX.search(prefix) or _RHETORICAL_REFERRAL.search(prefix):
+                    return True
+        if (
+            seeking_opportunity and _OPPORTUNITY.search(clause)
+            and not _OPPORTUNITY_DENIAL.search(clause)
+        ):
+            return True
         for rule in (_MISSION, _ECONOMY, _SERVICE_OUTCOME, _UNLOCK):
             for match in rule.finditer(clause):
                 if not _DENIAL_PREFIX.search(clause[:match.start()]):
@@ -177,8 +243,20 @@ def _normalized(text):
     return unicodedata.normalize("NFKC", text).replace("\u2019", "'").strip().casefold()
 
 
-def speech_constraints(*, completion_lines=()):
-    return {
+def _seeking_opportunity(player_text):
+    text = _normalized(player_text)
+    return bool(
+        (_OPPORTUNITY_TOPIC.search(text) and _REQUEST.search(text))
+        or re.search(r"\b(?:i'm|i am) broke\b", text)
+        or re.search(
+            r"\b(?:(?:can|could|would|will) you (?:please )?help(?: me| us)?|"
+            r"i need (?:some )?help)[.!?]*$", text,
+        )
+    )
+
+
+def speech_constraints(*, completion_lines=(), player_text=""):
+    constraints = {
         "allowed": [
             "small talk", "personal history", "everyday activities", "price opinions",
             "neutral story-character mentions", "questions", "refusal", "action intentions",
@@ -191,9 +269,15 @@ def speech_constraints(*, completion_lines=()):
         ],
         "acknowledged_completion_lines": list(completion_lines),
     }
+    if _seeking_opportunity(player_text):
+        constraints["forbidden_claims"].append(
+            "job/hiring/income leads, including indirect suggestions of people or places "
+            "to ask; acknowledge or decline the request without inventing opportunities"
+        )
+    return constraints
 
 
-def grounded_text(text, *, completion_lines=()):
+def grounded_text(text, *, completion_lines=(), player_text=""):
     """Remove unsafe sentences, preserving safe wording and spacing verbatim.
 
     Only exact service-selected completion lines may describe acknowledged
@@ -204,12 +288,15 @@ def grounded_text(text, *, completion_lines=()):
     if spoken != text:
         text = re.sub(r"\s+", " ", spoken)
     allowed = {_normalized(line) for line in completion_lines}
+    seeking_opportunity = _seeking_opportunity(player_text)
     kept = []
     for match in re.finditer(r".+?(?:[.!?](?:\s+|$)|$)", text, re.DOTALL):
         sentence = match.group()
         normalized = _normalized(sentence)
         if not action_narration(normalized) and (
-            normalized in allowed or not _restricted_claim(normalized)
+            normalized in allowed or not _restricted_claim(
+                normalized, seeking_opportunity=seeking_opportunity,
+            )
         ):
             kept.append(sentence)
     return "".join(kept)

@@ -1151,6 +1151,71 @@ class Repository:
                 used += cost
             return result
 
+    def recent_conversation(
+        self,
+        profile_id: str,
+        branch_id: str,
+        actor_id: str,
+        protagonist_id: str,
+        game_datetime: str,
+        *,
+        session_id: str,
+        exclude_event_id: str | None = None,
+        exchanges: int = 4,
+    ) -> list[dict]:
+        """Read surviving direct exchanges, independently of retrieval ranking.
+
+        Use the existing projections so deletion and edits take effect immediately.
+        Raw-event retention also ends this short conversation window; durable
+        memories remain available through ordinary retrieval under its own policy.
+        """
+        if not 1 <= exchanges <= 16:
+            raise ValueError("recent conversation requires 1 to 16 exchanges")
+        stamp, protagonist = _date(game_datetime), _protagonist(protagonist_id)
+        with self._lock:
+            try:
+                self._actor_session(profile_id, actor_id, session_id)
+            except ValueError:
+                return []
+            parameters = (profile_id, branch_id, actor_id, protagonist, stamp, stamp, session_id)
+            selection = (
+                "SELECT m.*,e.event_id,min(m.rowid) AS projection_order "
+                "FROM memories m JOIN memory_sources s "
+                "ON s.memory_id=m.memory_id JOIN events e "
+                "ON e.profile_id=s.profile_id AND e.event_id=s.event_id "
+                "WHERE m.profile_id=? AND m.branch_id=? AND m.actor_id=? "
+                "AND m.protagonist_id=? AND m.game_datetime<=? "
+                "AND (m.expires_at IS NULL OR m.expires_at>?) "
+                "AND json_extract(e.data,'$.session_id')=? "
+                "AND coalesce(json_extract(e.data,'$.content_redacted'),0)=0 "
+            )
+            inputs = self.connection.execute(
+                selection
+                + "AND json_extract(e.data,'$.event_type')='player.utterance_text' "
+                "AND json_extract(e.data,'$.actor_id')=? "
+                "AND (? IS NULL OR e.event_id!=?) "
+                "GROUP BY e.event_id ORDER BY e.rowid DESC LIMIT ?",
+                (*parameters, actor_id, exclude_event_id, exclude_event_id, exchanges),
+            ).fetchall()
+            result = []
+            for row in reversed(inputs):
+                exchange_id = row["event_id"]
+                result.append({
+                    **self._memory_dict(row), "role": "player", "exchange_id": exchange_id,
+                })
+                replies = self.connection.execute(
+                    selection
+                    + "AND json_extract(e.data,'$.event_type')='dialogue.delivered' "
+                    "AND json_extract(e.data,'$.payload.input_event_id')=? "
+                    "GROUP BY e.event_id "
+                    "ORDER BY json_extract(e.data,'$.payload.chunk_index'),e.rowid LIMIT 20",
+                    (*parameters, exchange_id),
+                ).fetchall()
+                result.extend({
+                    **self._memory_dict(reply), "role": "npc", "exchange_id": exchange_id,
+                } for reply in replies)
+            return result
+
     def update_memory(
         self,
         profile_id: str,

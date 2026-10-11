@@ -1,7 +1,38 @@
 # Semantic memory retrieval
 
 Embeddings are optional numerical representations used to rank related memories. The service keeps vectors in its existing SQLite database.
-Embeddings start disabled. Disabled mode uses the existing lexical retrieval unchanged.
+Embeddings start disabled. Disabled mode uses the existing lexical ranking unchanged.
+Foreground dialogue also includes a recent conversation window independently of either ranking path.
+
+## Recent conversation window
+
+Each foreground turn includes the last four prior direct exchanges with that actor,
+scoped to the active profile, protagonist, gameplay session, and exact timeline branch.
+The current player input remains in its separate `input` field. Prior player utterances
+and acknowledged NPC reply chunks appear chronologically in `recent_conversation`,
+with role, exchange ID, memory ID, game time, provenance, confidence, and source event IDs.
+Equal game timestamps use event insertion order; reply chunks retain their delivery order.
+Generated or canceled speech without delivery evidence is absent. An acknowledged
+delivered prefix can be remembered even when the rest of its reply was canceled.
+
+The window reads the existing memory projections without copying text into a new cache.
+It takes priority over scored retrieval; matching memory IDs and shared source events
+are omitted from `memories`. Both fields share the existing `context_byte_budget`.
+Budget pressure removes scored records first, then older complete exchanges; an oversized
+latest exchange is clipped, and trailing NPC chunks can be removed to preserve the
+latest player utterance. Every such reduction sets `context_truncated`. The final trace
+contains retained IDs and byte counts, never conversation text.
+
+Memory edits, deletion, actor reset, profile deletion, memory TTL, and raw-event retention
+apply before each prompt. Raw-event expiry ends the recent window for those events while
+preserving durable memory projections for ordinary retrieval under the existing policy.
+Replies derived from the retained recent context link to those source IDs so forgetting
+an introduction also erases the actor's later paraphrases. Protagonists never share a
+window, including when speaking to the same persistent actor.
+
+Session and input-to-reply correlation metadata is written on new canonical events.
+Older stored events lacking that metadata remain eligible for ordinary durable retrieval,
+but cannot be attributed reliably to a recent session window. No schema migration is needed.
 
 ## Configuration
 
@@ -75,7 +106,7 @@ Queries are not cached. Unchanged document vectors are reused after validation, 
 Run the isolated checks:
 
 ```sh
-.venv/bin/python -m pytest tests/test_embeddings.py tests/test_memory_index.py tests/test_runtime_memory_index.py tests/test_network_consent.py -q -W error
+.venv/bin/python -m pytest tests/test_embeddings.py tests/test_memory_index.py tests/test_runtime_memory_index.py tests/test_recent_conversation.py tests/test_network_consent.py -q -W error
 ```
 
 The fixed evaluation uses all 50 questions in `data/memory_regression.json` after database reopen and ten simulated days.
@@ -85,8 +116,15 @@ Ten additional paraphrases exercise the semantic ranking path.
 
 The HTTP fixture supplies deterministic topic vectors. These results establish retrieval plumbing and safety boundaries, not real-provider recall quality.
 Separate tests cover deletion during embedding, changed text, malformed vectors, cache invalidation, rebuild, response limits, and cancellation.
+The foreground regression completes an introduction reply and asks the same actor
+"What's my name?" with embeddings absent, verifying the next provider context retains
+the introduction even when lexical selection misses it. Recent-window checks cover
+scope isolation, equal timestamps, bounded exchange counts, duplicate projections,
+erasure and derived replies, expiry, delivery receipts, and the context byte ceiling.
 The network-consent subprocess retains the real HTTP transport and blocks actual connections through resolver and socket hooks.
 It verifies zero DNS/socket attempts before consent and after revocation. Explicit consent reaches the blocked hooks.
 
-No paid provider call or model download occurred during these checks. Real-provider semantic quality and Windows execution remain unverified.
+No paid provider call or model download occurred during these checks. Real-provider semantic quality remains unverified.
+The [Windows validation record](development-validation.md#in-game-qa-memory-and-job-lead-fixes-on-windows---2026-10-11)
+records the recent-window regression and full-suite results on TOWER-PENGU.
 These checks do not establish native GTA behavior or hardware performance.

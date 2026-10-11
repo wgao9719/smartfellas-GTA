@@ -17,7 +17,8 @@ SYSTEM = (
     "Distinguish observation, hearsay, and uncertainty. Follow speech_constraints. "
     "Discuss everyday topics, ask questions, express uncertainty or refuse. "
     "Personal history, everyday activities, price opinions and neutral mentions of story "
-    "characters are allowed. Do not invent missions or objectives for the player, offer "
+    "characters are allowed. Do not invent job leads, hiring tips, missions or objectives "
+    "for the player, point them to places or people for work or money, offer "
     "them payments, rewards, discounts, prices or unlocks, or assert game service outcomes, "
     "canonical relationship changes or story revelations. "
     "For completed physical actions in this interaction use only an exact "
@@ -76,7 +77,7 @@ class FakeProvider:
 
     async def dialogue(self, context):
         name = context["actor"]["display_name"]
-        memories = context.get("memories", [])
+        memories = context.get("memories") or context.get("recent_conversation", [])
         if memories:
             recalled = memories[0].get(
                 "text", memories[0].get("text_first_person", "our conversation")

@@ -1,5 +1,81 @@
 # Development validation
 
+## In-game QA memory and job-lead fixes on Windows - 2026-10-11
+
+Both failures in `artifacts/rig/ingame-qa.md` reproduced before their production
+fixes, directly on `win/validation` in the integration worktree on TOWER-PENGU:
+
+- `uv run --frozen pytest -W error tests/test_recent_conversation.py -q`
+  initially failed the new runtime name-recall regression: the introduction was
+  absent from the second model context (1 failed). Embeddings were disabled and
+  the fake provider inspected the actual runtime context.
+- `uv run --frozen pytest -W error tests/test_runtime_grounding_context.py -q --tb=short`
+  initially reported 2 failed, 2 passed. The exact QA docks/racetrack referral and
+  its following work-availability claim reached dialogue commands.
+- `uv run --frozen pytest -W error tests/test_grounding_corpus.py::test_grounding_corpus_rates -q -s`
+  initially reported 1 failed: 39/179 adversarial misses (21.79%) and 0/246
+  ordinary false positives. The previous corpus was retained and expanded with
+  the reported failures, 30 further adversarial lines and 30 ordinary lines.
+
+The [recent conversation window](semantic-memory.md#recent-conversation-window)
+supplies four prior exchanges independently of lexical or embedding scores,
+within the existing context byte budget. It reads surviving memory projections
+with canonical session/turn correlation, scopes by profile, protagonist, actor
+and branch, and carries provenance and erasure links. This implements the recent
+transcript and bounded recall requirements in `SPECS.md` FR-MEM-02/04, section 9.3
+and sections 10.1/10.3 without adding a second text cache or schema migration.
+
+The [speech gate](dialogue-grounding.md) now receives the accepted player's text
+when checking each streamed sentence. It rejects indirect job/income referrals
+under a corresponding request, along with additional economic offers, unlocks
+and canonical relationship claims. Safe sentences still stream; subtitles, the
+action selector and confirmed memories receive only the retained text.
+
+Final corpus rates are **0/179 adversarial misses (0.00%)** and **0/246 ordinary
+false positives (0.00%)**. Ordinary sentences are tested both without player
+context and under the QA job request. Additional paired-context and denial tests
+cover neutral navigation, work history, referrals and uncertainty. Deterministic
+rules meet the requested threshold, so no optional classifier was added.
+
+`uv run --frozen python tools/benchmark_grounding.py --baseline 412fc4b --iterations 200`
+measured 49,200 ordinary calls per context and 35,800 adversarial calls per version.
+Final ordinary p50/p95 were 0.0361/0.0617 ms without a request and 0.0408/0.0688 ms
+with a job request; p95 increases over the baseline were 0.0168 and 0.0275 ms.
+Adversarial p50/p95 were 0.0220/0.0473 ms. There were zero additional provider calls.
+These measure the English gate on the fixed corpus, not local-model generation,
+end-to-end speech latency or arbitrary-paraphrase factuality.
+
+Commands used the worktree's existing environment with these process-local settings:
+
+```powershell
+$env:PATH = 'C:\Users\Brian\.lls-tools\uv;' + $env:PATH
+$env:LLS_DOTNET = 'C:\Users\Brian\Documents\Github\smartfellas-GTA\.dotnet\dotnet.exe'
+$env:RestoreSources = 'https://api.nuget.org/v3/index.json'
+```
+
+| Final command | Observed result |
+|---|---|
+| `uv run --frozen ruff check service tests tools` | All checks passed. |
+| `uv run --frozen pytest -W error` | **2,649 passed, 1 skipped in 233.49s**, exit 0. The skip is the opt-in real whisper.cpp test. |
+| `uv run --frozen pytest -W error tests/test_recent_conversation.py tests/test_context.py tests/test_runtime_erasure.py tests/test_runtime_memory_index.py tests/test_bridge.py -q` | 137 passed in 14.04s, including 20 new memory regressions. |
+| `uv run --frozen pytest -W error tests/test_grounding.py tests/test_grounding_corpus.py -q -s` | 773 passed; corpus rates 0/179 misses, 0/246 false positives. |
+| `uv run --frozen pytest -W error tests/test_grounding_corpus.py -q -s` | Root verification: 672 passed in 0.41s; same zero-error rates. |
+| `uv run --frozen python tests/live_bridge_check.py` | Passed: 2 display-safe subtitles, final marker acknowledged, 5 acknowledgments, 1 simulated action, 2 durable delivery events. |
+| `uv run --frozen python tests/live_bridge_check.py --speech` | Passed: synthetic PTT recording/stop, 2 audio/text chunks, 13 acknowledgments, 2 durable delivery events. |
+| `uv run --frozen python tests/live_bridge_check.py --pin` | Passed: 1 pin, post-pin turn delivered, 8 durable memories including pre-pin input, ambient officer purged on close. |
+| `uv run --frozen python tests/live_bridge_crash_check.py` | Passed: 1 task withdrawal, reconnect, stale-action rejection, durable started receipt visible in export, ambient history purged, no invented completion. |
+| `uv run --frozen python tools/simulated_load.py` | Passed: 36 actors, 200 confirmed turns/completions, 200 isolation checks, 134 ephemeral output memories removed, 66 persistent output memories retained, maximum context 4,594 bytes, bounded queues, zero network attempts; 62.94s. Synthetic turn p50/p95 52.70/58.72 ms, including snapshots, SQLite, polling and acknowledgments. |
+
+The existing QA service on port 8765 was left running. Tests use temporary
+databases, fake providers and isolated bridge ports; the load tool uses in-process
+ASGI and forbids network access. All four live commands exited 0 and cleaned up
+their owned service processes. No adapter source changed, so standalone C# tests
+and GameAdapter builds were not rerun; the live probes exercised the C# worker.
+No game deployment,
+GTA launch, real-model quality check or native verification occurred. Session and
+reply correlation metadata applies to newly written events; old events remain
+eligible for ordinary retrieval but are not backfilled into a session window.
+
 ## First real conversation fixes on Windows — 2026-10-11
 
 The [first-conversation validation record](first-conversation-fixes.md) covers
