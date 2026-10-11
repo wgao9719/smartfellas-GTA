@@ -3,6 +3,7 @@ import json
 import math
 import os
 import random
+import shlex
 import shutil
 import struct
 import subprocess
@@ -105,12 +106,18 @@ async def test_whisper_missing_confidence_and_temp_cleanup(tmp_path, monkeypatch
 FAKE_WHISPER_CLI = """
 import shutil
 import sys
+import wave
 
 arguments = sys.argv[1:]
 # Like whisper-cli, write token data only for full JSON output.
 if "-ojf" not in arguments or "-np" not in arguments:
     sys.exit(2)
-model, output = (arguments[arguments.index(flag) + 1] for flag in ("-m", "-of"))
+model, audio, language, output = (
+    arguments[arguments.index(flag) + 1] for flag in ("-m", "-f", "-l", "-of")
+)
+assert language == "en"
+with wave.open(audio, "rb") as audio:
+    assert (audio.getframerate(), audio.getnchannels(), audio.getsampwidth()) == (16000, 1, 2)
 shutil.copyfile(model, output + ".json")
 print("[00:00:00.000 --> 00:00:01.000]   fixture")
 """
@@ -119,10 +126,21 @@ print("[00:00:00.000 --> 00:00:01.000]   fixture")
 def fake_whisper_cli(tmp_path):
     """A real executable for WhisperCpp and run_owned. Its model file holds -ojf JSON."""
     script = tmp_path / "fake_whisper_cli.py"
-    script.write_text(FAKE_WHISPER_CLI)
-    executable = tmp_path / "whisper-cli"
-    executable.write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{script}" "$@"\n')
-    executable.chmod(0o755)
+    script.write_text(FAKE_WHISPER_CLI, encoding="utf-8")
+    if os.name == "nt":
+        executable = tmp_path / "whisper-cli.cmd"
+        # Expand the sibling path in cmd, preserving Unicode directory names.
+        executable.write_text(
+            f'@echo off\n"{sys.executable}" -I "%~dp0fake_whisper_cli.py" %*\n',
+            encoding="utf-8",
+        )
+    else:
+        executable = tmp_path / "whisper-cli"
+        executable.write_text(
+            f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -I {shlex.quote(str(script))} "$@"\n',
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
     return executable
 
 
@@ -183,7 +201,6 @@ SPOKEN_CONFIDENCE = (0.549483 + 0.986557 + 0.99858 + 0.999464 + 0.887515) / 5
 UNSCORED = {key: value for key, value in SPEECH.items() if key != "tokens"}
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the fake whisper-cli is a POSIX shell script")
 @pytest.mark.parametrize(
     ("segments", "text", "confidence"),
     [
@@ -209,7 +226,6 @@ async def test_full_json_confidence_and_annotations_through_the_owned_process(
         assert result.confidence == pytest.approx(confidence)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the fake whisper-cli is a POSIX shell script")
 @pytest.mark.parametrize("p", [1.5, -0.1, "NaN"])
 async def test_invalid_token_probability_fails_through_the_owned_process(tmp_path, p):
     model = tmp_path / "model.bin"
@@ -219,6 +235,46 @@ async def test_invalid_token_probability_fails_through_the_owned_process(tmp_pat
     whisper = speech.WhisperCpp(fake_whisper_cli(tmp_path), model)
     with pytest.raises(speech.SpeechUnavailable, match="invalid transcript"):
         await whisper.transcribe(wav(tmp_path / "mic.wav"))
+
+
+async def test_whisper_unicode_and_spaced_paths_through_the_owned_process(tmp_path, monkeypatch):
+    directory = tmp_path / "whisper tools \u6e2c\u8a66"
+    directory.mkdir()
+    temporary = directory / "temporary output"
+    temporary.mkdir()
+    monkeypatch.setattr(speech.tempfile, "tempdir", str(temporary))
+    model = directory / "model \u6e2c\u8a66.bin"
+    text = "Hello, caf\u00e9 \u4e16\u754c."
+    model.write_text(
+        json.dumps(full_json(segment(text, [(text, 42, 0.9)])), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    whisper = speech.WhisperCpp(fake_whisper_cli(directory), model)
+    result = await whisper.transcribe(wav(directory / "mic \u6e2c\u8a66.wav"))
+    assert (result.text, result.provider) == (text, "whisper.cpp")
+    assert result.confidence == pytest.approx(0.9)
+    assert list(temporary.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        (None, "exit code 1"),
+        (b"private transcript: not JSON", "invalid transcript"),
+        (b"\xff", "invalid transcript"),
+        (b"x" * (speech.MAX_PROCESS_OUTPUT + 1), "bounded JSON output"),
+    ],
+    ids=["process-failure", "malformed-json", "invalid-utf8", "oversized-json"],
+)
+async def test_whisper_output_errors_through_the_owned_process(tmp_path, contents, message):
+    model = tmp_path / "private-model.bin"
+    model.write_bytes(contents or b"")
+    whisper = speech.WhisperCpp(fake_whisper_cli(tmp_path), model)
+    if contents is None:
+        model.unlink()
+    with pytest.raises(speech.SpeechUnavailable, match=message) as error:
+        await whisper.transcribe(wav(tmp_path / "mic.wav"))
+    assert "private" not in str(error.value)
 
 
 @pytest.mark.parametrize(
