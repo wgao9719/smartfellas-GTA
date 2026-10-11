@@ -67,7 +67,7 @@ F6 shows `Target: <name> (Available)`, `(Busy)`, `(Out of range)`, or `(Not avai
 Use a Debug build. Save the game first. Record the adapter log for each step.
 
 1. Record the GTA, Script Hook V, and SHVDN versions.
-2. Press F6 beside an ordinary pedestrian downtown. Expect `Target: Nearby resident (Available)` and `role=civilian reason=civilian_evidence`.
+2. Press F6 beside an ordinary pedestrian downtown. Expect `Target: Passerby (Available)` and `role=civilian reason=civilian_evidence`.
 3. Repeat beside a patrol officer on foot. Expect `Nearest: police officer — not available` and `ped_type=6`.
 4. Repeat beside an officer seated in a cruiser. Expect the police label, not detained person.
 5. Repeat beside a gang member in Grove Street. Expect the gang label.
@@ -86,7 +86,7 @@ FR-ID-03 lets the player keep an ordinary pedestrian. Pinning promotes the sessi
 1. The player selects a pedestrian with F6, then presses F8 twice within 5 seconds on the same actor and runtime instance. One request waits at a time, for at most 10 seconds.
 2. `PinPolicy` requires a safe world, ambient ownership, the civilian role, the ambient policy, no mission flag, not busy or in combat, and at most 8 m.
 3. The adapter sends `actor.pin_requested` on the event lane. The service requires the `actor_pin` manifest flag, a fresh civilian ambient snapshot, and a passing conversation policy. It allows one pin per 10 seconds and 8 per session.
-4. The service cancels the scene, promotes the actor in one transaction, and queues `actor.pin` with the display name. The default name is `Resident <4 hex>`. The dashboard can supply another name.
+4. The service cancels the scene, promotes the actor in one transaction, and queues `actor.pin` with the display name. The default name is the [generated persona's](ambient-persona-and-activity.md) name, or `Resident <4 hex>` for an actor without one. The dashboard can supply another name.
 5. The adapter rechecks the ped, caps registered pins at 8, and marks the binding mod-owned under the same actor id. Any refusal drops the binding and sends `actor.removed`.
 6. A completed acknowledgment shows `Pinned as <name>. This conversation will be remembered. They may not return after you leave.` Any other outcome shows `Saved as <name>, but this pedestrian is no longer available.` The saved identity stays in the database without an embodiment.
 
@@ -108,7 +108,7 @@ FR-ID-03 lets the player keep an ordinary pedestrian. Pinning promotes the sessi
 1. Use a Debug build with `EnableUnverifiedPinPersistence=false`. Save the game first.
 2. Talk to an ordinary pedestrian with F6 and F7.
 3. Press F8 once. Expect the confirmation prompt. Wait 6 seconds and press F8 once more. Expect the prompt again, not a pin.
-4. Press F8 twice quickly. Expect `Pinned as Resident ....`
+4. Press F8 twice quickly. Expect `Pinned as <persona name>`, for example `Pinned as Dana Whitfield`.
 5. Type another message. Confirm the reply uses the pinned name and remembers the earlier exchange.
 6. Walk away until the ped despawns. Confirm `actor.removed` in the service diagnostics and the pinned character in the dashboard.
 7. Close the session. Confirm the dashboard still lists the pinned pedestrian and its memories.

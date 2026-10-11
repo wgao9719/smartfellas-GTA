@@ -11,6 +11,7 @@ from datetime import datetime
 
 from fastapi import HTTPException
 
+from .personas import persona_name
 from .roles import label
 
 PIN_CAPABILITY = "actor_pin"
@@ -19,8 +20,9 @@ MAX_PINS_PER_SESSION = 8
 PIN_TERMINAL = {"completed", "rejected", "expired", "failed", "canceled"}
 
 
-def default_pin_name(actor_id):
-    return "Resident " + hashlib.sha256(actor_id.encode()).hexdigest()[:4]
+def default_pin_name(actor_id, actor=None):
+    """The generated persona's name, or a stable placeholder for older actors."""
+    return persona_name(actor) or "Resident " + hashlib.sha256(actor_id.encode()).hexdigest()[:4]
 
 
 class PinRuntime:
@@ -67,7 +69,10 @@ class PinRuntime:
         refusal = self.pin_refusal(session, actor_id, runtime_instance_id)
         if refusal:
             return None, refusal
-        name = display_name or default_pin_name(actor_id)
+        stored = await self.db(
+            "get_actor", session.request.profile_id, actor_id, session_id=session.id
+        )
+        name = display_name or default_pin_name(actor_id, stored)
         # No in-flight reply or action may race the binding change.
         self.cancel(session)
         await self.stop_session_work(session)

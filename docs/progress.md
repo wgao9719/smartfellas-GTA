@@ -55,6 +55,7 @@ The handoff's six open issues are closed. The first handoff note described one o
   - Subtitle glyphs.
   - The Debug-only pin persistence natives.
   - The silence threshold and confidence floor on real microphones.
+  - Activity movement, scenario names, and phone use. Record them in the [persona and activity sheet](actions/ambient-persona-and-activity.md).
 - **Roles.** Police, security, emergency, gang, and service roles are fully protected. The agent design's conversation-only tier is deferred.
 - **Pinning.** A pinned character is saved but is not re-embodied in a later session. That needs spawn reconciliation.
 - **Social memory.**

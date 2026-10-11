@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from . import activity as activity_table
 from .action_registry import validate_arguments
 from .display import is_display_safe
 
@@ -122,6 +123,27 @@ class PedFacts(StrictModel):
     belongs_to_mod_script: bool
 
 
+class ActorActivity(StrictModel):
+    """Adapter activity sample. Narrative context only, never eligibility or policy."""
+
+    movement: str = Field(default="unknown", max_length=32)
+    scenario: str | None = Field(default=None, max_length=32)
+    on_phone: bool = False
+    swimming: bool = False
+    injured: bool = False
+
+    # A newer adapter table degrades to the generic labels instead of refusing the actor.
+    @field_validator("movement")
+    @classmethod
+    def known_movement(cls, value):
+        return value if value in activity_table.MOVEMENTS else "unknown"
+
+    @field_validator("scenario")
+    @classmethod
+    def known_scenario(cls, value):
+        return value if value is None or value in activity_table.SCENARIOS else "other"
+
+
 class ActorSnapshot(StrictModel):
     runtime_handle: int = Field(gt=0)
     runtime_instance_id: Identifier
@@ -147,6 +169,7 @@ class ActorSnapshot(StrictModel):
     role_class: RoleClass = "unknown"
     role_reason: str = Field(default="unclassified", pattern=r"^[a-z0-9_]{1,64}$")
     ped_facts: PedFacts | None = None
+    activity: ActorActivity | None = None
 
 
 class WorldSnapshot(StrictModel):

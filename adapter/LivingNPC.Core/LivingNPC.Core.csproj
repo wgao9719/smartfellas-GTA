@@ -2,5 +2,6 @@
   <PropertyGroup><TargetFramework>netstandard2.0</TargetFramework></PropertyGroup>
   <ItemGroup><EmbeddedResource Include="../../data/action_registry.json" LogicalName="LivingNPC.action_registry.json" /></ItemGroup>
   <ItemGroup><EmbeddedResource Include="../../data/ped_roles.json" LogicalName="LivingNPC.ped_roles.json" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../../data/ped_activity.json" LogicalName="LivingNPC.ped_activity.json" /></ItemGroup>
   <ItemGroup><PackageReference Include="Newtonsoft.Json" Version="13.0.3" /></ItemGroup>
 </Project>

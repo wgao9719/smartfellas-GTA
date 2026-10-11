@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "table_version": "2",
+  "authorship": "Original project-authored trait tables. No copied dialogue, real people, or GTA story characters.",
+  "note": "Each ambient pedestrian draws one combination, seeded by its actor id, with a name no stored actor already uses. Model names supply only presentation, age band, clothing or uniform, and whether the person is local or visiting. Ethnicity- or body-coded model names deliberately supply no traits.",
+  "first_names": {
+    "female": [
+      "Dana", "Priya", "Rosa", "Mei", "Keisha", "Hannah", "Lucia", "Imani", "Sofia", "Grace",
+      "Nadia", "Tamsin", "Yolanda", "Carmen", "Joanne", "Leila", "Bridget", "Aiko", "Marisol", "Renee",
+      "Tess", "Ingrid", "Farah", "Colleen"
+    ],
+    "male": [
+      "Marcus", "Derek", "Luis", "Kenji", "Andre", "Tom", "Rafael", "Omar", "Glen", "Victor",
+      "Dwayne", "Ethan", "Hector", "Bruce", "Samir", "Curtis", "Wes", "Darnell", "Felix", "Ray",
+      "Arturo", "Neil", "Jun", "Patrick"
+    ],
+    "neutral": [
+      "Alex", "Jordan", "Casey", "Sam", "Robin", "Jamie", "Taylor", "Morgan", "Riley", "Quinn",
+      "Avery", "Charlie"
+    ]
+  },
+  "last_names": [
+    "Whitfield", "Reyes", "Okoro", "Lindqvist", "Navarro", "Brandt", "Castillo", "Pham", "Mercer", "Delgado",
+    "Haddad", "Kowalski", "Sutton", "Ibarra", "Fontaine", "Nakamura", "Gallagher", "Osei", "Varga", "Thibodeaux",
+    "Moreau", "Kaplan", "Rios", "Ashworth", "Dubois", "Petrakis", "Lund", "Achebe", "Serrano", "Holloway"
+  ],
+  "personalities": [
+    "Warm, chatty, and a little nosy",
+    "Guarded and dry, slow to trust strangers",
+    "Upbeat to the point of being exhausting",
+    "Anxious and apologetic, overthinks everything",
+    "Blunt and impatient, but secretly kind",
+    "Laid-back and hard to rattle",
+    "Cynical about Los Santos but loves it anyway",
+    "Earnest and eager to help",
+    "Distracted, always half thinking about something else",
+    "Proud and a bit of a know-it-all",
+    "Shy until a favorite topic comes up",
+    "Sarcastic and quick with a comeback",
+    "Gentle and patient, a good listener",
+    "Restless and opinionated",
+    "Suspicious of anyone who starts a conversation",
+    "Dreamy and full of half-finished plans",
+    "Polite but firmly private",
+    "Competitive about everything, even small talk",
+    "Easily amused, laughs at their own jokes",
+    "Weary and overworked, running on coffee",
+    "Cheerfully gossipy about the neighborhood",
+    "Formal and old-fashioned in manner",
+    "Spontaneous and up for anything",
+    "Melancholy but sincere"
+  ],
+  "speech_styles": [
+    "Short sentences. Gets to the point.",
+    "Rambles and drifts onto tangents.",
+    "Casual, with plenty of slang.",
+    "Polite and a little formal.",
+    "Answers questions with questions.",
+    "Dry, deadpan humor.",
+    "Talks fast and interrupts themselves.",
+    "Warm and encouraging.",
+    "Trails off when unsure.",
+    "Exaggerates small things.",
+    "Measured and thoughtful, pauses before answering.",
+    "Loud and enthusiastic.",
+    "Sardonic, with a lot of sighing.",
+    "Plain-spoken and practical.",
+    "Reaches for odd comparisons.",
+    "Overly honest, shares too much."
+  ],
+  "motivations": [
+    "Save enough to move somewhere quieter",
+    "Get noticed for a creative project",
+    "Keep a small side business afloat",
+    "Pay off a stubborn credit card",
+    "Get back in shape before summer",
+    "Find an apartment that is not falling apart",
+    "Reconnect with an estranged sibling",
+    "Make it through the week without a parking ticket",
+    "Finally learn to surf",
+    "Get the promotion they think they earned years ago",
+    "Find out who keeps taking their newspaper",
+    "Finish a novel they have been writing for years",
+    "Patch things up with a friend after a silly argument",
+    "Keep their dog happy and out of trouble",
+    "Visit every taco truck in the city",
+    "Start a podcast nobody asked for",
+    "Get through a long shift without losing their temper",
+    "Find a quiet place to think",
+    "Make rent this month",
+    "Quit smoking for real this time",
+    "Prove their family wrong about their career choice",
+    "Plan a trip they cannot quite afford"
+  ],
+  "quirks": [
+    "Hums when nervous",
+    "Keeps checking the time",
+    "Collects matchbooks from bars they have never been inside",
+    "Rates everything out of ten",
+    "Mistrusts anyone wearing sunglasses",
+    "Brings up the weather constantly",
+    "Has a theory about the traffic lights",
+    "Quotes daytime television",
+    "Overuses the word 'literally'",
+    "Names their houseplants",
+    "Refuses to use elevators",
+    "Holds a running grudge against seagulls",
+    "Knows the bus schedule by heart",
+    "Gives directions using landmarks that no longer exist",
+    "Cannot resist correcting grammar",
+    "Escapes awkward moments by changing the subject"
+  ],
+  "moods": [
+    "In a good mood today",
+    "Tired and a bit short-tempered",
+    "Preoccupied with something on their mind",
+    "Bored and glad of any distraction",
+    "In a hurry",
+    "Relaxed",
+    "Mildly irritated about something unrelated",
+    "Curious and talkative",
+    "Wary",
+    "Content"
+  ],
+  "model_archetypes": {
+    "business": ["business", "busicas"],
+    "beach": ["beach", "beachvesp", "sunbathe", "surfer", "malibu", "musclbeac"],
+    "hipster": ["hipster"],
+    "tourist": ["tourist"],
+    "affluent": ["bevhills", "scdressy", "smartcaspat"],
+    "vinewood": ["vinewood"],
+    "fitness": ["runner", "fitness", "yoga"],
+    "cyclist": ["roadcyc", "cyclist"],
+    "hiker": ["hiker"],
+    "skater": ["skater"],
+    "golfer": ["golfer"],
+    "rural": ["farmer", "salton"],
+    "trades": ["construct", "dockwork", "lathandy"],
+    "gardener": ["gardener"],
+    "delivery": ["postal", "ups"],
+    "janitor": ["janitor"],
+    "hippie": ["hippie", "hippy"]
+  },
+  "looks": {
+    "business": "dressed for office work",
+    "beach": "dressed for the beach",
+    "hipster": "in carefully casual clothes",
+    "tourist": "dressed like a visitor",
+    "affluent": "in expensive clothes",
+    "vinewood": "dressed to be noticed",
+    "fitness": "in workout clothes",
+    "cyclist": "in cycling gear",
+    "hiker": "in hiking gear",
+    "skater": "in skate clothes",
+    "golfer": "in golf clothes",
+    "rural": "in worn work clothes",
+    "trades": "in work clothes",
+    "gardener": "in gardening clothes",
+    "delivery": "in a delivery uniform",
+    "janitor": "in a maintenance uniform",
+    "hippie": "in loose, colorful clothes"
+  },
+  "occupations": {
+    "general": [
+      "Barista", "Office temp", "Bus driver", "Retail clerk", "Dental receptionist",
+      "Freelance graphic designer", "Line cook", "Insurance claims adjuster", "Real estate assistant",
+      "Laundromat attendant", "Call center agent", "Substitute teacher", "Hairdresser", "Rideshare driver",
+      "Warehouse picker", "Bookkeeper", "Phone repair technician", "Job hunter between jobs",
+      "Community college student"
+    ],
+    "business": [
+      "Junior accountant", "Paralegal", "Sales manager", "Marketing coordinator", "Bank teller",
+      "HR specialist", "Mid-level project manager", "Corporate recruiter"
+    ],
+    "beach": [
+      "Lifeguard", "Surf shop clerk", "Smoothie stand worker", "Personal trainer", "Boardwalk vendor",
+      "Beach volleyball regular between jobs"
+    ],
+    "hipster": [
+      "Coffee roaster", "Record store clerk", "Indie app developer", "Tattoo apprentice", "Food truck owner",
+      "Freelance photographer"
+    ],
+    "tourist": [
+      "Tourist on a budget road trip", "Conference attendee skipping sessions", "First-time visitor seeing the sights",
+      "Visiting dentist on vacation"
+    ],
+    "affluent": [
+      "Interior designer", "Boutique owner", "Lifestyle influencer", "Private wealth consultant", "Gallery assistant"
+    ],
+    "vinewood": [
+      "Aspiring actor", "Talent agency assistant", "Screenwriter waiting on a callback", "Studio tour guide",
+      "Background extra", "Stand-up comic"
+    ],
+    "fitness": [
+      "Personal trainer", "Physical therapy assistant", "Marathon hopeful", "Yoga instructor", "Gym front desk worker"
+    ],
+    "cyclist": ["Bike courier", "Bike shop mechanic", "Amateur road racer", "Commuter who gave up on driving"],
+    "hiker": ["Park volunteer", "Outdoor gear salesperson", "Weekend trail runner", "Wildlife photographer"],
+    "skater": ["Skate shop clerk", "Pizza delivery driver", "Video editor", "Art school student"],
+    "golfer": ["Insurance executive", "Pro shop clerk", "Commercial real estate broker", "Dentist with a standing tee time"],
+    "rural": ["Ranch hand", "Mechanic", "Diner cook", "Feed store clerk", "Long-haul trucker on a break"],
+    "trades": ["Construction worker", "Electrician", "Dockworker", "Handyman", "Plumber's apprentice"],
+    "gardener": ["Landscaper", "Plant nursery worker", "Groundskeeper"],
+    "delivery": ["Mail carrier", "Package delivery driver"],
+    "janitor": ["Night janitor", "Building maintenance worker"],
+    "hippie": ["Organic farmer", "Crystal shop owner", "Street musician", "Pottery teacher"],
+    "older": [
+      "Retired schoolteacher", "Retired bus mechanic", "Semi-retired accountant", "Retiree who volunteers at the library"
+    ]
+  },
+  "backgrounds": {
+    "local": {"bio": "A Los Santos local with no shared history with the player."},
+    "county": {
+      "bio": "A Blaine County local with no shared history with the player.",
+      "archetypes": ["rural"],
+      "excludes": [
+        "Cynical about Los Santos but loves it anyway", "Visit every taco truck in the city",
+        "Knows the bus schedule by heart", "Has a theory about the traffic lights"
+      ]
+    },
+    "visitor": {
+      "bio": "A visitor to Los Santos on a short stay, with no shared history with the player.",
+      "archetypes": ["tourist"],
+      "excludes": [
+        "Cynical about Los Santos but loves it anyway", "Cheerfully gossipy about the neighborhood",
+        "Save enough to move somewhere quieter", "Find an apartment that is not falling apart",
+        "Make it through the week without a parking ticket", "Find out who keeps taking their newspaper",
+        "Get through a long shift without losing their temper", "Make rent this month",
+        "Plan a trip they cannot quite afford", "Has a theory about the traffic lights",
+        "Knows the bus schedule by heart", "Gives directions using landmarks that no longer exist"
+      ],
+      "adds": {
+        "motivations": [
+          "See the Vinewood sign up close before flying home",
+          "Make the travel budget last until the end of the trip",
+          "Find the beach from a movie they love",
+          "Get a photo with a celebrity, any celebrity",
+          "Reach the airport on time without getting lost",
+          "Find a souvenir that is not made of plastic"
+        ],
+        "quirks": [
+          "Photographs every meal",
+          "Compares everything to their hometown",
+          "Carries a paper map they never unfold",
+          "Collects postcards they never send"
+        ]
+      }
+    }
+  },
+  "clashes": [
+    ["Warm, chatty, and a little nosy", "Short sentences. Gets to the point."],
+    ["Guarded and dry, slow to trust strangers", "Overly honest, shares too much."],
+    ["Guarded and dry, slow to trust strangers", "Warm and encouraging."],
+    ["Guarded and dry, slow to trust strangers", "Loud and enthusiastic."],
+    ["Guarded and dry, slow to trust strangers", "Curious and talkative"],
+    ["Upbeat to the point of being exhausting", "Sardonic, with a lot of sighing."],
+    ["Upbeat to the point of being exhausting", "Tired and a bit short-tempered"],
+    ["Anxious and apologetic, overthinks everything", "Loud and enthusiastic."],
+    ["Anxious and apologetic, overthinks everything", "Relaxed"],
+    ["Blunt and impatient, but secretly kind", "Rambles and drifts onto tangents."],
+    ["Laid-back and hard to rattle", "Talks fast and interrupts themselves."],
+    ["Laid-back and hard to rattle", "Tired and a bit short-tempered"],
+    ["Laid-back and hard to rattle", "Mildly irritated about something unrelated"],
+    ["Earnest and eager to help", "Sardonic, with a lot of sighing."],
+    ["Shy until a favorite topic comes up", "Loud and enthusiastic."],
+    ["Gentle and patient, a good listener", "Talks fast and interrupts themselves."],
+    ["Gentle and patient, a good listener", "Tired and a bit short-tempered"],
+    ["Suspicious of anyone who starts a conversation", "Warm and encouraging."],
+    ["Suspicious of anyone who starts a conversation", "Overly honest, shares too much."],
+    ["Suspicious of anyone who starts a conversation", "Loud and enthusiastic."],
+    ["Suspicious of anyone who starts a conversation", "Curious and talkative"],
+    ["Suspicious of anyone who starts a conversation", "Bored and glad of any distraction"],
+    ["Polite but firmly private", "Overly honest, shares too much."],
+    ["Easily amused, laughs at their own jokes", "Dry, deadpan humor."],
+    ["Weary and overworked, running on coffee", "Loud and enthusiastic."],
+    ["Weary and overworked, running on coffee", "Relaxed"],
+    ["Formal and old-fashioned in manner", "Casual, with plenty of slang."],
+    ["Formal and old-fashioned in manner", "Overuses the word 'literally'"],
+    ["Melancholy but sincere", "Loud and enthusiastic."],
+    ["Personal trainer", "Get back in shape before summer"],
+    ["Yoga instructor", "Get back in shape before summer"],
+    ["Marathon hopeful", "Get back in shape before summer"],
+    ["Lifeguard", "Finally learn to surf"],
+    ["Surf shop clerk", "Finally learn to surf"],
+    ["Job hunter between jobs", "Get the promotion they think they earned years ago"],
+    ["Job hunter between jobs", "Get through a long shift without losing their temper"],
+    ["Commuter who gave up on driving", "Make it through the week without a parking ticket"],
+    ["Insurance executive", "Make rent this month"],
+    ["Private wealth consultant", "Make rent this month"],
+    ["Commercial real estate broker", "Make rent this month"],
+    ["Dentist with a standing tee time", "Make rent this month"],
+    ["Retired schoolteacher", "Get the promotion they think they earned years ago"],
+    ["Retired bus mechanic", "Get the promotion they think they earned years ago"],
+    ["Retiree who volunteers at the library", "Get the promotion they think they earned years ago"],
+    ["Retired schoolteacher", "Get through a long shift without losing their temper"],
+    ["Retired bus mechanic", "Get through a long shift without losing their temper"],
+    ["Retiree who volunteers at the library", "Get through a long shift without losing their temper"],
+    ["Tourist on a budget road trip", "See the Vinewood sign up close before flying home"],
+    ["Tourist on a budget road trip", "Reach the airport on time without getting lost"]
+  ]
+}

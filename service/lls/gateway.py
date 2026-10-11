@@ -199,6 +199,13 @@ class GatewayProvider:
 
     async def skill_candidate(self, context):
         """Generate code data through the background gate, with no gameplay action."""
+        return await self.background("skill_candidate", context)
+
+    async def memory_summary(self, context):
+        """Paraphrase memory lines through the background gate. None means unavailable."""
+        return await self.background("memory_summary", context)
+
+    async def background(self, method, context):
         raise_if_cancelling()
         if self.name == "disabled":
             return None
@@ -212,7 +219,7 @@ class GatewayProvider:
             if asyncio.current_task().cancelling():
                 raise asyncio.CancelledError
             try:
-                candidate = await provider.skill_candidate(context, budget_class="background")
+                candidate = await getattr(provider, method)(context, budget_class="background")
                 if asyncio.current_task().cancelling():
                     raise asyncio.CancelledError
                 if provider is self.primary:

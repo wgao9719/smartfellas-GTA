@@ -17,12 +17,14 @@ from fastapi import HTTPException
 from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
 from .context import build_context
 from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
+from .memory_consolidation import MemoryConsolidator
 from .memory_index import MemoryIndex
 from .neighborhood_bridge import NeighborhoodBridge
 from .outbound import AIControlOwner
 from .packs import install_pilot_pack
 from .perception import DeliveredUtterance, PerceptionLimits, witnesses_for
 from .perception_bridge import DEVELOPMENT_PERCEPTION_CAPABILITY
+from .personas import ambient_persona, names_in_use
 from .protocol import Command
 from .providers import create_provider, effective_provider_settings, persist_provider_configuration
 from .roles import ROLE_POLICIES, ownership_from_facts, revalidate
@@ -178,6 +180,9 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                 if self.settings.dev_skill_autonomy else None
             )
             self._skills_first = True
+            self.memory_consolidator = MemoryConsolidator(
+                self, config=self.settings.memory_consolidation
+            )
             self.memory_index = MemoryIndex(
                 self.repo, self.settings, gate=getattr(self.provider, "gate", None)
             )
@@ -457,6 +462,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             self.skill_scheduler.cancel(session)
         if self.neighborhood.scheduler is not None:
             self.neighborhood.scheduler.cancel(session)
+        self.memory_consolidator.cancel(session)
         if session.task and not session.task.done():
             session.task.cancel()
         for turn in session.delivery_turns.values():
@@ -1002,16 +1008,26 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     raise HTTPException(
                         409, "persistent actors require an installed character pack"
                     )
+                # Pins, pack characters, and this session's pedestrians keep distinct names.
+                stored = await self.db(
+                    "list_actors", session.request.profile_id, session_id=session.id
+                )
+                persona = ambient_persona(
+                    actor_id,
+                    (payload["ped_facts"] or {}).get("model_hash"),
+                    names_in_use(stored),
+                )
                 actor = await self.db(
                     "register_actor",
                     session.request.profile_id,
                     {
                         "actor_id": actor_id,
                         "actor_kind": "ambient_ephemeral",
+                        # The game label stays until the actor shares the persona's name.
                         "display_name": payload["name"],
-                        "persona": {
-                            "biography": "A local pedestrian. No past experiences established."
-                        },
+                        "occupation": persona["occupation"],
+                        "short_bio": persona["short_bio"],
+                        "persona": persona,
                         "control_policy": payload["control_policy"],
                         "allowed_actions": session.request.capabilities,
                         "session_id": session.id,
@@ -1652,6 +1668,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             self.social_scheduler.forget(session.id)
         if self.neighborhood.scheduler is not None:
             self.neighborhood.scheduler.forget(session.id)
+        self.memory_consolidator.forget(session.id)
         session.social_scenes.clear()
         if self.trigger_engine:
             self.trigger_engine.cancel_session(session.id)
@@ -1704,6 +1721,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             if self.skill_scheduler is not None and not self._skills_first:
                 self.skill_scheduler.tick()
             self._skills_first = not self._skills_first
+            self.memory_consolidator.tick()
             await self.expire_sessions()
 
     async def shutdown(self):
