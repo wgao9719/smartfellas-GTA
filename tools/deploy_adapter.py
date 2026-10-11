@@ -8,12 +8,12 @@ No service token or installed loader enters the deployment bundle.
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
@@ -101,7 +101,8 @@ def deploy_local(bundle: Path, scripts: Path) -> None:
         raise ValueError("The bundle and scripts directory must be separate directories.")
     if not scripts.is_dir():
         raise ValueError("The existing GTA scripts directory is required.")
-    with tempfile.TemporaryDirectory(prefix="lls-stage-", dir=scripts) as temporary:
+    # SHVDN loads every DLL below scripts, so stage beside it on the same volume.
+    with tempfile.TemporaryDirectory(prefix="lls-stage-", dir=scripts.parent) as temporary:
         staged = Path(temporary)
         for source in (bundle / name for name in (*FILES, "adapter-build.json")):
             shutil.copy2(source, staged / source.name)
@@ -134,6 +135,77 @@ def deploy_local(bundle: Path, scripts: Path) -> None:
     print(f"Deployed to {scripts}. Backup: {backup}")
 
 
+# Uploaded with the bundle and run by path. Values arrive as JSON data, never as code.
+REMOTE_SCRIPT = r"""$ErrorActionPreference = 'Stop'
+$src = $PSScriptRoot
+try {
+  $plan = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $src 'deploy.json')
+  $plan = $plan | ConvertFrom-Json
+  $dst = $plan.destination
+  if (-not (Test-Path -LiteralPath $dst -PathType Container)) {
+    throw 'GTA scripts directory does not exist'
+  }
+  foreach ($entry in $plan.files) {
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $src $entry.source)).Hash
+    if ($actual.ToLowerInvariant() -ne $entry.sha256) {
+      throw ('Checksum mismatch: ' + $entry.source)
+    }
+  }
+  $backup = Join-Path (Join-Path (Split-Path -Parent $dst) 'LivingNPC-backup') $plan.backup
+  New-Item -ItemType Directory -Force -Path $backup | Out-Null
+  $done = @()
+  $pending = $null
+  try {
+    foreach ($entry in $plan.files) {
+      $out = Join-Path $dst $entry.relative
+      $old = Join-Path $backup $entry.relative
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $out) | Out-Null
+      if (Test-Path -LiteralPath $out) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $old) | Out-Null
+        Copy-Item -LiteralPath $out -Destination $old
+      }
+      $pending = $out + '.incoming'
+      Copy-Item -LiteralPath (Join-Path $src $entry.source) -Destination $pending
+      Move-Item -LiteralPath $pending -Destination $out -Force
+      $pending = $null
+      $done += $entry.relative
+    }
+  } catch {
+    if ($pending) { Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue }
+    foreach ($name in $done) {
+      $old = Join-Path $backup $name
+      $out = Join-Path $dst $name
+      if (Test-Path -LiteralPath $old) {
+        Copy-Item -LiteralPath $old -Destination $out -Force
+      } else { Remove-Item -LiteralPath $out }
+    }
+    throw
+  }
+  Write-Output ('Deployed adapter. Backup: ' + $backup)
+} finally {
+  if ((Split-Path -Leaf $src) -match '^lls-upload-\d+$') {
+    Remove-Item -LiteralPath $src -Recurse -Force -ErrorAction Continue
+  }
+}
+"""
+# cmd.exe, OpenSSH's default shell, limits command lines to 8191 characters. These short
+# tokens need no quoting under cmd.exe or a PowerShell DefaultShell.
+REMOTE_COMMAND = (
+    "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"
+)
+
+
+def remove_upload(batch: Path, target: str, upload: str, names: list[str]) -> None:
+    """Best effort after a failed transfer or launch. The script removes its own upload."""
+    batch.write_text("".join(f'-rm "{upload}/{name}"\n' for name in names) + f"-rmdir {upload}\n")
+    try:
+        removed = subprocess.run(["sftp", "-b", str(batch), target], capture_output=True)
+    except OSError:
+        removed = None
+    if removed is None or removed.returncode:
+        print(f"Remote upload may remain in the SSH user's home: {upload}", file=sys.stderr)
+
+
 def deploy_ssh(bundle: Path, target: str, remote_scripts: str) -> None:
     validate_bundle(bundle)
     if not re.fullmatch(r"[A-Za-z0-9_.-]+@[A-Za-z0-9_.:-]+", target):
@@ -143,76 +215,37 @@ def deploy_ssh(bundle: Path, target: str, remote_scripts: str) -> None:
         raise ValueError("Use an absolute Windows scripts directory without shell metacharacters.")
     nonce = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
     upload = f"lls-upload-{nonce}"
-    # Upload to the SSH user's home. SFTP does not invoke the remote shell.
-    with tempfile.NamedTemporaryFile("w", suffix=".sftp", delete=False) as batch:
-        batch.write(f"mkdir {upload}\n")
-        for path in (bundle / name for name in (*FILES, "adapter-build.json")):
-            batch.write(f'put "{path.as_posix()}" "{upload}/{path.name}"\n')
-        batch_path = Path(batch.name)
-    try:
-        subprocess.run(["sftp", "-b", str(batch_path), target], check=True)
-    finally:
-        batch_path.unlink(missing_ok=True)
+    names = (*FILES, "adapter-build.json")
     expected = json.loads((bundle / "adapter-build.json").read_text())["files"]
-    checks = "\n".join(
-        f"$actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $src '{name}')).Hash\n"
-        f"if ($actual.ToLowerInvariant() -ne '{digest}') {{ throw 'Checksum mismatch' }}"
-        for name, digest in expected.items()
-    )
-    mappings = "\n".join(
-        f"  @{{Source='{name}'; Relative='{str(installed_path(name)).replace('/', chr(92))}'}}"
-        for name in (*FILES, "adapter-build.json")
-    )
-    script = f"""$ErrorActionPreference = 'Stop'
-$src = Join-Path $env:USERPROFILE '{upload}'
-$dst = '{remote}'
-if (-not (Test-Path -LiteralPath $dst -PathType Container)) {{
-  throw 'GTA scripts directory does not exist'
-}}
-{checks}
-$backup = Join-Path (Split-Path -Parent $dst) 'LivingNPC-backup\\{nonce}'
-New-Item -ItemType Directory -Force -Path $backup | Out-Null
-$done = @()
-$files = @(\n{mappings}\n)
-try {{
-  foreach ($entry in $files) {{
-    $out = Join-Path $dst $entry.Relative
-    $old = Join-Path $backup $entry.Relative
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $out) | Out-Null
-    if (Test-Path -LiteralPath $out) {{
-      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $old) | Out-Null
-      Copy-Item -LiteralPath $out -Destination $old
-    }}
-    Copy-Item -LiteralPath (Join-Path $src $entry.Source) -Destination ($out + '.incoming')
-    Move-Item -LiteralPath ($out + '.incoming') -Destination $out -Force
-    $done += $entry.Relative
-  }}
-}} catch {{
-  foreach ($name in $done) {{
-    $old = Join-Path $backup $name
-    $out = Join-Path $dst $name
-    if (Test-Path -LiteralPath $old) {{
-      Copy-Item -LiteralPath $old -Destination $out -Force
-    }} else {{ Remove-Item -LiteralPath $out }}
-  }}
-  throw
-}}
-Remove-Item -LiteralPath $src -Recurse
-Write-Output ('Deployed adapter. Backup: ' + $backup)
-"""
-    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
-    subprocess.run(
-        [
-            "ssh",
-            target,
-            "powershell.exe",
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            encoded,
+    plan = {
+        "destination": str(remote),
+        "backup": nonce,
+        "files": [
+            {
+                "source": name,
+                "relative": str(PureWindowsPath(installed_path(name))),
+                "sha256": expected.get(name) or sha256(bundle / name),
+            }
+            for name in names
         ],
-        check=True,
-    )
+    }
+    with tempfile.TemporaryDirectory(prefix="lls-deploy-") as temporary:
+        local = Path(temporary)
+        (local / "deploy.ps1").write_text(REMOTE_SCRIPT, encoding="ascii")
+        (local / "deploy.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="ascii")
+        sources = [*(bundle / name for name in names), local / "deploy.ps1", local / "deploy.json"]
+        # SFTP does not invoke the remote shell. Relative paths start in the SSH user's home.
+        batch = local / "upload.sftp"
+        batch.write_text(
+            f"mkdir {upload}\n"
+            + "".join(f'put "{path.as_posix()}" "{upload}/{path.name}"\n' for path in sources)
+        )
+        try:
+            subprocess.run(["sftp", "-b", str(batch), target], check=True)
+            subprocess.run(["ssh", target, *REMOTE_COMMAND, f"{upload}/deploy.ps1"], check=True)
+        except BaseException:
+            remove_upload(local / "cleanup.sftp", target, upload, [path.name for path in sources])
+            raise
 
 
 def main() -> None:

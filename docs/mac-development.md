@@ -79,7 +79,7 @@ WARNING: Keep the service token private. A person with the token and an allowed 
 
 Replace the example addresses and game path with the rig's actual values. The adapter accepts explicit RFC1918 addresses and Tailscale's `100.64.0.0/10` range only in a Debug build with development settings. Release refuses remote hosts.
 
-The deployment tool uses SFTP, verifies remote hashes, makes a backup, and rolls back copied files after a replacement failure. It never changes installed loaders or the user's INI. It installs the configuration template at `scripts/LivingNPC/LivingNPC.ini.example`. The tool needs an existing scripts directory and configured SSH access. A locked DLL causes deployment failure. Close GTA if the pinned runtime does not release its files during reload.
+The deployment tool uses SFTP, verifies remote hashes, makes a backup, and rolls back copied files after a replacement failure. It uploads its PowerShell script with the bundle and runs that file by path, so the SSH command stays far below the 8191-character `cmd.exe` limit of Windows OpenSSH. It removes the upload directory after success or failure. It never changes installed loaders or the user's INI. It installs the configuration template at `scripts/LivingNPC/LivingNPC.ini.example`. The tool needs an existing scripts directory and configured SSH access. A locked DLL causes deployment failure. Close GTA if the pinned runtime does not release its files during reload.
 
 Tailscale latency cannot establish release performance. In development mode, microphone capture and speech output occur on the Mac that runs the service.
 
