@@ -496,7 +496,7 @@
           {text:text.value,importance:Number(inputs.importance.value),confidence:Number(inputs.confidence.value)});
         await reloadMemoryViews();status('Memory saved. Active replies were canceled.');
       }),button('Delete memory',async()=>{
-        if(!await confirmTarget('Delete this memory','WARNING: This permanently deletes the memory and its derived summaries.',memory.memory_id))return;
+        if(!await confirmTarget('Delete this memory','WARNING: This permanently deletes the memory, its derived summaries, and this character’s later lines that repeated or answered it.',memory.memory_id))return;
         await api(path+'/memories/'+encodeURIComponent(memory.memory_id),'DELETE',{confirm_memory_id:memory.memory_id});
         await reloadMemoryViews();status('Memory deleted.');
       },'danger'));

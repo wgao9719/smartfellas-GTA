@@ -373,6 +373,24 @@ class SocialRuntime:
                         "utterance_id": result.utterance_id,
                     }
                     command["_autonomous"] = True
+                    # Pollers and acknowledgments also take session.lock, so the runtime's
+                    # copy of this line is linked to its carried lines before any delivery.
+                    try:
+                        await self.thread_job(
+                            self.social.store.link_turn,
+                            session.request.profile_id,
+                            session.id,
+                            result.actor_id,
+                            command["id"] + ":delivered",
+                            result.carrier_event_ids,
+                        )
+                    except ValueError as exc:
+                        command["state"] = "canceled"
+                        command["payload"]["text"] = ""
+                        session.social_scenes[body.scene_id]["canceled"] = True
+                        await self.social.cancel_scene(body.scene_id, "turn_provenance_unavailable")
+                        self.command(session, "scene.cancel", None, {"scene_id": body.scene_id})
+                        raise HTTPException(409, str(exc)) from exc
                     result = {
                         "scene_id": body.scene_id,
                         "utterance_id": result.utterance_id,

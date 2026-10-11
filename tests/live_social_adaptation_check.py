@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +28,14 @@ from service.lls.__main__ import (  # noqa: E402
     fixture_role_fields,
     fixture_session,
 )
+
+# Confirmed hearing memories per listener at each phase, before any erasure.
+HEARD = {
+    0: {"social-npc-1": 1},
+    1: {"social-npc-1": 2},
+    2: {"social-npc-1": 2, "social-npc-2": 1},
+    3: {"social-npc-2": 1},
+}
 
 
 @contextmanager
@@ -165,19 +174,33 @@ def exercise(endpoint, phase, *, speaker, listener=None, expected, erase=False):
         client.headers["Authorization"] = "Bearer " + credentials["token"]
         client.headers["Origin"] = endpoint
         client.headers["X-CSRF-Token"] = credentials["csrf"]
-        response = client.get("/v1/admin/profiles/social-probe/memories")
-        response.raise_for_status()
-        reported = [row for row in response.json()["memories"] if row["provenance"] == "reported"]
-        assert all(row["actor_id"] == "social-npc-1" for row in reported)
-        assert len(reported) == (0 if phase == 3 else min(phase + 1, 2))
+        def memories():
+            response = client.get("/v1/admin/profiles/social-probe/memories")
+            response.raise_for_status()
+            return response.json()["memories"]
+
+        rows = memories()
+        heard_by = Counter(row["actor_id"] for row in rows if row["provenance"] == "reported")
+        assert heard_by == HEARD[phase], heard_by
         if erase:
-            for row in reported:
+            # Erase only social-npc-1's hearing. Its topic line derives from that hearing.
+            derived = []
+            for row in rows:
+                if row["provenance"] != "reported" or row["actor_id"] != "social-npc-1":
+                    continue
                 response = client.request(
                     "DELETE", "/v1/admin/profiles/social-probe/memories/" + row["memory_id"],
                     json={"confirm_memory_id": row["memory_id"]},
                 )
                 response.raise_for_status()
                 assert response.json()["deleted"]
+                derived += response.json()["derived_memory_ids"]
+            assert len(derived) == 2, derived  # The runtime and social copies of the line.
+            # social-npc-0 keeps both copies of its two lines; social-npc-2 keeps its hearing.
+            quoted = Counter(
+                row["actor_id"] for row in memories() if "quiet streets" in row["text"]
+            )
+            assert quoted == {"social-npc-0": 4, "social-npc-2": 1}, quoted
         usage = client.get("/v1/admin/provider").json()["usage"]
         assert usage["foreground"]["requests"] == usage["background"]["requests"] == 0
         return quote
@@ -191,7 +214,7 @@ def main():
                 exercise(endpoint, phase, speaker="social-npc-0", listener="social-npc-1",
                          expected="I enjoy quiet streets.")
         with server(directory) as endpoint:
-            exercise(endpoint, 2, speaker="social-npc-1", expected=(
+            exercise(endpoint, 2, speaker="social-npc-1", listener="social-npc-2", expected=(
                 "social-npc-0, you said: I enjoy quiet streets. What do you think now?"
             ), erase=True)
         # No direct database edits: the HTTP memory erasure must affect the next process.
@@ -201,6 +224,7 @@ def main():
         "status": "passed", "mode": "simulated_social_adaptation_http",
         "confirmed_encounters": 2, "service_processes": 4,
         "topic_changed_after_hearing": True, "memory_erasure_removed_topic": True,
+        "derived_speaker_lines_erased": 2, "other_listener_hearing_preserved": True,
         "private_direction_preserved": True, "model_requests": 0,
         "native_verified": False, "game_verified": False,
     }))

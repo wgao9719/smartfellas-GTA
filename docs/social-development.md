@@ -45,3 +45,11 @@ The report keeps `game_verified=false` and `native_verified=false`. These result
 ## Retained social experience
 
 Valid invitation and participation decisions now create private source-linked memories for their owners. Invalid model output closes the attempt without creating a decision memory. Confirmed hearing can change later partner selection and topic suggestions. The [scheduler documentation](social-autonomy.md#lasting-social-adaptation) defines the bounds, erasure rules, and restart probe. These development simulations do not pass AUTO-05 native acceptance.
+
+## Forgetting derived lines
+
+Each spoken line records the lines its prompt explicitly carried: a retold source, a topic suggestion, or lines heard earlier in the same scene. Memories that retrieval happened to select are background, not carriers. When the runtime queues a line, it links the line's subtitle copy, its social copy, and every carrier, before any poll or acknowledgment can see the command. Delivery repeats the link and refuses a line whose speaker no longer remembers a carrier. A runtime turn that fails this check cancels its command and scene with HTTP 409.
+
+Deleting a memory also deletes that character's later lines whose prompts carried it, including both copies of each line, transitively. Every deleted memory gets its own content-free scrub marker, and replay cannot restore it. Deletion stays scoped to one character. Other characters' memories of hearing those lines are their own experiences, and the canonical speaker event remains their proof. The administrative delete response lists the derived memory IDs it removed. Links contain identifiers only, and actor reset and profile deletion remove them.
+
+Schema version 4 recovers links only from what earlier speaker events prove: each line's two copies and retold sources. Topic and in-scene carriers from before version 4 were never recorded. Paraphrases that a model produces from general recall are not tracked, and canonical events keep the delivered words. Forgetting a whole conversation is not implemented.

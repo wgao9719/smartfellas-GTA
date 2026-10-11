@@ -145,9 +145,53 @@ class Repository:
 
     def _migrate(self) -> None:
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version > 3:
+        if version > 4:
             raise RuntimeError("database schema is newer than this service")
+        if version == 4:
+            return
         if version == 3:
+            # Social windows index only decision- and hearing-shaped memories, so action
+            # outcomes and reports never lengthen a walk. Erasure markers and source events
+            # gain lookups. The source index leads with event_id: on default statistics a
+            # profile-first index wins profile+memory_id joins and scans the whole profile.
+            # Derivations hold only identifiers: this actor's memories citing the derived
+            # event repeat or answer this actor's memories citing the source event.
+            self.connection.executescript("""
+            BEGIN IMMEDIATE;
+            CREATE INDEX IF NOT EXISTS scrub_lookup ON scrub_audit(profile_id,operation,object_id);
+            CREATE INDEX IF NOT EXISTS memory_social_window
+              ON memories(profile_id,actor_id,protagonist_id,provenance,game_datetime)
+              WHERE provenance='system_fact' AND substr(text,1,11)='I chose to '
+              OR provenance='reported' AND instr(text,' told me: ')>1;
+            CREATE INDEX IF NOT EXISTS memory_source_event ON memory_sources(event_id,profile_id);
+            CREATE TABLE IF NOT EXISTS memory_derivations (
+              profile_id TEXT NOT NULL REFERENCES profiles ON DELETE CASCADE,
+              actor_id TEXT NOT NULL, source_event_id TEXT NOT NULL,
+              derived_event_id TEXT NOT NULL,
+              PRIMARY KEY(profile_id,actor_id,source_event_id,derived_event_id)
+            );
+            -- Recover what earlier speaker events prove: the speaker's two copies of each
+            -- line, and lines retold from a source. Topic and heard-line carriers before
+            -- v4 left no record and cannot be recovered.
+            WITH spoken AS (
+              SELECT profile_id,event_id,json_extract(data,'$.payload.teller_id') AS actor_id,
+                json_extract(data,'$.payload.delivery_receipt_id') AS receipt_id,
+                json_extract(data,'$.payload.reported_event_id') AS source_id
+              FROM events WHERE json_extract(data,'$.event_type')='social.quote_delivered'
+              AND json_extract(data,'$.provenance')='directly_observed'
+              AND json_extract(data,'$.payload.teller_id') IS NOT NULL
+            )
+            INSERT OR IGNORE INTO memory_derivations
+            SELECT profile_id,actor_id,receipt_id,event_id FROM spoken WHERE receipt_id IS NOT NULL
+            UNION ALL SELECT profile_id,actor_id,event_id,receipt_id FROM spoken
+              WHERE receipt_id IS NOT NULL
+            UNION ALL SELECT profile_id,actor_id,source_id,receipt_id FROM spoken
+              WHERE source_id IS NOT NULL AND receipt_id IS NOT NULL
+            UNION ALL SELECT profile_id,actor_id,source_id,event_id FROM spoken
+              WHERE source_id IS NOT NULL;
+            PRAGMA user_version=4;
+            COMMIT;
+            """)
             return
         if version == 2:
             self.connection.executescript("""
@@ -186,6 +230,7 @@ class Repository:
             PRAGMA user_version=3;
             COMMIT;
             """)
+            self._migrate()
             return
         if version == 1:
             self.connection.executescript("""
@@ -1088,29 +1133,77 @@ class Repository:
             (profile_id, operation, object_id, _now()),
         )
 
-    def _delete_memory(
-        self, profile_id: str, memory_id: str, visited: set[str] | None = None
-    ) -> bool:
-        visited = visited if visited is not None else set()
-        if memory_id in visited:
-            return False
-        visited.add(memory_id)
+    def link_memory_derivations(
+        self, profile_id: str, actor_id: str, links: list[tuple[str, str]]
+    ) -> None:
+        """Record that this actor's memories citing each derived event repeat or answer
+        this actor's memories citing its source event. Rows hold identifiers only.
+        """
+        pairs = list(dict.fromkeys((source, derived) for source, derived in links))
+        if not 1 <= len(pairs) <= 64 or any(
+            not isinstance(source, str) or not isinstance(derived, str)
+            or not source or not derived or source == derived
+            for source, derived in pairs
+        ):
+            raise ValueError("memory derivations require 1 to 64 distinct event identifier pairs")
+        with self._lock, self.connection:
+            if self.connection.execute(
+                "SELECT 1 FROM actors WHERE profile_id=? AND actor_id=?", (profile_id, actor_id)
+            ).fetchone() is None:
+                raise ValueError("unknown actor in this profile")
+            self.connection.executemany(
+                "INSERT OR IGNORE INTO memory_derivations VALUES(?,?,?,?)",
+                [(profile_id, actor_id, source, derived) for source, derived in pairs],
+            )
+
+    def _memory_closure(self, profile_id: str, memory_id: str) -> list[str]:
+        """Return a memory, its summaries, and its owner's derived lines, transitively.
+
+        Derivations stay within one actor. Other actors' memories of hearing a derived
+        line are their own experiences, and canonical events remain their proof.
+        """
+        closure, pending, seen = [memory_id], [memory_id], {memory_id}
+        while pending:
+            for (found,) in self.connection.execute(
+                "SELECT summary_id FROM summary_sources WHERE memory_id=:memory "
+                "UNION SELECT later.memory_id FROM memories own "
+                "CROSS JOIN memory_sources cited ON cited.memory_id=own.memory_id "
+                "CROSS JOIN memory_derivations link ON link.profile_id=own.profile_id "
+                "AND link.actor_id=own.actor_id AND link.source_event_id=cited.event_id "
+                "CROSS JOIN memory_sources derived ON derived.event_id=link.derived_event_id "
+                "AND derived.profile_id=link.profile_id "
+                "CROSS JOIN memories later ON later.memory_id=derived.memory_id "
+                "AND later.profile_id=link.profile_id AND later.actor_id=link.actor_id "
+                "WHERE own.profile_id=:profile AND own.memory_id=:memory",
+                {"profile": profile_id, "memory": pending.pop()},
+            ).fetchall():
+                if found not in seen:
+                    seen.add(found)
+                    closure.append(found)
+                    pending.append(found)
+        return closure
+
+    def _delete_memory(self, profile_id: str, memory_id: str) -> bool:
         if self.get_memory(profile_id, memory_id) is None:
             return False
-        summaries = self.connection.execute(
-            "SELECT summary_id FROM summary_sources WHERE memory_id=?", (memory_id,)
-        ).fetchall()
-        for row in summaries:
-            self._delete_memory(profile_id, row[0], visited)
-        self.connection.execute(
-            "DELETE FROM memories WHERE profile_id=? AND memory_id=?", (profile_id, memory_id)
-        )
-        self._audit(profile_id, "delete_memory", memory_id)
+        for identifier in self._memory_closure(profile_id, memory_id):
+            if self.connection.execute(
+                "DELETE FROM memories WHERE profile_id=? AND memory_id=?", (profile_id, identifier)
+            ).rowcount:
+                self._audit(profile_id, "delete_memory", identifier)
         return True
 
     def delete_memory(self, profile_id: str, memory_id: str) -> bool:
+        """Delete a memory with its summaries and this actor's lines derived from it."""
         with self._lock, self.connection:
             return self._delete_memory(profile_id, memory_id)
+
+    def memory_dependents(self, profile_id: str, memory_id: str) -> list[str]:
+        """List the other memories that deleting this memory removes, changing nothing."""
+        with self._lock:
+            if self.get_memory(profile_id, memory_id) is None:
+                return []
+            return sorted(self._memory_closure(profile_id, memory_id)[1:])
 
     def delete_event(self, profile_id: str, event_id: str) -> bool:
         """Delete canonical content and projections, retaining content-free reset markers.
@@ -1545,6 +1638,10 @@ class Repository:
             ).fetchall():
                 self._delete_memory(profile_id, row[0])
             self.connection.execute(
+                "DELETE FROM memory_derivations WHERE profile_id=? AND actor_id=?",
+                (profile_id, actor_id),
+            )
+            self.connection.execute(
                 "DELETE FROM relationship_updates WHERE profile_id=? AND actor_id=?",
                 (profile_id, actor_id),
             )
@@ -1561,6 +1658,9 @@ class Repository:
             self.connection.execute("DELETE FROM skill_records WHERE profile_id=?", (profile_id,))
             self.connection.execute("DELETE FROM skill_versions WHERE profile_id=?", (profile_id,))
             self.connection.execute("DELETE FROM memories WHERE profile_id=?", (profile_id,))
+            self.connection.execute(
+                "DELETE FROM memory_derivations WHERE profile_id=?", (profile_id,)
+            )
             self.connection.execute("DELETE FROM knowledge_cards WHERE profile_id=?", (profile_id,))
             self.connection.execute("DELETE FROM events WHERE profile_id=?", (profile_id,))
             deleted = (

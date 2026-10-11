@@ -81,7 +81,7 @@ def test_reopen_persists_confirmed_writes_wal_fts_and_backup(tmp_path):
         repo.backup(tmp_path / "backup.sqlite3")
     for location in [path, tmp_path / "backup.sqlite3"]:
         with Repository(location) as reopened:
-            assert reopened.connection.execute("PRAGMA user_version").fetchone()[0] == 3
+            assert reopened.connection.execute("PRAGMA user_version").fetchone()[0] == 4
             assert recall(reopened, branch)[0]["memory_id"] == saved["memory_id"]
             assert reopened.get_actor("save-a", "avery")["display_name"] == "Avery"
             assert reopened.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -374,6 +374,100 @@ def test_reopen_rejects_unknown_future_migration(tmp_path):
         connection.execute("PRAGMA user_version=999")
     with pytest.raises(RuntimeError, match="newer"):
         Repository(location)
+
+
+def schema(repo):
+    return sorted(
+        tuple(row)
+        for row in repo.connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master")
+    )
+
+
+def test_schema_v3_migrates_to_v4(tmp_path):
+    with Repository(tmp_path / "fresh.sqlite3") as fresh:
+        expected = schema(fresh)
+    path = tmp_path / "v3.sqlite3"
+    with Repository(path) as repo:
+        repo.register_actor("save-a", {"actor_id": "avery"})
+        branch = repo.open_timeline("save-a", T0)
+        event(repo, branch)
+        saved = memory(repo, branch)
+        for line, provenance, retold in (
+            ("plain", "directly_observed", None), ("retold", "directly_observed", "heard"),
+            ("listener", "reported", "heard"),
+        ):
+            repo.record_event("save-a", branch, {
+                "event_id": "spoken-" + line, "event_type": "social.quote_delivered",
+                "game_datetime": T1, "protagonist_id": "franklin", "provenance": provenance,
+                "confidence": 0.7, "observer_ids": ["avery"],
+                "payload": {"text": "Words.", "teller_id": "avery", "reported_event_id": retold,
+                            "delivery_receipt_id": line + ":delivered"},
+            })
+        repo.connection.executescript(
+            "DROP INDEX scrub_lookup; DROP INDEX memory_social_window; "
+            "DROP INDEX memory_source_event; DROP TABLE memory_derivations; "
+            "PRAGMA user_version=3;"
+        )
+    with Repository(path) as repo:
+        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        # Fresh databases pass through the same migration and gain identical objects.
+        assert schema(repo) == expected
+        assert recall(repo, branch)[0]["memory_id"] == saved["memory_id"]
+        assert repo.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        # Speaker events prove both copies of a line and its retold source.
+        links = repo.connection.execute(
+            "SELECT actor_id,source_event_id,derived_event_id FROM memory_derivations"
+        ).fetchall()
+        assert sorted(tuple(row) for row in links) == sorted([
+            ("avery", "plain:delivered", "spoken-plain"),
+            ("avery", "spoken-plain", "plain:delivered"),
+            ("avery", "retold:delivered", "spoken-retold"),
+            ("avery", "spoken-retold", "retold:delivered"),
+            ("avery", "heard", "retold:delivered"),
+            ("avery", "heard", "spoken-retold"),
+        ])
+
+
+def test_derivations_actor_scoped_audited_reset(repo):
+    branch = repo.open_timeline("save-a", T0)
+    lines = ("line-1", "line-2", "line-3", "line-4")
+    for line in lines:
+        event(repo, branch, line, observers=["avery", "bea"])
+    ids = {
+        (actor, line): memory(
+            repo, branch, line, actor=actor, text=f"{actor} recalls the bicycle {line}."
+        )["memory_id"]
+        for actor in ("avery", "bea")
+        for line in lines
+    }
+    for actor in ("avery", "bea"):  # A transitive cycle that line-4 stays outside.
+        repo.link_memory_derivations(
+            "save-a", actor, [("line-1", "line-2"), ("line-2", "line-3"), ("line-3", "line-1")]
+        )
+    derived = {
+        actor: sorted(ids[actor, line] for line in ("line-2", "line-3"))
+        for actor in ("avery", "bea")
+    }
+    assert repo.memory_dependents("save-a", ids["avery", "line-1"]) == derived["avery"]
+    assert repo.memory_dependents("save-a", "unknown") == []
+    assert repo.delete_memory("save-a", ids["avery", "line-1"])
+    forgotten = {ids["avery", line] for line in ("line-1", "line-2", "line-3")}
+    remaining = {row["memory_id"] for row in repo.list_memories("save-a")}
+    assert remaining == set(ids.values()) - forgotten
+    audit = [tuple(row)[2:4] for row in repo.connection.execute("SELECT * FROM scrub_audit")]
+    assert sorted(audit) == sorted(("delete_memory", memory_id) for memory_id in forgotten)
+    assert "bicycle" not in json.dumps(audit)
+    assert repo.memory_dependents("save-a", ids["bea", "line-1"]) == derived["bea"]
+    repo.reset_actor("save-a", "avery")
+    owners = repo.connection.execute("SELECT DISTINCT actor_id FROM memory_derivations")
+    assert [row[0] for row in owners] == ["bea"]
+    with pytest.raises(ValueError, match="unknown actor"):
+        repo.link_memory_derivations("save-a", "ghost", [("line-1", "line-2")])
+    for invalid in ([], [("line-1", "line-1")], [(f"line-{i}", "later") for i in range(65)]):
+        with pytest.raises(ValueError, match="identifier pairs"):
+            repo.link_memory_derivations("save-a", "bea", invalid)
+    assert repo.delete_profile("save-a")
+    assert repo.connection.execute("SELECT COUNT(*) FROM memory_derivations").fetchone()[0] == 0
 
 
 def test_an_npc_cannot_copy_another_npcs_observation(repo):
