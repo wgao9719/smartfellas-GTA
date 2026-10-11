@@ -25,6 +25,7 @@ from .speech import (
     SpeechUnavailable,
     WhisperCpp,
     WindowsSapi,
+    audio_level,
     inspect_wav,
     play_wav,
 )
@@ -41,6 +42,10 @@ class SpeechConfig:
     input_device: int | str | None = None
     output_device: int | str | None = None
     minimum_action_confidence: float = 0.85
+    # Finite confidence below this is too uncertain to answer. Unknown confidence is allowed.
+    minimum_dialogue_confidence: float = 0.3
+    # Captures with RMS below this never reach the recognizer, which can invent words.
+    silence_dbfs: float = -60
     capture_seconds: float = 30
     transcription_seconds: float = 60
     synthesis_seconds: float = 60
@@ -53,6 +58,8 @@ class SpeechConfig:
             raise ValueError("invalid speech configuration")
         for name, minimum, maximum in (
             ("minimum_action_confidence", 0, 1),
+            ("minimum_dialogue_confidence", 0, 1),
+            ("silence_dbfs", -96, -20),
             ("capture_seconds", 0.01, 30),
             ("transcription_seconds", 0.01, 120),
             ("synthesis_seconds", 0.01, 120),
@@ -65,6 +72,8 @@ class SpeechConfig:
                 or not minimum <= value <= maximum
             ):
                 raise ValueError(f"invalid {name}")
+        if self.minimum_dialogue_confidence > self.minimum_action_confidence:
+            raise ValueError("dialogue confidence cannot exceed action confidence")
         for name, minimum, maximum in (("max_text_chars", 1, 1200), ("receipt_limit", 1, 256)):
             value = getattr(self, name)
             if type(value) is not int or not minimum <= value <= maximum:
@@ -377,36 +386,19 @@ class SpeechCoordinator:
                 audio = Path(temporary) / "capture.wav"
                 await _thread(self.microphone.stop, audio)
                 self._check(operation)
-                receipt = self._receipt(operation, "started")
-                if self.on_transcribing is not None:
-                    self.on_transcribing(receipt)
-                transcript = await self._wait(
-                    operation,
-                    self.transcriber.transcribe(audio),
-                    self.config.transcription_seconds,
-                )
-                confidence = transcript.confidence
-                if not isinstance(transcript.text, str) or len(transcript.text.strip()) > 4000:
-                    raise ValueError("invalid transcript")
-                if confidence is not None and (
-                    type(confidence) not in {int, float}
-                    or not math.isfinite(confidence)
-                    or not 0 <= confidence <= 1
-                ):
-                    raise ValueError("invalid transcript confidence")
-                if not transcript.text.strip():
-                    # Silence or noise alone. The runtime reports it and starts no turn.
-                    state, values = "failed", {"reason": "empty_transcript"}
-                else:
-                    state = "completed"
-                    values = {
-                        "text": transcript.text.strip(),
-                        "confidence": confidence,
-                        "action_eligible": (
-                            confidence is not None
-                            and confidence >= self.config.minimum_action_confidence
-                        ),
-                    }
+                rms_dbfs, _ = await _thread(audio_level, audio)
+                self._check(operation)
+                transcript = None
+                if rms_dbfs >= self.config.silence_dbfs:
+                    receipt = self._receipt(operation, "started")
+                    if self.on_transcribing is not None:
+                        self.on_transcribing(receipt)
+                    transcript = await self._wait(
+                        operation,
+                        self.transcriber.transcribe(audio),
+                        self.config.transcription_seconds,
+                    )
+                state, values = self._transcript_result(transcript)
         except (asyncio.CancelledError, _IdentityChanged) as exc:
             state, values = "canceled", {"reason": self._cancel_reason(operation, exc)}
         except Exception:
@@ -417,6 +409,31 @@ class SpeechCoordinator:
         if not clean:
             state, values = "failed", {"reason": "microphone_cleanup_failed"}
         return self._receipt(operation, state, **values)
+
+    def _transcript_result(self, transcript):
+        """Silence, no words, and too-uncertain words share the runtime's no-turn path."""
+        if transcript is None:
+            return "failed", {"reason": "empty_transcript"}
+        confidence = transcript.confidence
+        if not isinstance(transcript.text, str) or len(transcript.text.strip()) > 4000:
+            raise ValueError("invalid transcript")
+        if confidence is not None and (
+            type(confidence) not in {int, float}
+            or not math.isfinite(confidence)
+            or not 0 <= confidence <= 1
+        ):
+            raise ValueError("invalid transcript confidence")
+        if not transcript.text.strip() or (
+            confidence is not None and confidence < self.config.minimum_dialogue_confidence
+        ):
+            return "failed", {"reason": "empty_transcript"}
+        return "completed", {
+            "text": transcript.text.strip(),
+            "confidence": confidence,
+            "action_eligible": (
+                confidence is not None and confidence >= self.config.minimum_action_confidence
+            ),
+        }
 
     async def speak(self, identity: SpeechIdentity, text: str):
         if self.synthesizer is None or self.playback is None:

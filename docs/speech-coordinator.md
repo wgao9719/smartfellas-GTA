@@ -47,7 +47,7 @@ Output-device construction, start, abort, and close run in joined worker threads
 | --- | --- | --- |
 | Capture | `recording` | The microphone supplied valid input frames through its device callback. |
 | Transcript | `completed` | Transcription finished and temporary capture audio was removed before return. |
-| Transcript | `failed`, reason `empty_transcript` | Recognition found no words. The runtime shows `Didn't catch that. Try again.` and starts no turn. |
+| Transcript | `failed`, reason `empty_transcript` | The capture was silent, recognition found no words, or confidence was below the dialogue minimum. The runtime shows `Didn't catch that. Try again.` and starts no turn. |
 | Playback | `started` | The output callback accepted PCM frames. |
 | Playback | `completed` | The output callback accepted all frames and the device reported completion. |
 | Any | `canceled` | Cancellation or identity invalidation stopped the operation. |
@@ -59,7 +59,7 @@ Output-device construction, start, abort, and close run in joined worker threads
 
 Only completed playback supplies `delivered_text`. Canceled or failed playback supplies no full-text delivery evidence, even when playback started. Software playback completion does not prove that a person heard the audio.
 
-Transcript `action_eligible` indicates only that finite confidence meets the configured threshold. Unknown confidence returns false. Invalid confidence fails transcription. Action policy, consent, actor identity, and world-state checks remain mandatory. The runtime must treat a false confidence gate as dialogue-only input.
+Transcript `action_eligible` indicates only that finite confidence meets the configured threshold. Unknown confidence returns false but still reaches dialogue. Finite confidence below the dialogue minimum takes the empty-transcript path. Invalid confidence fails transcription. Action policy, consent, actor identity, and world-state checks remain mandatory. The runtime must treat a false confidence gate as dialogue-only input.
 
 The whisper.cpp adapter reads `whisper-cli -ojf` output. Its confidence is the mean probability of the spoken tokens, and annotation-only segments never become player text. The [speech probes](speech-probes.md#microphone-and-recognition) record the JSON shape observed on macOS. That shape still requires verification with the Windows build on the rig.
 
@@ -82,6 +82,10 @@ Receipt history holds bounded transcript and playback text in memory. Ordinary c
 | `LLS_INPUT_DEVICE` | Selects an input device by numeric index, name, or `<host API>:<name>`. Empty selects the default. See [device selection](speech-probes.md#device-selection). |
 | `LLS_OUTPUT_DEVICE` | Selects an output device by numeric index, name, or `<host API>:<name>`. Empty selects the default. See [device selection](speech-probes.md#device-selection). |
 | `LLS_STT_ACTION_CONFIDENCE` | Sets the finite-confidence gate. The default is `0.85`. |
+| `LLS_STT_DIALOGUE_CONFIDENCE` | Sets the minimum finite confidence for dialogue, from `0` to the action confidence. The default is `0.3`. Unknown confidence stays dialogue-only. |
+| `LLS_STT_SILENCE_DBFS` | Sets the capture RMS level, from `-96` to `-20` dBFS, below which recognition never runs. The default is `-60`. |
+
+The silence gate measures RMS over the whole capture before whisper.cpp runs, because the recognizer can invent words in silence. Speech into a headset or desk microphone typically measures about -35 to -20 dBFS RMS, and a quiet room measures around -60 dBFS or lower. Holding the key through silence lowers the average: a 1 s phrase at -25 dBFS in a 10 s capture averages about -35 dBFS. The -60 default leaves room for quiet speech and whispers while it refuses digital silence and very low hiss. Silent and low-confidence captures both report `Didn't catch that. Try again.` and start no turn.
 
 Service startup never opens the microphone. In the game, holding the configured push-to-talk key requests capture. Releasing it stops capture and starts transcription. A disabled or unavailable provider leaves typed input available.
 

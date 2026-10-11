@@ -34,6 +34,26 @@ def windows(monkeypatch):
     )
 
 
+def test_speech_gates_parse_from_the_environment_and_validate(monkeypatch):
+    speech = Settings.from_env().speech
+    assert (speech.minimum_dialogue_confidence, speech.silence_dbfs) == (0.3, -60)
+    monkeypatch.setenv("LLS_STT_DIALOGUE_CONFIDENCE", "0.45")
+    monkeypatch.setenv("LLS_STT_SILENCE_DBFS", "-72.5")
+    speech = Settings.from_env().speech
+    assert (speech.minimum_dialogue_confidence, speech.silence_dbfs) == (0.45, -72.5)
+    for name, value in (
+        ("LLS_STT_DIALOGUE_CONFIDENCE", "0.9"),
+        ("LLS_STT_DIALOGUE_CONFIDENCE", "nan"),
+        ("LLS_STT_SILENCE_DBFS", "-100"),
+        ("LLS_STT_SILENCE_DBFS", "-10"),
+        ("LLS_STT_SILENCE_DBFS", "quiet"),
+    ):
+        monkeypatch.setenv(name, value)
+        with pytest.raises(ValueError):
+            Settings.from_env()
+        monkeypatch.delenv(name)
+
+
 def test_path_settings_expand_home_and_variables(tmp_path, monkeypatch):
     home = tmp_path / "home"
     for name in ("HOME", "USERPROFILE"):

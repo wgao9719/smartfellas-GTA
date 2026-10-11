@@ -1,5 +1,7 @@
 import asyncio
 import json
+import math
+import struct
 import threading
 import wave
 from contextlib import asynccontextmanager
@@ -17,12 +19,14 @@ from service.lls.speech import Transcript, inspect_wav
 from service.lls.speech_coordinator import SpeechConfig, SpeechCoordinator
 
 
-def wav(path):
+def wav(path, amplitude=1000):
+    # Captured speech is a quiet tone. Zero amplitude is digital silence.
+    samples = (round(amplitude * math.sin(n / 3)) for n in range(1600))
     with wave.open(str(path), "wb") as output:
         output.setnchannels(1)
         output.setsampwidth(2)
         output.setframerate(16000)
-        output.writeframes(bytes(3200))
+        output.writeframes(struct.pack("<1600h", *samples))
     return inspect_wav(path)
 
 
@@ -37,6 +41,7 @@ class Microphone:
         self.stop_release.set()
         self.fail = False
         self.cancels = 0
+        self.amplitude = 1000
 
     def start(self):
         self.opened.set()
@@ -49,7 +54,7 @@ class Microphone:
         self.stop_started.set()
         self.stop_release.wait(5)
         self.active = False
-        return wav(destination)
+        return wav(destination, self.amplitude)
 
     def cancel(self):
         self.active = False
@@ -373,6 +378,26 @@ async def test_empty_transcript_reports_it_and_starts_no_turn(speech_scene):
         assert (status["state"], status["message"]) == ("failed", "Didn't catch that. Try again.")
         assert session.task is None and provider.contexts == [] and stored_utterances(runtime) == []
         assert not microphone.active and transcriber.cleaned
+
+
+@pytest.mark.parametrize("cause", ["silence", "uncertain_words"])
+async def test_silence_and_uncertain_words_report_without_a_turn(speech_scene, cause):
+    async with speech_scene() as values:
+        client, runtime, session, microphone, transcriber, synthesizer, playback, provider = values
+        if cause == "silence":
+            microphone.amplitude = 0
+        else:
+            transcriber.confidence = 0.1
+        assert (await control(client, session, "voice.ptt_started")).status_code == 200
+        await session.voice_task
+        assert (await control(client, session, "voice.ptt_stopped")).status_code == 200
+        await session.voice_task
+        recognized = cause == "uncertain_words"
+        assert transcriber.started.is_set() is recognized
+        assert ("transcribing" in statuses(session)) is recognized
+        status = [c["payload"] for c in session.commands.values() if c["kind"] == "status"][-1]
+        assert (status["state"], status["message"]) == ("failed", "Didn't catch that. Try again.")
+        assert session.task is None and provider.contexts == [] and stored_utterances(runtime) == []
 
 
 async def move_target(client, session, distance):

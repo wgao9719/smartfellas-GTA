@@ -1,22 +1,26 @@
 import asyncio
+import math
+import struct
 import threading
 import wave
 from dataclasses import replace
 
 import pytest
 
-from service.lls.speech import SpeechUnavailable, Transcript, inspect_wav
+from service.lls.speech import SpeechUnavailable, Transcript, audio_level, inspect_wav
 from service.lls.speech_coordinator import SpeechConfig, SpeechCoordinator, SpeechIdentity
 
 IDENTITY = SpeechIdentity("session_1", 1, "scene_1", "actor_1", 0, "instance_1")
 
 
-def wav(path):
+def wav(path, amplitude=1000):
+    # Captured speech is a quiet tone (about -33 dBFS RMS). Zero amplitude is digital silence.
+    samples = (round(amplitude * math.sin(n / 3)) for n in range(1600))
     with wave.open(str(path), "wb") as audio:
         audio.setnchannels(1)
         audio.setsampwidth(2)
         audio.setframerate(16000)
-        audio.writeframes(bytes(3200))
+        audio.writeframes(struct.pack("<1600h", *samples))
     return inspect_wav(path)
 
 
@@ -24,6 +28,7 @@ class Microphone:
     active = False
     canceled = False
     paths = None
+    amplitude = 1000
 
     def start(self):
         self.active = True
@@ -31,7 +36,7 @@ class Microphone:
     def stop(self, destination):
         self.active = False
         self.paths = [destination]
-        return wav(destination)
+        return wav(destination, self.amplitude)
 
     def cancel(self):
         self.active = False
@@ -40,9 +45,11 @@ class Microphone:
 
 class Transcriber:
     confidence = None
+    calls = 0
 
     async def transcribe(self, audio):
         assert audio.is_file()
+        self.calls += 1
         return Transcript("Hello there.", self.confidence, "mock", 1)
 
 
@@ -86,7 +93,7 @@ async def test_disabled_default_does_not_construct_providers_or_open_audio():
         SpeechCoordinator.local(SpeechConfig(enabled=True), is_current=lambda identity: True)
 
 
-@pytest.mark.parametrize("confidence", [None, 0.1, 0.849, 0.85, 1.0])
+@pytest.mark.parametrize("confidence", [None, 0.3, 0.849, 0.85, 1.0])
 @pytest.mark.asyncio
 async def test_transcript_confidence_gate_and_raw_audio_cleanup(confidence):
     transcriber = Transcriber()
@@ -427,11 +434,89 @@ async def test_forget_cancels_matching_work_and_erases_only_matching_receipts():
     assert speech.receipts == ()
 
 
+@pytest.mark.parametrize("amplitude", [0, 1, 20])
+@pytest.mark.asyncio
+async def test_silent_capture_never_reaches_the_recognizer(amplitude):
+    microphone, transcriber, notifications = Microphone(), Transcriber(), []
+    microphone.amplitude = amplitude
+    speech = coordinator(
+        microphone=microphone, transcriber=transcriber, on_transcribing=notifications.append
+    )
+    await speech.start_capture(IDENTITY)
+    result = await speech.finish_capture(IDENTITY)
+    assert (result.state, result.reason, result.text) == ("failed", "empty_transcript", "")
+    assert transcriber.calls == 0 and not notifications and not microphone.active
+    await speech.close()
+
+
+@pytest.mark.parametrize("amplitude", [82, 1000, 30000])
+@pytest.mark.asyncio
+async def test_quiet_signal_above_the_silence_gate_is_transcribed(amplitude, tmp_path):
+    wav(tmp_path / "level.wav", amplitude)
+    assert audio_level(tmp_path / "level.wav")[0] > -60
+    microphone, transcriber = Microphone(), Transcriber()
+    microphone.amplitude = amplitude
+    speech = coordinator(microphone=microphone, transcriber=transcriber)
+    await speech.start_capture(IDENTITY)
+    result = await speech.finish_capture(IDENTITY)
+    assert (result.state, result.text, transcriber.calls) == ("completed", "Hello there.", 1)
+    await speech.close()
+
+
+@pytest.mark.parametrize(("offset", "gated"), [(0, False), (0.01, True)])
+@pytest.mark.asyncio
+async def test_silence_gate_boundary_is_strict(offset, gated, tmp_path):
+    wav(tmp_path / "level.wav")
+    level, _ = audio_level(tmp_path / "level.wav")
+    transcriber = Transcriber()
+    config = SpeechConfig(enabled=True, silence_dbfs=level + offset)
+    speech = coordinator(config=config, transcriber=transcriber)
+    await speech.start_capture(IDENTITY)
+    result = await speech.finish_capture(IDENTITY)
+    assert (result.state == "failed", transcriber.calls) == (gated, 0 if gated else 1)
+    await speech.close()
+
+
+@pytest.mark.parametrize(
+    ("confidence", "state", "eligible"),
+    [(0.0, "failed", False), (0.299, "failed", False), (0.3, "completed", False),
+     (None, "completed", False), (0.85, "completed", True)],
+)
+@pytest.mark.asyncio
+async def test_dialogue_confidence_floor_refuses_uncertain_words(confidence, state, eligible):
+    transcriber = Transcriber()
+    transcriber.confidence = confidence
+    speech = coordinator(transcriber=transcriber)
+    await speech.start_capture(IDENTITY)
+    result = await speech.finish_capture(IDENTITY)
+    assert (result.state, result.action_eligible) == (state, eligible)
+    if state == "failed":
+        assert (result.reason, result.text) == ("empty_transcript", "")
+    await speech.close()
+
+
+def test_gate_settings_accept_their_bounds():
+    for values in (
+        {"silence_dbfs": -96}, {"silence_dbfs": -20}, {"minimum_dialogue_confidence": 0},
+        {"minimum_dialogue_confidence": 0.85, "minimum_action_confidence": 0.85},
+    ):
+        SpeechConfig(**values)
+
+
 @pytest.mark.parametrize(
     "values",
     [
         {"enabled": "true"},
         {"minimum_action_confidence": float("nan")},
+        {"minimum_dialogue_confidence": -0.01},
+        {"minimum_dialogue_confidence": 1.01},
+        {"minimum_dialogue_confidence": float("nan")},
+        {"minimum_dialogue_confidence": 0.9},
+        {"minimum_dialogue_confidence": 0.5, "minimum_action_confidence": 0.4},
+        {"silence_dbfs": -96.5},
+        {"silence_dbfs": -19.9},
+        {"silence_dbfs": float("-inf")},
+        {"silence_dbfs": True},
         {"capture_seconds": 31},
         {"max_text_chars": 1201},
         {"receipt_limit": 0},
