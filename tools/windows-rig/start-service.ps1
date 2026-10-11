@@ -57,7 +57,7 @@ for ($i = 0; $i -lt 40; $i++) {
     "service up (pid $($p.Id)): " + ($h | ConvertTo-Json -Compress)
     if ($env:LLS_PROVIDER -ne $h.provider) {
         Write-Warning ("Saved dashboard settings in $($env:LLS_DATABASE) override the environment: the service uses " +
-            "'$($h.provider)'. Select the provider at http://127.0.0.1:8765/dashboard, or start with a new LLS_DATABASE.")
+            "'$($h.provider)'. Select the provider at http://127.0.0.1:8765/dashboard, or set `$env:LLS_RIG_EVIDENCE to a new folder.")
     }
     return
 }

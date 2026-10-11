@@ -83,7 +83,7 @@ Nothing here needs administrator rights. Tools go into `%USERPROFILE%\.lls-tools
    - It snapshots the game folder, copies in Script Hook V and the .NET runtime (plus `args.txt`, which turns off BattlEye for Story Mode), builds the in-game adapter, copies it into `scripts\`, and writes the settings file.
 6. **Start the AI service** with `tools\windows-rig\start-service.ps1 -Provider local_openai`. Use `-Provider fake` for canned test replies with no model.
    - **Claude Opus 5.5 instead:** run `tools\windows-rig\start-service.ps1 -Provider claude`. The first time, it opens `secrets\LLM_API_KEY.txt` in Notepad: paste your Anthropic key, save, and run it again. Git ignores that file, so each person keeps their own key (see `secrets\README.md`). This sends NPC context to Anthropic, so choosing it is the cloud opt-in. Never put the key in any other repository file. Prices and daily limits come from `tools\windows-rig\claude-gateway.json` ($15 and 600 requests a day). `-Model` picks another Claude model once its prices are in that file.
-   - If the script warns that saved dashboard settings override the environment, select Claude at http://127.0.0.1:8765/dashboard or point `LLS_DATABASE` at a new file.
+   - If the script warns that saved dashboard settings override the environment, select Claude at http://127.0.0.1:8765/dashboard or set `$env:LLS_RIG_EVIDENCE` to a new folder before starting (a fresh QA database).
 7. **Play:**
    - Launch GTA V Legacy and click **Story Mode**. Do **not** click Online, which sits right next to it.
    - Press F10 at the save warning, walk up to someone, then press F6, then F7.
