@@ -22,6 +22,7 @@ The following commit fixes those failures. Its own Windows run must confirm them
 - Authenticated Python service with streaming dialogue, action proposals, acknowledgments, cancellation, and durable action outcomes.
 - SQLite memory with scoped knowledge, relationships, save-timeline branches, and optional semantic retrieval.
 - Provider controls with budgets, explicit cloud consent, and a local OpenAI-compatible option. AI starts disabled.
+- Shared filtering at the hosted HTTP boundary removes recognizable secrets and personal data from dialogue, action retries, embeddings, social turns, and skill requests. Synthetic HTTP tests cover filtering and unchanged ordinary game content; real provider and GTA behavior remain unverified.
 - Pilot pack of 12 original characters. Spawn locations and voices are placeholders.
 - C# adapter that builds for `net48` on a Mac against the pinned SHVDN reference. Release builds advertise no native actions.
 - Speech probes and a speech coordinator with push-to-talk, subtitles, and delivery receipts.

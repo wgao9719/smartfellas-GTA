@@ -268,3 +268,20 @@ uv run --frozen pytest -W error
 ```
 
 Result: **1,312 passed, 10 skipped, 1 failed in 140.61 seconds** (exit 1). The load test passed. The sole failure was the separately owned `tools/tests/test_deploy_adapter.py::test_windows_deploy_script_rejects_corrupt_upload_and_rolls_back_locked_dll`: `DID NOT RAISE CalledProcessError`, with the script reporting "Deployed adapter" after the corrupt upload. Deployment code was not changed. No CI, GTA, or native performance checks were run for this fix, and the earlier CI runner's temporary-directory permissions were not inspected.
+
+### Cloud payload minimization on Windows
+
+On 2026-10-11, `win/fix-cloud-scrub` reproduced audit `c-sections-12-22.md` finding 1 on TOWER-PENGU. Before production changes, `uv run --frozen pytest tests/test_cloud_scrub.py -q` reported **1 failed in 1.22 seconds**: a synthetic e-mail address reached the fake HTTP transport unchanged. This violated SPECS.md §18's cloud minimization requirement; §12 requires secret redaction and §14.1 requires sanitized trace data.
+
+The outbound inventory found hosted HTTP only in the dialogue/action/skill provider and embedding provider. Social turns use dialogue; skill learning uses the skill provider. Context and persona are nested JSON strings, and action repairs resend provider output. All these calls now use one shared HTTP client that scrubs the final JSON body before dispatch, including retries. It preserves necessary provider authentication headers, checks the resulting prompt against the reserved token ceiling, and attaches only filtered bodies to HTTP errors. Invalid bodies fail closed without retaining the original decoder exception. Existing traces remain content-free metadata; no outbound payload logging was added. Local inference and stored source text are unchanged.
+
+The worktree has its own `.venv`, created with uv 0.12.17 and the explicit Python 3.12.14 interpreter. Checks used Windows PowerShell 5.1, the documented `LLS_DOTNET` path, and `RestoreSources=https://api.nuget.org/v3/index.json` for the full suite:
+
+| Command | Observed result |
+| --- | --- |
+| `uv run --frozen pytest -W error tests/test_providers.py tests/test_memory_index.py -q` | 47 passed in 2.50 seconds |
+| `uv run --frozen pytest -W error tests/test_cloud_scrub.py tests/test_outbound_scrub.py -q` | 157 passed in 0.96 seconds |
+| `uv run --frozen ruff check service tests tools` | Passed |
+| `uv run --frozen pytest -W error` | 1,502 passed, 1 skipped in 178.10 seconds |
+
+The 157 new tests cover synthetic secrets and personal data through dialogue, actions and repair, embeddings, a social invitation/turn, and skill requests. They also cover nested/clipped JSON, credential values with escapes, punctuation, Windows usernames with spaces, safe failures, debug-log capture, and unchanged game dialogue, dates, coordinates, IDs and local payloads. The sole full-suite skip is the opt-in real whisper.cpp check. No adapter source changed, so separate C# tests, adapter builds, and live bridge checks were not rerun. No real cloud request or GTA/native validation was performed. Pattern-based filtering is not a guarantee of anonymity or detection of every personal fact or encoded secret; real provider and native acceptance remain pending.
