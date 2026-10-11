@@ -82,6 +82,7 @@ def test_dialogue_schema_rejects_text_that_skipped_normalization(field, value):
     with pytest.raises(ValidationError, match="display rule"):
         DialogueChunk.model_validate(chunk(**{field: value}))
     command = {
+        "schema_version": 1,
         "id": "cmd",
         "seq": 1,
         "kind": "dialogue.chunk",
@@ -93,7 +94,7 @@ def test_dialogue_schema_rejects_text_that_skipped_normalization(field, value):
         "idempotency_key": "effect",
         "payload": chunk(**{field: value}),
     }
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="display rule"):
         Command.model_validate(command)
 
 

@@ -1,5 +1,8 @@
 # Development validation
 
+Latest targeted Windows work: [schema-v1 wire-contract validation](#schema-v1-wire-contract-windows-validation)
+records the protocol fix and its full checks on 2026-10-11.
+
 Date: 2026-10-10. Environment: macOS 27.0, arm64, Python 3.12.4, uv 0.12.17, .NET SDK 10.0.100.
 
 These results concern the local working tree based on `200c39cfc02323f8d2811f180bd8606964810f1a`. The implementation remains uncommitted. Later changes require their own checks. No G0–G4 gate has passed.
@@ -268,3 +271,63 @@ uv run --frozen pytest -W error
 ```
 
 Result: **1,312 passed, 10 skipped, 1 failed in 140.61 seconds** (exit 1). The load test passed. The sole failure was the separately owned `tools/tests/test_deploy_adapter.py::test_windows_deploy_script_rejects_corrupt_upload_and_rolls_back_locked_dll`: `DID NOT RAISE CalledProcessError`, with the script reporting "Deployed adapter" after the corrupt upload. Deployment code was not changed. No CI, GTA, or native performance checks were run for this fix, and the earlier CI runner's temporary-directory permissions were not inspected.
+
+
+## Schema-v1 wire-contract Windows validation
+
+Date: 2026-10-11. Machine: TOWER-PENGU. Worktree: `protocol`, branch
+`win/fix-protocol`, starting at `74c1d3a` (the validation branch already included
+save/profile association and cancellation fixes). Python 3.12.14, uv 0.12.17,
+.NET SDK 10.0.401, Windows PowerShell 5.1. This worktree created its own `.venv`
+before reproduction. Commands used process-local tool settings:
+
+```powershell
+$env:PATH = 'C:\Users\Brian\.lls-tools\uv;' + $env:PATH
+$env:LLS_DOTNET = 'C:\Users\Brian\Documents\Github\smartfellas-GTA\.dotnet\dotnet.exe'
+$env:RestoreSources = 'https://api.nuget.org/v3/index.json'
+uv sync --frozen --group dev --python C:\Users\Brian\AppData\Roaming\uv\python\cpython-3.12.14-windows-x86_64-none\python.exe
+```
+
+The existing SHVDN compile reference was copied into this worktree after checking
+its repository-pinned SHA-256; no mod was downloaded or installed.
+
+Audit finding 7's assigned wire gaps reproduced before implementation:
+
+- `uv run --frozen pytest -W error tests/test_command_schema.py -q` failed all
+  five command kinds because the serialized version was missing; the same
+  regression then passed five tests with an explicit producer field.
+- Initial spec acceptance tests in `tests/test_wire_contract.py` failed twice:
+  section 7.2 omits required protagonist/scene identity and contains unsupported
+  witness input; section 7.3 includes correlation fields outside `ActionProposal`.
+- Initial negotiation regressions reported four failures and four passes:
+  unsupported majors returned 422, future action offers failed before negotiation,
+  and the response omitted negotiated feature flags.
+- Three initial xUnit regressions failed: missing/null command versions decoded
+  successfully, and the HTTP 426 player notice was opaque. A later adapter-offer
+  bound test also reproduced an overbroad returned action list before the adapter
+  intersection was added.
+
+The [wire contract](wire-contract.md) records implementation details and deliberate
+spec-example deviations. The shared corpus contains 28 messages (six valid,
+22 invalid), each consumed by pytest and xUnit. Focused corpus checks passed
+36 pytest tests and 34 xUnit tests including coverage/provenance guards. These
+counts overlap the full suites below and must not be added to their totals.
+
+| Final command | Observed result |
+|---|---|
+| `uv run --frozen ruff check service tests tools` | Passed |
+| `uv run --frozen pytest -W error` | 1,411 passed, 1 skipped, 0 failed in 180.66 s |
+| `& $env:LLS_DOTNET test adapter/LivingNPC.Core.Tests/LivingNPC.Core.Tests.csproj --configuration Release` | 373 passed, 0 failed, 0 skipped |
+| `& $env:LLS_DOTNET build adapter/LivingNPC.GameAdapter/LivingNPC.GameAdapter.csproj --configuration Release` | 0 warnings, 0 errors |
+| `& $env:LLS_DOTNET build adapter/LivingNPC.GameAdapter/LivingNPC.GameAdapter.csproj --configuration Debug` | 0 warnings, 0 errors |
+| `uv run --frozen python tests/live_bridge_check.py` | Passed: two subtitles, one simulated action, five ACKs |
+| `uv run --frozen python tests/live_bridge_check.py --speech` | Passed: two audio/subtitle chunks, 13 ACKs, recording and stop confirmed |
+| `uv run --frozen python tests/live_bridge_check.py --pin` | Passed: one pin, eight durable memories, one closed session, ambient officer purged |
+| `uv run --frozen python tests/live_bridge_crash_check.py` | Passed: one withdrawal, reconnect, stale action rejected, started ACK persisted, no invented completion |
+| `git diff --check` | Passed |
+
+The one skip is the opt-in installed whisper.cpp check. Live speech uses synthetic
+audio; all bridge checks use a fake game. GTA, native task release, real microphones,
+and native pin persistence remain unverified. This change does not add durable
+manifest/proposal audit records, paginate commands, or redesign auxiliary v1
+endpoint bodies. Shared fixture agreement is not exhaustive schema equivalence.

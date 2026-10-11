@@ -298,6 +298,18 @@ public class ControllerTests
         var status = Action("ready"); status.Kind = "status"; status.Payload = JObject.FromObject(new { state = "ready", message = "Ready" });
         controller.Commands.TryAdd(status); controller.Tick(Now.AddSeconds(3)); Assert.Equal("safety_stop", Assert.Single(Drain(controller)).Reason); Assert.Equal("error", game.Status);
     }
+    [Fact] public void ProtocolFaultReleasesImmediatelyAndFlushesDeferredAcksOnLaterTicks()
+    {
+        var game = new FakeGame(); var controller = Controller(game);
+        controller.Commands.TryAdd(Action()); controller.Tick(Now); Drain(controller);
+        controller.Commands.TryAdd(Action("pending"));
+        for (var n = 0; n < controller.Acks.Capacity; n++) Assert.True(controller.Acks.TryAdd(new Ack()));
+        controller.StopForProtocolFault(); Assert.True(controller.FailedClosed); Assert.Equal(1, game.Releases);
+        Drain(controller); controller.Tick(Now.AddSeconds(1));
+        var canceled = Drain(controller); Assert.Equal(2, canceled.Count); Assert.All(canceled, ack => Assert.Equal("safety_stop", ack.Reason));
+        controller.Commands.TryAdd(Action("later")); controller.StopForProtocolFault(); controller.Tick(Now.AddSeconds(2));
+        Assert.Equal("safety_stop", Assert.Single(Drain(controller)).Reason); Assert.Equal(1, game.Starts);
+    }
     [Fact] public void SchemaMismatchStopsSubtitlesAndPreservesOnlyRenderedReceipts()
     {
         var game = new FakeGame(); var controller = Controller(game); var pending = Line("Not shown"); pending.Id = "pending-line"; pending.IdempotencyKey = "pending-line"; pending.Payload["chunk_index"] = 1;

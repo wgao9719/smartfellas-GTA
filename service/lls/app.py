@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 from time import monotonic
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from . import __version__
@@ -132,6 +134,22 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
     async def invalid_state(request, exc):
         return JSONResponse({"detail": "invalid stored state or timeline input"}, status_code=409)
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request, exc):
+        if request.url.path == "/v1/bridge/sessions":
+            for error in exc.errors():
+                version = error.get("input")
+                if error["loc"] == ("body", "schema_version") and type(version) is int:
+                    return JSONResponse(
+                        {
+                            "detail": f"Protocol schema version {version} is unsupported; "
+                            "this service requires version 1. Update the Living Los Santos "
+                            "adapter and service together, then reload the adapter."
+                        },
+                        status_code=426,
+                    )
+        return await request_validation_exception_handler(request, exc)
+
     def bearer(authorization: str = Header(default="")):
         if not authorization.startswith("Bearer "):
             raise HTTPException(401, "session bearer token required")
@@ -164,7 +182,8 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
             "token": session.token,
             "policy_version": POLICY_VERSION,
             "schema_version": 1,
-            "capabilities": body.capabilities,
+            "capabilities": session.request.capabilities,
+            "capability_flags": session.request.manifest.capability_flags,
             "branch_id": session.branch_id,
         }
 
