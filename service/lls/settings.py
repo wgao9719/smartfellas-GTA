@@ -2,7 +2,7 @@
 
 import ipaddress
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -14,6 +14,7 @@ from .neighborhood_scheduler import NeighborhoodSchedulerConfig
 from .protocol import StrictModel
 from .skill_scheduler import SkillSchedulerConfig
 from .social_scheduler import SocialSchedulerConfig
+from .speech import device_selector
 from .speech_coordinator import SpeechConfig
 
 
@@ -137,10 +138,15 @@ class Settings(StrictModel):
 
     @classmethod
     def from_env(cls):
-        if os.name == "nt":
-            base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "LivingLosSantos"
-        else:
-            base = Path.home() / "Library" / "Application Support" / "LivingLosSantos"
+        database = cls.env_path("LLS_DATABASE")
+        if database is None:
+            # Resolve the profile only when needed: on Windows, Path.home() raises if the
+            # environment lacks USERPROFILE and HOMEPATH.
+            if os.name == "nt":
+                base = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LivingLosSantos"
+            else:
+                base = Path.home() / "Library" / "Application Support" / "LivingLosSantos"
+            database = str(base / "lls.sqlite3")
         return cls(
             bootstrap_token=os.environ.get("LLS_BRIDGE_TOKEN", ""),
             host=os.environ.get("LLS_HOST", "127.0.0.1"),
@@ -156,9 +162,9 @@ class Settings(StrictModel):
             dev_neighborhood_autonomy=(
                 os.environ.get("LLS_DEV_NEIGHBORHOOD_AUTONOMY", "0") == "1"
             ),
-            neighborhood_pack_path=os.environ.get("LLS_NEIGHBORHOOD_PACK", ""),
+            neighborhood_pack_path=cls.env_path("LLS_NEIGHBORHOOD_PACK") or "",
             allow_sources=[x for x in os.environ.get("LLS_ALLOW_SOURCES", "").split(",") if x],
-            database_path=os.environ.get("LLS_DATABASE", str(base / "lls.sqlite3")),
+            database_path=database,
             provider=os.environ.get("LLS_PROVIDER", "disabled"),
             cloud_opt_in=os.environ.get("LLS_CLOUD_OPT_IN", "0") == "1",
             dialogue_model=os.environ.get("LLM_DIALOGUE_MODEL", ""),
@@ -174,11 +180,11 @@ class Settings(StrictModel):
             ),
             speech=SpeechConfig(
                 enabled=os.environ.get("LLS_SPEECH_ENABLED", "0") == "1",
-                whisper_executable=os.environ.get("LLS_WHISPER_EXECUTABLE", ""),
-                whisper_model=os.environ.get("LLS_WHISPER_MODEL", ""),
+                whisper_executable=cls.env_path("LLS_WHISPER_EXECUTABLE") or "",
+                whisper_model=cls.env_path("LLS_WHISPER_MODEL") or "",
                 tts_provider=os.environ.get("LLS_TTS_PROVIDER", "disabled"),
-                piper_executable=os.environ.get("LLS_PIPER_EXECUTABLE", ""),
-                piper_model=os.environ.get("LLS_PIPER_MODEL", ""),
+                piper_executable=cls.env_path("LLS_PIPER_EXECUTABLE") or "",
+                piper_model=cls.env_path("LLS_PIPER_MODEL") or "",
                 input_device=cls.audio_device(os.environ.get("LLS_INPUT_DEVICE", "")),
                 output_device=cls.audio_device(os.environ.get("LLS_OUTPUT_DEVICE", "")),
                 minimum_action_confidence=float(
@@ -188,5 +194,16 @@ class Settings(StrictModel):
         )
 
     @staticmethod
+    def env_path(name):
+        """Expand ~ and %VAR%/$VAR. A relative result would follow the working directory."""
+        value = os.environ.get(name)
+        if not value or name == "LLS_DATABASE" and value == ":memory:":
+            return value
+        path = os.path.expandvars(os.path.expanduser(value))
+        if not (PureWindowsPath if os.name == "nt" else PurePosixPath)(path).is_absolute():
+            raise ValueError(f"{name} must be absolute after ~ and variable expansion: {path!r}")
+        return path
+
+    @staticmethod
     def audio_device(value):
-        return int(value) if value.isdigit() else value or None
+        return device_selector(value)

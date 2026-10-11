@@ -52,7 +52,7 @@ Requirements: Python 3.11 or 3.12 and [uv](https://docs.astral.sh/uv/).
 
 3. Open the local dashboard at <http://127.0.0.1:8765>.
 
-The service uses loopback by default. Runtime data stays in the user's application-data directory. `LLS_DATABASE` selects a separate database for testing.
+The service uses loopback by default. Runtime data stays in the user's application-data directory. `LLS_DATABASE` selects a separate database for testing. Path settings expand `~` and environment variables and must resolve to absolute paths.
 
 ## Select an AI provider
 

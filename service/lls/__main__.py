@@ -161,7 +161,8 @@ async def fake_demo(replay_path=None):
                     "commands": [{"kind": c["kind"], "payload": c["payload"]} for c in commands],
                     "game_verified": False,
                 }
-                print(json.dumps(summary, ensure_ascii=False, indent=2))
+                # ASCII escapes keep the JSON valid on redirected legacy Windows code pages.
+                print(json.dumps(summary, indent=2))
                 return summary
 
 
