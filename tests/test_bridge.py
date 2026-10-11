@@ -8,12 +8,19 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from service.lls.__main__ import fixture_event, fixture_session
+from service.lls.__main__ import (
+    fixture_event,
+    fixture_ped_facts,
+    fixture_role_fields,
+    fixture_session,
+)
 from service.lls.app import create_app
 from service.lls.display import is_display_safe
 from service.lls.protocol import ActionProposal, Event, VoiceControl
 from service.lls.providers import FakeProvider
+from service.lls.roles import joaat
 from service.lls.runtime import now
+from service.lls.runtime_pin import default_pin_name
 from service.lls.settings import Settings
 from service.lls.storage import Repository
 
@@ -70,6 +77,7 @@ async def open_ready(client, *, capabilities=None, capability_flags=None, actor_
             "busy": False,
             "position": {"x": 0, "y": 0, "z": 0},
             "name": "Neighbor",
+            **fixture_role_fields(),
         },
         "npc-1",
     )
@@ -1204,3 +1212,302 @@ async def test_cancelled_database_write_finishes_before_erasure(client, monkeypa
     finally:
         release.set()
         await asyncio.gather(write, return_exceptions=True)
+
+
+COP_FACTS = fixture_ped_facts("s_m_y_cop_01", ped_type=6, relationship_group_hash=joaat("COP"))
+ROLE_SNAPSHOTS = {
+    "police": {"role_class": "police", "ped_facts": COP_FACTS},
+    "gang": {
+        "role_class": "gang",
+        "ped_facts": fixture_ped_facts(
+            "g_m_y_ballaeast_01", ped_type=15, relationship_group_hash=joaat("AMBIENT_GANG_BALLAS")
+        ),
+    },
+    "animal": {
+        "role_class": "animal",
+        "ped_facts": fixture_ped_facts("a_c_chop", ped_type=28, human=False, animal_model=True),
+    },
+    "missing_facts": {"ped_facts": None},
+    "civilian_label_cop_facts": {"ped_facts": COP_FACTS},
+    "ambient_claims_mod_owned": {"ownership": "mod_owned"},
+}
+
+
+@pytest.mark.parametrize("case", list(ROLE_SNAPSHOTS))
+async def test_snapshot_role_cannot_widen_policy(client, case):
+    sid, _ = await open_ready(client, actor_overrides=ROLE_SNAPSHOTS[case])
+    session = client.app.state.runtime.sessions[sid]
+    stored = session.actors["npc-1"]
+    assert stored["control_policy"] == "protected"
+    assert stored["role_class"] == {
+        "police": "police",
+        "gang": "gang",
+        "animal": "animal",
+        "missing_facts": "unknown",
+        "civilian_label_cop_facts": "police",
+        "ambient_claims_mod_owned": "civilian",
+    }[case]
+    response, _ = await utterance(client, sid)
+    assert response.status_code == 409
+    assert session.task is None
+    assert not session.commands
+    assert (await client.get("/v1/bridge/commands?wait_seconds=0")).json()["commands"] == []
+
+
+async def test_civilian_evidence_stays_ambient(client):
+    sid, _ = await open_ready(client)
+    session = client.app.state.runtime.sessions[sid]
+    stored = session.actors["npc-1"]
+    assert (stored["control_policy"], stored["role_class"], stored["role_reason"]) == (
+        "ambient",
+        "civilian",
+        "civilian_evidence",
+    )
+    response, _ = await utterance(client, sid)
+    assert response.status_code == 200
+    await session.task
+    kinds = [c["kind"] for c in session.commands.values()]
+    assert "dialogue.chunk" in kinds and "action.execute" in kinds
+
+
+async def test_role_change_mid_scene_cancels_the_scene(client):
+    class Slow(FakeProvider):
+        async def dialogue(self, context):
+            yield "One sentence. "
+            await asyncio.sleep(1)
+            yield "Too late."
+
+    sid, actor = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    runtime.provider = Slow()
+    assert (await utterance(client, sid))[0].status_code == 200
+    await asyncio.sleep(0.01)
+    actor.update(seq=4, event_id="cuffed-snapshot")
+    actor["payload"]["ped_facts"] = fixture_ped_facts(cuffed=True)
+    response = await client.post(
+        "/v1/bridge/events:batch", json={"session_id": sid, "events": [actor]}
+    )
+    assert response.status_code == 200
+    await session.task
+    stored = session.actors["npc-1"]
+    assert (stored["role_class"], stored["role_reason"], stored["control_policy"]) == (
+        "prisoner",
+        "cuffed",
+        "protected",
+    )
+    chunks = [c for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+    assert chunks and all(c["state"] == "canceled" for c in chunks)
+    assert not any(c["kind"] == "action.execute" for c in session.commands.values())
+    assert (await utterance(client, sid, seq=5))[0].status_code == 409
+
+
+async def post_events(client, sid, *events):
+    return await client.post(
+        "/v1/bridge/events:batch", json={"session_id": sid, "events": list(events)}
+    )
+
+
+async def test_retarget_after_removal_gets_a_fresh_identity_without_prior_memories(client):
+    sid, actor = await open_ready(client)
+    runtime = client.app.state.runtime
+    repo = client.app.state.repository
+    session = runtime.sessions[sid]
+    assert (await utterance(client, sid, "My secret is the blue door."))[0].status_code == 200
+    await session.task
+    removed = fixture_event(sid, 4, "actor.removed", {}, "npc-1")
+    assert (await post_events(client, sid, removed)).status_code == 200
+    assert repo.resolve_instance("fake-demo", sid, 42, 1) is None
+    # GTA recycled the handle and the adapter bound it to a new random identity.
+    payload = {**actor["payload"], "runtime_instance_id": "ped-2"}
+    retarget = fixture_event(sid, 5, "actor.snapshot", payload, "npc-2")
+    assert (await post_events(client, sid, retarget)).status_code == 200
+    assert repo.resolve_instance("fake-demo", sid, 42, 1)["actor_id"] == "npc-2"
+    provider = ContextProvider()
+    runtime.provider = provider
+    question = fixture_event(
+        sid, 6, "player.utterance_text", {"text": "What is my secret?", "scene_id": "s6"}, "npc-2"
+    )
+    assert (await post_events(client, sid, question)).status_code == 200
+    await session.task
+    assert all("blue door" not in m["text"] for m in provider.contexts[0]["memories"])
+
+    def recall(actor_id):
+        return repo.retrieve_memories(
+            "fake-demo", session.branch_id, actor_id, "franklin", session.game_datetime,
+            "secret blue door", session_id=sid,
+        )
+
+    assert not any("blue door" in m["text"] for m in recall("npc-2"))
+    assert any("blue door" in m["text"] for m in recall("npc-1"))
+    # The removed identity can never reattach to the recycled entity.
+    stale = fixture_event(sid, 7, "actor.snapshot", actor["payload"], "npc-1")
+    assert (await post_events(client, sid, stale)).status_code == 409
+    assert repo.resolve_instance("fake-demo", sid, 42, 1)["actor_id"] == "npc-2"
+
+
+PIN_FLAGS = ["fake_game", "actor_pin"]
+
+
+async def request_pin(client, sid, seq, *, instance="ped-1", actor="npc-1"):
+    event = fixture_event(sid, seq, "actor.pin_requested", {"runtime_instance_id": instance}, actor)
+    response = await post_events(client, sid, event)
+    assert response.status_code == 200, response.text
+
+
+def queued_after(session, before):
+    return [c for c in session.commands.values() if c["id"] not in before]
+
+
+async def test_pin_request_queues_cancel_then_pin(client):
+    sid, _ = await open_ready(client, capability_flags=PIN_FLAGS)
+    session = client.app.state.runtime.sessions[sid]
+    assert (await utterance(client, sid))[0].status_code == 200
+    await session.task
+    before = set(session.commands)
+    await request_pin(client, sid, 4)
+    queued = queued_after(session, before)
+    assert [c["kind"] for c in queued] == ["scene.cancel", "actor.pin"]
+    assert queued[1]["payload"] == {
+        "display_name": default_pin_name("npc-1"),
+        "actor_kind": "spawned_persistent",
+    }
+    assert (queued[1]["actor_id"], queued[1]["runtime_instance_id"]) == ("npc-1", "ped-1")
+    assert all(
+        c["state"] == "canceled"
+        for c in session.commands.values()
+        if c["kind"] in {"dialogue.chunk", "action.execute"}
+    )
+    stored = client.app.state.repository.get_actor("fake-demo", "npc-1")
+    assert (stored["actor_kind"], stored["session_id"], stored["pinned_from_session"]) == (
+        "spawned_persistent",
+        None,
+        sid,
+    )
+    await request_pin(client, sid, 5)
+    assert [c["kind"] for c in session.commands.values()].count("actor.pin") == 1
+
+
+async def test_pinned_conversation_survives_session_close(client):
+    sid, actor = await open_ready(client, capability_flags=PIN_FLAGS)
+    runtime = client.app.state.runtime
+    repo = client.app.state.repository
+    session = runtime.sessions[sid]
+    assert (await utterance(client, sid, "My name is Sam."))[0].status_code == 200
+    await session.task
+    for command in [c for c in session.commands.values() if c["kind"] == "dialogue.chunk"]:
+        await delivery_ack(client, session, command)
+    await request_pin(client, sid, 4)
+    pin = next(c for c in session.commands.values() if c["kind"] == "actor.pin")
+    path = f"/v1/bridge/commands/{pin['id']}/ack"
+    ack = {"session_id": sid, "runtime_generation": 1, "status": "completed", "reason": "pinned"}
+    assert (await client.post(path, json=ack)).status_code == 422
+    ack["observed"] = {"actor_id": "npc-1"}
+    assert (await client.post(path, json=ack)).json()["status"] == "completed"
+    name = default_pin_name("npc-1")
+    status = [c for c in session.commands.values() if c["kind"] == "status"][-1]
+    assert status["actor_id"] is None
+    assert status["payload"]["message"] == (
+        f"Pinned as {name}. This conversation will be remembered. "
+        "They may not return after you leave."
+    )
+    actor.update(seq=5, event_id="pinned-snapshot")
+    actor["payload"].update(
+        actor_kind="spawned_persistent",
+        ownership="mod_owned",
+        name=name,
+        ped_facts=fixture_ped_facts(in_mod_registry=True),
+    )
+    assert (await post_events(client, sid, actor)).status_code == 200
+    stored = session.actors["npc-1"]
+    assert (stored["actor_kind"], stored["ownership"], stored["control_policy"]) == (
+        "spawned_persistent",
+        "mod_owned",
+        "ambient",
+    )
+    assert (await utterance(client, sid, "Do you remember my name?", seq=6))[0].status_code == 200
+    await session.task
+    memories = repo.list_memories("fake-demo", "npc-1")
+    assert any(m["text"] == "The player said: Do you remember my name?" for m in memories)
+    assert all(m["session_id"] is None for m in memories)
+    await runtime.close_session(session)
+    survivor = repo.get_actor("fake-demo", "npc-1")
+    assert (survivor["actor_kind"], survivor["display_name"]) == ("spawned_persistent", name)
+    remembered = repo.retrieve_memories(
+        "fake-demo", session.branch_id, "npc-1", "franklin", session.game_datetime,
+        "name Sam", session_id="a-later-session",
+    )
+    assert any(m["text"] == "The player said: My name is Sam." for m in remembered)
+    assert any(m["text"].startswith("I said:") for m in remembered)
+
+
+PIN_REFUSALS = {
+    "police": ({"ped_facts": COP_FACTS}, "Only ordinary residents can be pinned."),
+    "protected": ({"control_policy": "protected"}, "This pedestrian is protected"),
+    "script_owned": (
+        {"ownership": "game_script_owned", "mission_entity": True},
+        "The game controls this pedestrian",
+    ),
+    "stale": ({}, "out of date"),
+    "rate": ({}, "Wait a few seconds"),
+    "limit": ({}, "already pinned 8 pedestrians"),
+    "wrong_instance": ({}, "That pedestrian changed"),
+    "no_capability": ({}, "cannot pin pedestrians"),
+}
+
+
+@pytest.mark.parametrize("case", list(PIN_REFUSALS))
+async def test_pin_refused(client, case):
+    overrides, message = PIN_REFUSALS[case]
+    flags = ["fake_game"] if case == "no_capability" else PIN_FLAGS
+    sid, actor = await open_ready(client, capability_flags=flags, actor_overrides=overrides)
+    repo = client.app.state.repository
+    session = client.app.state.runtime.sessions[sid]
+    seq = 3
+    if case == "stale":
+        session.actors["npc-1"]["_sampled_at"] -= 10
+    if case == "limit":
+        session.pins.update({f"earlier-{n}": {"state": "embodied"} for n in range(8)})
+    if case == "rate":
+        payload = {**actor["payload"], "runtime_handle": 43, "runtime_instance_id": "ped-9"}
+        other = fixture_event(sid, 3, "actor.snapshot", payload, "npc-9")
+        assert (await post_events(client, sid, other)).status_code == 200
+        await request_pin(client, sid, 4, instance="ped-9", actor="npc-9")
+        assert repo.get_actor("fake-demo", "npc-9")["actor_kind"] == "spawned_persistent"
+        seq = 5
+    before = set(session.commands)
+    await request_pin(client, sid, seq, instance="ped-2" if case == "wrong_instance" else "ped-1")
+    queued = queued_after(session, before)
+    assert [c["kind"] for c in queued] == ["status"]
+    assert queued[0]["actor_id"] is None and queued[0]["payload"]["state"] == "pin_refused"
+    assert message in queued[0]["payload"]["message"]
+    stored = repo.get_actor("fake-demo", "npc-1")
+    assert (stored["actor_kind"], stored["session_id"]) == ("ambient_ephemeral", sid)
+    assert "npc-1" not in session.pins
+
+
+async def test_adapter_rejection_leaves_one_saved_unembodied_identity(client):
+    sid, actor = await open_ready(client, capability_flags=PIN_FLAGS)
+    runtime = client.app.state.runtime
+    repo = client.app.state.repository
+    session = runtime.sessions[sid]
+    await request_pin(client, sid, 3)
+    pin = next(c for c in session.commands.values() if c["kind"] == "actor.pin")
+    ack = {"session_id": sid, "runtime_generation": 1, "status": "rejected"}
+    response = await client.post(f"/v1/bridge/commands/{pin['id']}/ack", json=ack)
+    assert response.json()["status"] == "rejected"
+    status = [c for c in session.commands.values() if c["kind"] == "status"][-1]
+    assert status["payload"]["message"] == (
+        f"Saved as {default_pin_name('npc-1')}, but this pedestrian is no longer available."
+    )
+    assert "npc-1" not in session.actors and session.pins["npc-1"]["state"] == "unembodied"
+    rows = repo.connection.execute(
+        "SELECT actor_kind FROM actors WHERE profile_id='fake-demo' AND actor_id='npc-1'"
+    ).fetchall()
+    assert [row[0] for row in rows] == ["spawned_persistent"]
+    actor.update(seq=4, event_id="late-snapshot")
+    assert (await post_events(client, sid, actor)).status_code == 200
+    assert "npc-1" not in session.actors
+    assert (await utterance(client, sid, seq=5))[0].status_code == 409
+    await runtime.close_session(session)
+    assert repo.get_actor("fake-demo", "npc-1")["actor_kind"] == "spawned_persistent"

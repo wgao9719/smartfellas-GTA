@@ -30,6 +30,7 @@ Living Los Santos is a GTA V Legacy Story Mode project for interactive, persiste
 - Authenticated development skill routes connect generation, trials, adoption, and selected execution to canonical bridge acknowledgments for orientation and waiting.
 - Optional automatic skill practice learns from external action receipts, revises candidates, and retains acknowledged trials for later bounded practice.
 - The local dashboard supports character inspection, memory edits, export, backups, save timeline selection, and live session diagnostics.
+- The dashboard can pin an eligible live pedestrian, label pinned pedestrians, and forget a pinned character with typed confirmation.
 - Provider controls persist configured-price budgets, cloud consent, and an explicit local fallback. Revocation cancels active remote requests.
 
 AI starts disabled. The fake provider requires explicit development selection. Hosted AI requires explicit cloud opt-in and model configuration. Release adapter builds advertise no native action capabilities while game validation remains pending.
@@ -148,6 +149,18 @@ The synthetic load check runs 200 confirmed turns with 36 tracked NPCs. It verif
 ```sh
 uv run --frozen python tools/simulated_load.py
 ```
+
+## Game controls
+
+| Key | Action |
+|---|---|
+| F6 | Select the nearest eligible pedestrian. The status shows `Available`, `Busy`, `Out of range`, or `Not available`, or names the nearest refused role. |
+| F7 | Type a message to the selected pedestrian. |
+| N | Hold to talk. Release to send. |
+| Backspace | Cancel the current conversation. |
+| F8 twice | Pin the selected pedestrian. The conversation becomes permanent. The pedestrian may not return after you leave. |
+
+All keys are configurable in `scripts/LivingNPC/LivingNPC.ini`. Only ordinary civilians are eligible. Police, security, emergency, gang, animal, story, and unrecognized peds stay protected. The [classification capability sheet](docs/actions/ped-classification-and-pin.md) records what still needs rig verification.
 
 ## Build the game adapter
 

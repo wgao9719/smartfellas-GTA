@@ -1,5 +1,6 @@
 """Strict bridge contracts. Narrative strings never acquire execution authority."""
 
+import unicodedata
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -20,6 +21,34 @@ ActionId = Literal[
     "flee_from_threat",
     "play_verified_gesture",
 ]
+RoleClass = Literal[
+    "civilian",
+    "service_worker",
+    "police",
+    "military",
+    "security",
+    "emergency",
+    "gang",
+    "prisoner",
+    "animal",
+    "protagonist",
+    "story_character",
+    "unknown",
+]
+Int32 = Annotated[int, Field(ge=-(2**31), le=2**31 - 1)]
+
+
+def display_safe(value: str) -> str:
+    """Match the adapter: BMP only, no control or format characters, no markup."""
+    if value != value.strip() or any(
+        character in "~<>" or ord(character) > 0xFFFF or unicodedata.category(character)[0] == "C"
+        for character in value
+    ):
+        raise ValueError("display names must be plain printable text")
+    return value
+
+
+DisplayName = Annotated[str, Field(min_length=1, max_length=48), AfterValidator(display_safe)]
 
 
 def display_safe(value):
@@ -75,6 +104,24 @@ class Position(StrictModel):
     z: float
 
 
+class PedFacts(StrictModel):
+    """Raw adapter samples. The service recomputes the role instead of trusting a label."""
+
+    model_hash: Int32
+    ped_type: int = Field(ge=-1, le=255)
+    relationship_group_hash: Int32
+    human: bool
+    animal_model: bool
+    cuffed: bool
+    in_police_vehicle: bool
+    player_group: bool
+    mission_entity: bool
+    owning_script: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_]+$")
+    in_mod_registry: bool
+    took_persistence: bool
+    belongs_to_mod_script: bool
+
+
 class ActorSnapshot(StrictModel):
     runtime_handle: int = Field(gt=0)
     runtime_instance_id: Identifier
@@ -96,6 +143,10 @@ class ActorSnapshot(StrictModel):
     interior_id: Identifier | None = None
     can_move: bool = True
     in_combat: bool = False
+    # Optional for schema v1 compatibility; missing facts classify as unknown and protected.
+    role_class: RoleClass = "unknown"
+    role_reason: str = Field(default="unclassified", pattern=r"^[a-z0-9_]{1,64}$")
+    ped_facts: PedFacts | None = None
 
 
 class WorldSnapshot(StrictModel):
@@ -123,6 +174,10 @@ class Empty(StrictModel):
     pass
 
 
+class PinRequest(StrictModel):
+    runtime_instance_id: Identifier
+
+
 class VoiceControl(StrictModel):
     scene_id: Identifier
     runtime_instance_id: Identifier
@@ -146,6 +201,7 @@ PAYLOADS = {
     "voice.ptt_started": VoiceControl,
     "voice.ptt_stopped": VoiceControl,
     "scene.cancel": Cancel,
+    "actor.pin_requested": PinRequest,
 }
 
 
@@ -163,6 +219,7 @@ class Event(StrictModel):
         "voice.ptt_started",
         "voice.ptt_stopped",
         "scene.cancel",
+        "actor.pin_requested",
     ]
     occurred_at_utc: datetime
     game_datetime: datetime
@@ -189,6 +246,7 @@ class Event(StrictModel):
                 "player.utterance_text",
                 "voice.ptt_started",
                 "voice.ptt_stopped",
+                "actor.pin_requested",
             }
             and not self.actor_id
         ):
@@ -276,10 +334,15 @@ class StatusMessage(StrictModel):
     scene_id: Identifier | None = None
 
 
+class PinCommand(StrictModel):
+    display_name: DisplayName
+    actor_kind: Literal["spawned_persistent"]
+
+
 class Command(StrictModel):
     id: Identifier
     seq: int = Field(ge=1)
-    kind: Literal["dialogue.chunk", "action.execute", "scene.cancel", "status"]
+    kind: Literal["dialogue.chunk", "action.execute", "scene.cancel", "status", "actor.pin"]
     session_id: Identifier
     actor_id: Identifier | None
     runtime_generation: int = Field(ge=0)
@@ -295,9 +358,13 @@ class Command(StrictModel):
             "action.execute": ActionCommand,
             "scene.cancel": Cancel,
             "status": StatusMessage,
+            "actor.pin": PinCommand,
         }[self.kind]
         payload_type.model_validate(self.payload)
-        if self.kind in {"dialogue.chunk", "action.execute"} and not self.runtime_instance_id:
+        if (
+            self.kind in {"dialogue.chunk", "action.execute", "actor.pin"}
+            and not self.runtime_instance_id
+        ):
             raise ValueError("actor commands require runtime_instance_id")
         return self
 

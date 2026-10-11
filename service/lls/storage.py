@@ -519,18 +519,26 @@ class Repository:
     ) -> None:
         with self._lock, self.connection:
             actor = self._actor_session(profile_id, actor_id, session_id)
+            ambient = actor["actor_kind"] == "ambient_ephemeral"
             previous = self.connection.execute(
-                "SELECT handle,generation FROM actor_instances "
+                "SELECT handle,generation,status FROM actor_instances "
                 "WHERE profile_id=? AND session_id=? AND actor_id=?",
                 (profile_id, session_id, actor_id),
             ).fetchall()
-            if actor["actor_kind"] == "ambient_ephemeral" and any(
+            if ambient and any(
                 row["handle"] != handle or row["generation"] != generation for row in previous
             ):
                 raise ValueError("a different ambient entity generation needs a new actor identity")
+            # An ambient identity embodies one entity once. Its released row can be
+            # replaced by a recycled handle's new identity, so the marker lives on the actor.
+            bound = actor.get("runtime_binding")
+            if ambient and bound is not None and (
+                bound != [handle, generation] or not any(r["status"] == "live" for r in previous)
+            ):
+                raise ValueError("a released ambient entity needs a new actor identity")
             existing = self.connection.execute(
                 "SELECT actor_id FROM actor_instances WHERE profile_id=? AND session_id=? "
-                "AND handle=? AND generation=?",
+                "AND handle=? AND generation=? AND status='live'",
                 (profile_id, session_id, handle, generation),
             ).fetchone()
             if existing and existing[0] != actor_id:
@@ -554,6 +562,12 @@ class Repository:
                     "live",
                 ),
             )
+            if ambient and bound is None:
+                actor["runtime_binding"] = [handle, generation]
+                self.connection.execute(
+                    "UPDATE actors SET data=? WHERE profile_id=? AND actor_id=?",
+                    (_json(actor), profile_id, actor_id),
+                )
 
     def resolve_instance(
         self, profile_id: str, session_id: str, handle: int, generation: int
@@ -567,19 +581,38 @@ class Repository:
             return dict(row) if row else None
 
     def release_instance(
-        self, profile_id: str, session_id: str, handle: int, generation: int
-    ) -> None:
+        self,
+        profile_id: str,
+        session_id: str,
+        handle: int | None = None,
+        generation: int | None = None,
+        *,
+        actor_id: str | None = None,
+    ) -> int:
+        """Release live bindings by entity tuple, by actor, or both. Return the count."""
+        if (handle is None) != (generation is None) or (handle is None and actor_id is None):
+            raise ValueError("release requires a runtime handle generation or an actor")
+        clauses = ["profile_id=?", "session_id=?", "status='live'"]
+        values = [profile_id, session_id]
+        if handle is not None:
+            clauses.append("handle=? AND generation=?")
+            values += [handle, generation]
+        if actor_id is not None:
+            clauses.append("actor_id=?")
+            values.append(actor_id)
         with self._lock, self.connection:
-            self.connection.execute(
-                "UPDATE actor_instances SET status='released' WHERE profile_id=? "
-                "AND session_id=? AND handle=? AND generation=?",
-                (profile_id, session_id, handle, generation),
-            )
+            return self.connection.execute(
+                "UPDATE actor_instances SET status='released' WHERE " + " AND ".join(clauses),
+                values,
+            ).rowcount
 
     def adopt_actor(
         self, profile_id: str, actor_id: str, session_id: str, *, display_name: str | None = None
     ) -> dict:
-        """Pin personality as a new identity, without copying private experiences."""
+        """Copy a persona into a new identity without private experiences.
+
+        The player-facing pin is pin_actor, which keeps the id and the experiences.
+        """
         with self._lock:
             actor = self._actor_session(profile_id, actor_id, session_id)
             if actor["actor_kind"] != "ambient_ephemeral":
@@ -590,10 +623,97 @@ class Repository:
                 session_id=None,
                 adopted_from=actor_id,
             )
+            actor.pop("runtime_binding", None)
             actor["actor_id"] = actor["id"]
             if display_name:
                 actor["display_name"] = display_name
             return self.register_actor(profile_id, actor)
+
+    def pin_actor(
+        self,
+        profile_id: str,
+        actor_id: str,
+        session_id: str,
+        *,
+        display_name: str,
+        pinned_at_game_datetime: str,
+        branch_id: str,
+    ) -> dict:
+        """Promote a session pedestrian in place, keeping its id and its own experiences.
+
+        The actor's own memories, relationship updates, and owned knowledge leave the
+        session scope that end_session deletes. Other actors' rows are untouched. A
+        repeated pin from the same session returns the same durable actor.
+        """
+        stamp = _date(pinned_at_game_datetime)
+        if not isinstance(display_name, str) or not 1 <= len(display_name) <= 48:
+            raise ValueError("a pinned actor needs a display name of 1 to 48 characters")
+        with self._lock:
+            if self.connection.in_transaction:
+                raise ValueError("pinning cannot nest inside another transaction")
+            self.connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.connection.execute(
+                    "SELECT actor_kind,session_id,data FROM actors WHERE profile_id=? "
+                    "AND actor_id=?",
+                    (profile_id, actor_id),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("unknown actor in this profile")
+                data = json.loads(row["data"])
+                if not (
+                    row["actor_kind"] == "spawned_persistent"
+                    and data.get("pinned_from_session") == session_id
+                ):
+                    if row["actor_kind"] != "ambient_ephemeral" or row["session_id"] != session_id:
+                        raise ValueError("only a pedestrian from this session can be pinned")
+                    self._branch(profile_id, branch_id)
+                    # A persistent character may embody new entities, unlike an ambient one.
+                    data.pop("runtime_binding", None)
+                    data.update(
+                        actor_kind="spawned_persistent",
+                        session_id=None,
+                        display_name=display_name,
+                        pinned_from_session=session_id,
+                        pinned_at={"game_datetime": stamp, "branch_id": branch_id},
+                    )
+                    self.connection.execute(
+                        "UPDATE actors SET actor_kind='spawned_persistent',session_id=NULL,data=? "
+                        "WHERE profile_id=? AND actor_id=?",
+                        (_json(data), profile_id, actor_id),
+                    )
+                    # memory_fts, memory_sources and memory_vectors follow their memory rows.
+                    for table, owner in (
+                        ("memories", "actor_id"),
+                        ("relationship_updates", "actor_id"),
+                        ("knowledge_cards", "owner_id"),
+                    ):
+                        self.connection.execute(
+                            f"UPDATE {table} SET session_id=NULL WHERE profile_id=? "
+                            f"AND {owner}=? AND session_id=?",
+                            (profile_id, actor_id, session_id),
+                        )
+                    self._audit(profile_id, "pin_actor", actor_id)
+                self.connection.commit()
+                return data
+            except BaseException:
+                self.connection.rollback()
+                raise
+
+    def forget_pinned_actor(self, profile_id: str, actor_id: str) -> None:
+        """Scrub and delete a pinned pedestrian. Authored characters cannot be forgotten."""
+        with self._lock:
+            actor = self.get_actor(profile_id, actor_id)
+            if actor is None:
+                raise ValueError("unknown actor in this profile")
+            if actor["actor_kind"] != "spawned_persistent" or not actor.get("pinned_from_session"):
+                raise ValueError("only pinned pedestrians can be forgotten")
+            self.reset_actor(profile_id, actor_id)
+            with self.connection:
+                self.connection.execute(
+                    "DELETE FROM actors WHERE profile_id=? AND actor_id=?", (profile_id, actor_id)
+                )
+                self._audit(profile_id, "forget_pinned_actor", actor_id)
 
     def _actor_session(self, profile_id: str, actor_id: str, session_id: str | None) -> dict:
         actor = self.get_actor(profile_id, actor_id)

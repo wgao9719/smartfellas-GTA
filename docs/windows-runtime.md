@@ -22,13 +22,14 @@ G0 is not done. No game, loader, or SHVDN combination is currently certified by 
 
 14. Check `http://127.0.0.1:8765/health`.
 15. Start Story Mode and inspect the latest `scripts/LivingNPC/LivingNPC-*.log` for `adapter_loaded`.
-16. Press F6 near an eligible resident.
+16. Press F6 near an ordinary pedestrian. Expect `Target: Nearby resident (Available)`.
 17. Press F7 to enter a message.
 18. Hold N to request microphone capture.
 19. Release N to stop capture and start transcription.
 20. Hold B to request a whispered capture. Release B to stop it.
 21. Start a typed message with `/w ` to whisper it. Start it with `//` to send a literal leading slash.
-22. Press Backspace to cancel the current interaction.
+22. Press F8 twice within 5 seconds to pin the selected pedestrian. Expect `Pinned as Resident ....`
+23. Press Backspace to cancel the current interaction.
 
 The service defaults to AI disabled. The fake provider is for simulation tests. A hosted provider requires explicit configuration and cloud consent. PTT may report that speech is unavailable until microphone and transcription support is configured. The adapter shows `Recording` only after a service status confirms it, and `Recording (whispering)` for a whisper capture.
 
@@ -40,7 +41,7 @@ Path settings such as `LLS_DATABASE`, `LLS_WHISPER_MODEL`, and `LLS_PIPER_EXECUT
 
 Windows lists each audio endpoint once per host API under the same name. A configured device name selects one of them as described in [device selection](speech-probes.md#device-selection).
 
-The adapter refuses actions in Online, missions, cutscenes, random events, loading screens, and unknown protagonist states. It limits targeting to the pilot civilian model allowlist. It never adopts a mission ped. These checks still require rig tests.
+The adapter refuses actions in Online, missions, cutscenes, random events, loading screens, and unknown protagonist states. It targets only peds whose sampled model, ped type, and relationship group all classify as civilian, with ambient ownership. Police, security, emergency, gang, animal, story, and unrecognized peds stay protected. F6 then names the nearest refused role, for example `Nearest: police officer — not available`. It never adopts a mission ped. These checks still require rig tests. Use the [classification capability sheet](actions/ped-classification-and-pin.md) to record observed values.
 
 ## Provisional native action test
 
@@ -61,6 +62,19 @@ The adapter reports `task_dispatched=true` in a started acknowledgment. This con
 Both completed acknowledgments include `distance_meters`, the cumulative distance between successive position samples. Tracking starts immediately before dispatch and continues through completion. The adapter uses a monotonic clock and rejects any sample interval above 250 milliseconds. It rejects unavailable positions, nonfinite coordinates, and backward timestamps. A failed measurement supplies no completion facts. A stationary sequence of valid samples can report zero distance.
 
 The distance describes the sampled path. It cannot measure movement between samples. `wait_here` also reports `elapsed_ms` and `displacement_meters`. `face_player` also reports `heading_error_degrees`. These receipts remain unverified until the Windows rig confirms native behavior.
+
+## Pin persistence test
+
+CAUTION: Save the game before this test. The persistence call is unverified.
+
+1. Deploy a Debug build.
+2. Set `EnableUnverifiedPinPersistence=true` in the INI's `[Development]` section.
+3. Reload the adapter through the SHVDN console.
+4. Run the pin rig test script in the [capability sheet](actions/ped-classification-and-pin.md).
+5. Record whether the pinned ped keeps its task, stays loaded, and is released after a reset or reload.
+6. Restore `EnableUnverifiedPinPersistence=false` after the test.
+
+Without this setting, a pinned ped is registered but the game may still despawn it. The pinned identity and its memories remain either way.
 
 ## Recovery and rollback
 

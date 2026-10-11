@@ -7,7 +7,7 @@ G0 is **not done**. The source builds on this Mac. No Windows rig, second Mac, g
 | .NET SDK | 10.0.100, macOS arm64 |
 | Public compile reference | SHVDN v3.6.0, SHA-256 pinned in `compatibility.yaml` |
 | Adapter build | `net48`, Debug and Release compile successfully |
-| Pure C# tests | 61 tests pass on `net10.0` |
+| Pure C# tests | 187 tests pass on `net10.0`. One reads `GTA.PedHash` from the compile reference |
 | Actual C# → Python HTTP round trip | Passed with a simulated game and explicit fake provider |
 | Native actions | `face_player` and `wait_here` have provisional executors. Runtime support is unverified. |
 | Release native capabilities | Empty until the rig establishes support |
@@ -21,13 +21,13 @@ The HTTP probe observed two rendered subtitle chunks, one final marker, one simu
 
 `LivingNPC.GameAdapter` targets `net48`. Only the SHVDN script thread calls GTA APIs. The worker has separate HTTP lanes for controls, observations/acknowledgments, and command polling. A stalled observation request or long poll does not block PTT. Body sizes and queue capacities are bounded.
 
-The action controller checks the session, runtime generation, immutable runtime instance, expiration, policy version, ownership, control policy, proximity, and current game state. Persistent actors qualify only when the adapter's current registry classifies them as mod-owned. The current native implementation creates no persistent actors. It never adopts a script-owned ped.
+The action controller checks the session, runtime generation, immutable runtime instance, expiration, policy version, ownership, control policy, proximity, and current game state. Persistent actors qualify only when the adapter's current registry classifies them as mod-owned. A pinned pedestrian enters that registry under its existing actor id. The registry keeps it only while it is still the mod's. The adapter never adopts a script-owned ped. It creates no curated persistent actors yet.
 
 The controller records `started` after task dispatch. It records `completed` only after the adapter observes the completion condition. Mission takeover cancels tracking without clearing the engine's task. Queue saturation stops dispatch. Pending acknowledgments stay queued for retry. Deferred terminal acknowledgments survive an acknowledgement-queue overflow in bounded session state.
 
-Targeting uses an explicit six-model civilian allowlist. Each transient binding gets a random decorator marker and runtime instance ID. A missing marker, changed model, or changed instance invalidates the binding. The marker is not a persistent identity. The allowlist and decorator behavior require rig verification.
+Targeting classifies nearby peds from sampled facts: model, ped type, relationship group, cuffed state, police vehicle, player group, mission flag, and owning script in Debug builds. A ped becomes a target only when its model, ped type, and relationship group all indicate a civilian and its ownership is ambient. The adapter and service share `data/ped_roles.json`. The service recomputes the role from the snapshot's facts and keeps the stricter result. Missing facts classify as unknown and protected. Refused peds receive no decorator. Each transient binding gets a random decorator marker and runtime instance ID. A missing marker, changed model, or changed instance invalidates the binding. The marker is not a persistent identity. The [classification capability sheet](actions/ped-classification-and-pin.md) lists the facts and expected values that require rig verification.
 
-The adapter uses Backspace to cancel by default. F6 selects a target. F7 opens a small typed input field, where a leading `/w ` whispers and `//` keeps a literal leading slash. N sends PTT controls. Holding B sends whispered PTT controls with the whisper flag locked at key-down. All five keys are configurable. The B default still requires a rig check for game key conflicts. The input field currently supports Latin letters, digits, spaces, and basic punctuation. Escape closes text input. Controller bindings, text composition, font scaling, and full accessibility remain incomplete.
+The adapter uses Backspace to cancel by default. F6 selects a target and reports `Available`, `Busy`, `Out of range`, or `Not available`. Without an eligible ped, it names the nearest refused role, for example `Nearest: police officer — not available`. F7 opens a small typed input field, where a leading `/w ` whispers and `//` keeps a literal leading slash. N sends PTT controls. Holding B sends whispered PTT controls with the whisper flag locked at key-down. F8 pressed twice pins the selected pedestrian. All six keys are configurable. The B and F8 defaults still require a rig check for game key conflicts. The input field currently supports Latin letters, digits, spaces, and basic punctuation. Escape closes text input. Controller bindings, text composition, font scaling, and full accessibility remain incomplete.
 
 Subtitles follow display rule v1. `service/lls/display.py` and `LivingNPC.Core/DisplayText.cs` implement it, and `tests/fixtures/display_text.json` holds the shared cases. The rule turns `~n~` into a space and removes GTA formatting tokens, tags, and any remaining `~`, `<`, or `>`. It turns control characters and line or paragraph separators into spaces, removes invisible format characters, and collapses whitespace without trimming. The service also applies NFC and removes every Unicode format, private-use, and surrogate code point, so its output always passes the adapter check.
 
@@ -39,7 +39,7 @@ The service applies the rule before speech synthesis, queuing, delivery receipts
 
 The registry grants no capabilities. Every executor is marked unverified. The adapter's native capability gate and live-state policy remain separate. G0 additionally limits face/wait durations to five seconds.
 
-Transient bindings now leave the registry after despawn, identity mismatch, script takeover, or distance beyond 60 meters. The adapter queues `actor.removed` for the service. Cancellation records remain for 125 seconds, beyond the 120-second speech command window. Saturation fails closed instead of evicting an active cancellation record.
+Transient bindings now leave the registry after despawn, identity mismatch, script takeover, or distance beyond 60 meters. The adapter queues `actor.removed` for the service. The service then releases that runtime binding. A recycled handle can bind a new identity, which never sees the old identity's memories. A released ambient identity cannot bind any entity again. Cancellation records remain for 125 seconds, beyond the 120-second speech command window. Saturation fails closed instead of evicting an active cancellation record.
 
 ## Remaining G0 checks
 
@@ -61,7 +61,7 @@ Store the evidence under `docs/evidence/g0/` only after each procedure runs. Rec
 
 The compile reference does not establish compatibility with a current GTA build. Do not install the v3.6.0 loader merely because the project uses its API reference. The rig must use one complete compatible SHVDN release.
 
-Curated spawn/reconciliation, adoption, controller input, persistent identity binding, full native action coverage, and complete input accessibility remain incomplete. Native status values, heading conditions, decorator reliability, mission ownership, random events, and pause behavior require recorded tests.
+Curated spawn/reconciliation, verified pin persistence, controller input, persistent identity binding, full native action coverage, and complete input accessibility remain incomplete. Native status values, heading conditions, decorator reliability, mission ownership, random events, and pause behavior require recorded tests.
 
 The adapter cannot detect every save-load boundary from dates alone. It detects loading state, protagonist changes, and a full-date rewind. An explicit profile and optional parent branch selection remain necessary for ambiguous saves.
 

@@ -6,7 +6,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from service.lls.__main__ import fixture_event, fixture_session
+from service.lls.__main__ import fixture_event, fixture_role_fields, fixture_session
 from service.lls.app import create_app
 from service.lls.display import DISPLAY_MAX_CHARS, is_display_safe
 from service.lls.perception_bridge import DEVELOPMENT_PERCEPTION_CAPABILITY
@@ -89,6 +89,7 @@ async def scene(tmp_path):
                     "name": "Neighbor",
                     "area_id": "block",
                     "interior_id": "street",
+                    **fixture_role_fields(),
                 },
                 "npc-1",
             )

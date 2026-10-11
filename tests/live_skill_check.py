@@ -17,7 +17,11 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from service.lls.__main__ import fixture_event, fixture_session  # noqa: E402
+from service.lls.__main__ import (  # noqa: E402
+    fixture_event,
+    fixture_role_fields,
+    fixture_session,
+)
 
 
 @contextmanager
@@ -129,6 +133,7 @@ async def exercise(endpoint, *, retained=False):
                         "position": {"x": 0.0, "y": 0.0, "z": 0.0},
                         "name": "Skill Fixture",
                         "actor_kind": "curated_persistent",
+                        **fixture_role_fields(),
                     },
                     "skill-npc",
                 )

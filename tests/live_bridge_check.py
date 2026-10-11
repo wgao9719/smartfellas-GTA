@@ -32,10 +32,49 @@ def stored_payloads(database, event_type):
     return [event["payload"] for event in events if event["event_type"] == event_type]
 
 
+def verify_pin(database, probe):
+    """The promoted actor and its pre-pin conversation outlive the closed session."""
+    sys.path.insert(0, str(ROOT))
+    from service.lls.storage import Repository
+
+    profile, actor_id = probe["profile_id"], probe["pinned_actor_id"]
+    with Repository(database) as repo:
+        actor = repo.get_actor(profile, actor_id) or {}
+        memories = repo.list_memories(profile, actor_id, limit=500)
+        before = [m for m in memories if m["text"] == "The player said: Please look at me."]
+        ended = repo.connection.execute(
+            "SELECT COUNT(*) FROM game_sessions WHERE profile_id=? AND ended_at IS NOT NULL",
+            (profile,),
+        ).fetchone()[0]
+        officer = repo.get_actor(profile, "probe-cop")
+    result = {
+        "status": "passed",
+        "mode": "pinned_identity_durability",
+        "actor_kind": actor.get("actor_kind"),
+        "pre_pin_memories": len(before),
+        "durable_memories": sum(m["session_id"] is None for m in memories),
+        "memories": len(memories),
+        "sessions_closed": ended,
+        "ambient_officer_purged": officer is None,
+        "game_verified": False,
+    }
+    if (
+        result["actor_kind"] != "spawned_persistent"
+        or actor.get("session_id") is not None
+        or not before
+        or result["durable_memories"] != len(memories)
+        or ended != 1
+        or officer is not None
+    ):
+        raise RuntimeError("Pinned identity did not survive session close: " + json.dumps(result))
+    print(json.dumps(result))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--speech", action="store_true", help="Use synthetic audio devices")
     parser.add_argument("--whisper", action="store_true", help="Whisper the typed or spoken input")
+    parser.add_argument("--pin", action="store_true", help="Pin a pedestrian and check durability")
     args = parser.parse_args()
     bundled = ROOT / ".dotnet" / ("dotnet.exe" if os.name == "nt" else "dotnet")
     dotnet = os.environ.get("LLS_DOTNET") or shutil.which("dotnet")
@@ -96,7 +135,7 @@ def main():
                         time.sleep(0.05)
                 else:
                     raise RuntimeError("Isolated service did not become ready.")
-                subprocess.run(
+                probe = subprocess.run(
                     [
                         dotnet,
                         "run",
@@ -108,38 +147,43 @@ def main():
                         endpoint,
                         *(["--speech"] if args.speech else []),
                         *(["--whisper"] if args.whisper else []),
+                        *(["--pin"] if args.pin else []),
                     ],
                     cwd=ROOT,
                     env=environment,
                     check=True,
                     timeout=90,
+                    capture_output=args.pin,
+                    text=True,
                 )
-                # Durable receipts must quote display-safe text with the sanitized speaker.
-                delivered = stored_payloads(database, "dialogue.delivered")
-                assert len(delivered) == 2, delivered
-                for payload in delivered:
-                    assert is_display_safe(payload["text"]) and payload["text"].strip(), payload
-                    assert payload["display_rule"] == DISPLAY_RULE, payload
-                    assert payload["speaker"] == "Probe Neighbor", payload
-                # The adapter parses "/w". The service stores literal text with the locked volume.
-                [spoken] = stored_payloads(database, "player.utterance_text")
-                assert spoken["text"] == "Please look at me.", spoken
-                assert spoken["whisper"] is args.whisper, spoken
-                assert spoken["input_mode"] == ("voice" if args.speech else "typed"), spoken
-                print(
-                    json.dumps(
-                        {
-                            "check": "durable_receipts",
-                            "delivered_events": len(delivered),
-                            "display_rule": DISPLAY_RULE,
-                            "speaker": "Probe Neighbor",
-                            "utterance_events": 1,
-                            "utterance_whisper": spoken["whisper"],
-                            "utterance_input_mode": spoken["input_mode"],
-                        },
-                        sort_keys=True,
+                # Pin mode runs its own conversation and checks durability in verify_pin.
+                if not args.pin:
+                    # Durable receipts must quote display-safe text with the sanitized speaker.
+                    delivered = stored_payloads(database, "dialogue.delivered")
+                    assert len(delivered) == 2, delivered
+                    for payload in delivered:
+                        assert is_display_safe(payload["text"]) and payload["text"].strip(), payload
+                        assert payload["display_rule"] == DISPLAY_RULE, payload
+                        assert payload["speaker"] == "Probe Neighbor", payload
+                    # The adapter parses "/w"; the service keeps the text and the locked volume.
+                    [spoken] = stored_payloads(database, "player.utterance_text")
+                    assert spoken["text"] == "Please look at me.", spoken
+                    assert spoken["whisper"] is args.whisper, spoken
+                    assert spoken["input_mode"] == ("voice" if args.speech else "typed"), spoken
+                    print(
+                        json.dumps(
+                            {
+                                "check": "durable_receipts",
+                                "delivered_events": len(delivered),
+                                "display_rule": DISPLAY_RULE,
+                                "speaker": "Probe Neighbor",
+                                "utterance_events": 1,
+                                "utterance_whisper": spoken["whisper"],
+                                "utterance_input_mode": spoken["input_mode"],
+                            },
+                            sort_keys=True,
+                        )
                     )
-                )
             finally:
                 service.terminate()
                 try:
@@ -147,6 +191,10 @@ def main():
                 except subprocess.TimeoutExpired:
                     service.kill()
                     service.wait(timeout=3)
+            if args.pin:
+                print(probe.stdout, end="")
+                lines = probe.stdout.strip().splitlines()
+                verify_pin(Path(temporary) / "probe.sqlite3", json.loads(lines[-1]))
 
 
 if __name__ == "__main__":

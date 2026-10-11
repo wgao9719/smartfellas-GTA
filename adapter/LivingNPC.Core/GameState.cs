@@ -24,6 +24,9 @@ namespace LivingNPC.Core
         public Ownership Ownership;
         public ControlPolicy Policy;
         public float X, Y, Z;
+        public PedRole Role;
+        public string RoleReason = "unclassified", Kind = "ambient_ephemeral";
+        public PedFacts? Facts;
     }
     public enum EffectStatus { Running, Completed, Failed, TakenOver }
     public sealed class EffectObservation
@@ -45,5 +48,7 @@ namespace LivingNPC.Core
         void ShowSubtitle(string speaker, string text);
         void ClearSubtitle();
         void ShowStatus(string state, string message);
+        // Registers the ped as mod-owned under the same actor id. False refuses and drops the binding.
+        bool Pin(Command command, ActorState actor, string displayName);
     }
 }

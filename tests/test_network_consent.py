@@ -92,7 +92,7 @@ async def probe_service(database, operation):
     probe.install()
     import httpx
 
-    from service.lls.__main__ import fixture_event, fixture_session
+    from service.lls.__main__ import fixture_event, fixture_role_fields, fixture_session
     from service.lls.app import create_app
     from service.lls.providers import OpenAIProvider
     from service.lls.settings import Settings
@@ -185,6 +185,7 @@ async def probe_service(database, operation):
                             "busy": False,
                             "position": {"x": 0, "y": 0, "z": 0},
                             "name": "Synthetic Neighbor",
+                            **fixture_role_fields(),
                         },
                         "probe-npc",
                     ),

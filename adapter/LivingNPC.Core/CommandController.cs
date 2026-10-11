@@ -120,6 +120,16 @@ namespace LivingNPC.Core
                 subtitles.Enqueue(new Subtitle { Command = command, Speaker = speaker, Text = text });
                 return;
             }
+            if (command.Kind == "actor.pin")
+            {
+                var name = command.Payload["display_name"] is JValue { Type: JTokenType.String } named ? (string?)named : null;
+                var persistent = command.Payload["actor_kind"] is JValue { Type: JTokenType.String } kind && (string?)kind == "spawned_persistent";
+                var refusal = PinPolicy.Check(actor, world, Generation) ?? PinPolicy.ValidateName(name) ??
+                    (!persistent ? "invalid_actor_kind" : active.ContainsKey(actor!.ActorId) ? "actor_task_conflict" : null);
+                if (refusal != null) { Acknowledge(command, "rejected", refusal); return; }
+                if (!game.Pin(command, actor!, name!)) { Acknowledge(command, "rejected", "pin_refused"); return; }
+                Acknowledge(command, "completed", "pinned", new Dictionary<string, object> { ["actor_id"] = actor!.ActorId }); return;
+            }
             if (command.Kind != "action.execute") { Acknowledge(command, "rejected", "unknown_command"); return; }
             if (active.ContainsKey(actor!.ActorId)) { Acknowledge(command, "rejected", "actor_task_conflict"); return; }
             var action = (string)command.Payload["action_id"]!;

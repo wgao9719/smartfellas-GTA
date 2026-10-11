@@ -2,7 +2,7 @@ import io
 import json
 import sys
 
-from service.lls.__main__ import fake_demo, fixture_event
+from service.lls.__main__ import fake_demo, fixture_event, fixture_role_fields
 
 
 async def test_demo_prints_ascii_json_through_a_redirected_windows_code_page(tmp_path, monkeypatch):
@@ -28,6 +28,7 @@ async def test_demo_prints_ascii_json_through_a_redirected_windows_code_page(tmp
         "busy": False,
         "position": {"x": 0, "y": 0, "z": 0},
         "name": name,
+        **fixture_role_fields(),
     }
     events = [
         fixture_event("replay", 1, "world.snapshot", world),

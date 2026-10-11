@@ -19,7 +19,7 @@ from pydantic import Field, ValidationError, field_validator
 
 from .embeddings import EmbeddingConfig
 from .gateway_config import GatewayConfig, validate_local_endpoint
-from .protocol import StrictModel
+from .protocol import DisplayName, StrictModel
 from .settings import Settings
 
 
@@ -35,6 +35,10 @@ class ConfirmProfile(StrictModel):
 
 class ConfirmActor(StrictModel):
     confirm_actor_id: str = Field(min_length=1, max_length=128)
+
+
+class PinActor(ConfirmActor):
+    display_name: DisplayName | None = None
 
 
 class ConfirmMemory(StrictModel):
@@ -347,6 +351,12 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
                     {
                         "actor_id": actor_id,
                         **{k: v for k, v in actor.items() if not k.startswith("_")},
+                        **dict(
+                            zip(
+                                ("pin_eligible", "pin_reason"),
+                                runtime.pin_eligibility(session, actor_id),
+                            )
+                        ),
                     }
                     for actor_id, actor in session.actors.items()
                 ],
@@ -438,6 +448,47 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
                 raise HTTPException(404, "actor not found in this profile")
             await runtime.db("reset_actor", profile_id, actor_id)
             return result({"status": "reset", "actor_id": actor_id})
+
+    @secured.post("/sessions/{session_id}/actors/{actor_id}/pin")
+    async def pin_actor(session_id: str, actor_id: str, body: PinActor):
+        if body.confirm_actor_id != actor_id:
+            raise HTTPException(409, "actor confirmation mismatch")
+        session = runtime.sessions.get(session_id)
+        if session is None:
+            raise HTTPException(404, "session not found")
+        # The same mutation, profile, and session lock order as every other admin change.
+        async with mutation_lock, runtime.profile_lock(session.request.profile_id), session.lock:
+            pin, refusal = await runtime.pin_locked(
+                session, actor_id, display_name=body.display_name
+            )
+            if refusal:
+                raise HTTPException(409, refusal)
+            return result(
+                {
+                    "status": "pin_requested" if pin["state"] == "pending" else pin["state"],
+                    "actor_id": actor_id,
+                    "display_name": pin["display_name"],
+                    "actor_kind": "spawned_persistent",
+                }
+            )
+
+    @secured.delete("/profiles/{profile_id}/actors/{actor_id}")
+    async def forget_pinned_actor(profile_id: str, actor_id: str, body: ConfirmActor):
+        if body.confirm_actor_id != actor_id:
+            raise HTTPException(409, "actor confirmation mismatch")
+        async with mutate_profile(profile_id):
+            actor = await runtime.db("get_actor", profile_id, actor_id)
+            if actor is None:
+                raise HTTPException(404, "actor not found in this profile")
+            if actor.get("actor_kind") != "spawned_persistent" or not actor.get(
+                "pinned_from_session"
+            ):
+                raise HTTPException(409, "only pinned pedestrians can be forgotten")
+            for session in runtime.sessions.values():
+                if session.request.profile_id == profile_id:
+                    runtime.forget_pinned_locked(session, actor_id)
+            await runtime.db("forget_pinned_actor", profile_id, actor_id)
+            return result({"status": "forgotten", "actor_id": actor_id})
 
     @secured.get("/profiles/{profile_id}/export")
     async def export_profile(profile_id: str):

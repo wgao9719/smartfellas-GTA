@@ -130,6 +130,8 @@
       <button id="refresh-diagnostics">Refresh session</button>
     </div>
     <p id="diagnostic-summary" class="muted small">Connect the game bridge to inspect a session.</p>
+    <div id="diagnostic-pins" class="actions"></div>
+    <p class="small muted">Pin keeps an ordinary pedestrian and this session’s conversation with them. The game must confirm the pin. They may not return after you leave.</p>
     <details><summary>Nearby characters and world state</summary><pre id="diagnostic-actors">No session selected.</pre></details>
     <details><summary>Dialogue and action queue</summary><pre id="diagnostic-commands">No session selected.</pre></details>
     <details><summary>Context sources, decisions, and timing</summary><pre id="diagnostic-trace">No session selected.</pre></details>
@@ -153,6 +155,10 @@
       <details><summary>Reset this character</summary>
         <p class="warning">WARNING: Resetting a character deletes its memories, knowledge, and relationship history across all branches.</p>
         <button id="reset-actor" class="danger" disabled>Reset character data</button>
+      </details>
+      <details><summary>Forget pinned character</summary>
+        <p class="warning">WARNING: Forgetting a pinned pedestrian permanently deletes the character, its memories, knowledge, and relationship history.</p>
+        <button id="forget-actor" class="danger" disabled>Forget pinned character</button>
       </details>
     </section>
   </div>
@@ -188,6 +194,7 @@
   <h2 id="confirm-title"></h2><p id="confirm-warning" class="warning"></p>
   <p id="confirm-target" class="small"></p>
   <label for="confirm-input">Type the exact identifier<input id="confirm-input" autocomplete="off" spellcheck="false"></label>
+  <label id="confirm-name-label" for="confirm-name" hidden>Display name (optional)<input id="confirm-name" maxlength="48" autocomplete="off" spellcheck="false"></label>
   <div class="actions"><button id="confirm-cancel">Cancel</button><button id="confirm-accept" class="danger">Confirm</button></div>
 </dialog>
 <script nonce="__CSP_NONCE__">
@@ -214,7 +221,7 @@
     });
     const data = await response.json();
     if (!response.ok) throw Error(typeof data.detail==='string'?data.detail:'The request failed.');
-    if(method!=='GET'&&method!=='HEAD'&&path.startsWith('/profiles/'))invalidateDataViews();
+    if(method!=='GET'&&method!=='HEAD'&&/^\/(profiles|sessions)\//.test(path))invalidateDataViews();
     return data;
   }
   const profilePath = () => '/profiles/'+encodeURIComponent(state.profile);
@@ -227,10 +234,11 @@
     try {await handler();} catch(error) {status(error.message,true);}
     finally {if(node) node.disabled=false;}
   }
-  function confirmTarget(title, warning, target) {
+  function confirmTarget(title, warning, target, withName=false) {
     return new Promise(resolve=>{
       confirmation={resolve,target};el('confirm-title').textContent=title;
       el('confirm-warning').textContent=warning;el('confirm-target').textContent=target;
+      el('confirm-name-label').hidden=!withName;el('confirm-name').value='';
       el('confirm-input').value='';el('confirm-accept').disabled=true;
       el('confirm-dialog').showModal();el('confirm-input').focus();
     });
@@ -253,7 +261,7 @@
     el('previous').disabled=true;el('next').disabled=true;
   }
   function clearDiagnostics(){
-    diagnosticsGeneration++;
+    diagnosticsGeneration++;el('diagnostic-pins').replaceChildren();
     el('diagnostic-summary').textContent='Refresh the session to load current data.';
     for(const field of ['actors','commands','trace','perception','manifest'])
       el('diagnostic-'+field).textContent='No current session data.';
@@ -396,13 +404,27 @@
       perception:{perception:data.perception,triggers:data.triggers,social:data.social,social_scheduler:data.social_scheduler},
       manifest:{manifest:data.manifest,heartbeat:data.heartbeat,game_verified:data.game_verified}};
     for(const field of fields)el('diagnostic-'+field).textContent=JSON.stringify(values[field],null,2);
+    for(const actor of data.closed?[]:data.actors){
+      if(actor.pin_eligible!==true)continue;
+      const label=(actor.name||'Pedestrian')+' ('+String(actor.actor_id).slice(0,8)+')';
+      el('diagnostic-pins').append(button('Pin '+label,()=>pinActor(session,actor.actor_id,label)));
+    }
+  }
+  async function pinActor(session,actor,label) {
+    if(!await confirmTarget('Pin this pedestrian','Pinning permanently keeps '+label+
+      ' and this session’s conversation with them. They may not return after you leave.',actor,true))return;
+    const name=el('confirm-name').value.trim();
+    const data=await api('/sessions/'+encodeURIComponent(session)+'/actors/'+encodeURIComponent(actor)+'/pin',
+      'POST',name?{confirm_actor_id:actor,display_name:name}:{confirm_actor_id:actor});
+    await loadDiagnostics();if(state.profile)await loadProfile();
+    status('Pin requested for '+data.display_name+'. The game confirms it shortly.');
   }
   async function loadProfile() {
     state.generation++;state.actor=null;state.actors=[];state.offset=0;clearExport();clearMemories();
     el('actor-list').replaceChildren();
     el('persona').textContent='';el('memory-title').textContent='Select a character';
     el('actor-description').textContent='Choose a character to inspect its profile and memories.';
-    el('reset-actor').disabled=true;el('previous').disabled=true;el('next').disabled=true;
+    el('reset-actor').disabled=true;el('forget-actor').disabled=true;el('previous').disabled=true;el('next').disabled=true;
     for(const id of ['export-profile','erase-profile'])el(id).disabled=!state.profile;
     if(!state.profile){el('branches').textContent='No saved histories yet.';return;}
     const generation=state.generation;
@@ -412,7 +434,8 @@
     for(const actor of state.actors){
       const choice=button(actor.display_name||actor.id,()=>selectActor(actor));
       choice.className='actor-choice';choice.dataset.actor=actor.id;choice.setAttribute('aria-pressed','false');
-      const subtitle=document.createElement('span');subtitle.textContent=actor.occupation||actor.actor_kind;
+      const subtitle=document.createElement('span');
+      subtitle.textContent=actor.pinned_from_session?'Pinned pedestrian':actor.occupation||actor.actor_kind;
       choice.append(subtitle);el('actor-list').append(choice);
     }
     if(!state.actors.length)el('actor-list').textContent='No characters in this profile.';
@@ -435,8 +458,10 @@
   async function selectActor(actor) {
     state.actor=actor;state.offset=0;state.generation++;
     el('memory-title').textContent=actor.display_name||actor.id;
-    el('actor-description').textContent=actor.short_bio||actor.persona?.biography||actor.actor_kind;
+    el('actor-description').textContent=(actor.pinned_from_session?'Pinned pedestrian. ':'')+
+      (actor.short_bio||actor.persona?.biography||actor.actor_kind);
     el('persona').textContent=JSON.stringify(actor,null,2);el('reset-actor').disabled=false;
+    el('forget-actor').disabled=!actor.pinned_from_session;
     for(const choice of el('actor-list').children)
       choice.setAttribute('aria-pressed',String(choice.dataset.actor===actor.id));
     await loadMemories();
@@ -492,6 +517,12 @@
     if(!await confirmTarget('Reset character data','WARNING: This deletes all memories, knowledge, and relationship history for this character.',actor))return;
     await api('/profiles/'+encodeURIComponent(profile)+'/actors/'+encodeURIComponent(actor)+'/reset','POST',{confirm_actor_id:actor});
     await reloadMemoryViews();status('Character data reset. Its authored profile remains.');
+  }));
+  el('forget-actor').addEventListener('click',()=>run(async()=>{
+    if(!state.actor?.pinned_from_session)return;const actor=state.actor.id,profile=state.profile;
+    if(!await confirmTarget('Forget pinned character','WARNING: This permanently deletes this pinned pedestrian and its memories, knowledge, and relationship history.',actor))return;
+    await api('/profiles/'+encodeURIComponent(profile)+'/actors/'+encodeURIComponent(actor),'DELETE',{confirm_actor_id:actor});
+    await loadProfile();status('Pinned character forgotten.');
   }));
   el('export-profile').addEventListener('click',()=>run(async()=>{
     clearExport();

@@ -25,7 +25,9 @@ from .perception import DeliveredUtterance, PerceptionLimits, witnesses_for
 from .perception_bridge import DEVELOPMENT_PERCEPTION_CAPABILITY
 from .protocol import Command
 from .providers import create_provider, effective_provider_settings, persist_provider_configuration
+from .roles import ROLE_POLICIES, ownership_from_facts, revalidate
 from .runtime_outcomes import OutcomeRuntime
+from .runtime_pin import PinRuntime
 from .runtime_skills import SkillRuntime
 from .runtime_social import SocialRuntime
 from .runtime_speech import SpeechRuntime
@@ -107,6 +109,8 @@ class Session:
     skill_task: asyncio.Task | None = None
     skill_cleanup: list = field(default_factory=list)
     skill_run: dict | None = None
+    pins: OrderedDict = field(default_factory=OrderedDict)
+    last_pin_at: float = float("-inf")
     game_datetime: str = ""
     last_activity: float = field(default_factory=time.monotonic)
     world: dict = field(default_factory=dict)
@@ -127,7 +131,7 @@ class Session:
     trace: deque = field(default_factory=lambda: deque(maxlen=200))
 
 
-class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
+class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRuntime):
     def __init__(
         self,
         settings,
@@ -427,6 +431,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
         )
 
     def expire_commands(self, session):
+        expired_pins = []
         for command in session.commands.values():
             if (
                 command["state"] not in TERMINAL
@@ -437,6 +442,11 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                 self.record_outcome(
                     session, command, "expired", "authorization expired before completion"
                 )
+                if command["kind"] == "actor.pin":
+                    expired_pins.append(command)
+        # Settling queues a status command, so it runs after iteration.
+        for command in expired_pins:
+            self.settle_pin(session, command)
 
     def cancel(self, session, scene_id=None):
         session.epoch += 1
@@ -971,6 +981,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
         if event.kind == "actor.snapshot":
             if event.seq <= session.actor_seq.get(actor_id, 0):
                 return
+            if self.pin_detached(session, actor_id):
+                # A saved identity whose pin failed or was forgotten has no embodiment here.
+                session.actor_seq[actor_id] = event.seq
+                return
             if actor_id not in session.actors and len(session.actors) >= self.settings.max_actors:
                 raise HTTPException(429, "actor limit reached")
             prior = session.actors.get(actor_id)
@@ -1012,10 +1026,22 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                 event.runtime_generation,
             )
             payload = dict(payload)
-            authored_policy = actor.get("control_policy", "ambient")
-            if "protected" in {authored_policy, payload["control_policy"]}:
+            stored_kind = actor.get("actor_kind")
+            policies = {actor.get("control_policy", "ambient"), payload["control_policy"]}
+            if stored_kind != "anchored_service":
+                # FR-ACT-02: recompute role and ownership from facts; a label cannot widen policy.
+                payload["role_class"], payload["role_reason"] = revalidate(payload)
+                policies.add(ROLE_POLICIES[payload["role_class"]])
+                if ownership_from_facts(payload["ped_facts"])[0] not in {"ambient", "mod_owned"}:
+                    policies.add("protected")
+            if (
+                payload["ownership"] == "mod_owned"
+                and "ambient_ephemeral" in {stored_kind, payload["actor_kind"]}
+            ) or (stored_kind == "ambient_ephemeral" and payload["actor_kind"] != stored_kind):
+                policies.add("protected")
+            if "protected" in policies:
                 payload["control_policy"] = "protected"
-            elif "service_limited" in {authored_policy, payload["control_policy"]}:
+            elif "service_limited" in policies:
                 payload["control_policy"] = "service_limited"
             payload["allowed_actions"] = [
                 a for a in session.request.capabilities if a in actor.get("allowed_actions", [])
@@ -1038,6 +1064,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
             if event.seq > session.actor_seq.get(actor_id, 0):
                 session.actors.pop(actor_id, None)
                 session.actor_seq[actor_id] = event.seq
+                # The adapter dropped this binding; a recycled handle needs a fresh identity.
+                await self.db(
+                    "release_instance", session.request.profile_id, session.id, actor_id=actor_id
+                )
                 self.cancel(session)
                 await self.stop_session_work(session)
         elif event.kind == "world.snapshot":
@@ -1072,6 +1102,8 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
             await self.save_event(session, event, observers=[], provenance="unverified")
         elif event.kind == "player.utterance_text":
             await self.accept_utterance_locked(session, event)
+        elif event.kind == "actor.pin_requested":
+            await self.pin_requested_locked(session, event)
         if session.social_scenes and event.kind in {"actor.snapshot", "world.snapshot"}:
             await self.refresh_social_locked(session)
 
@@ -1421,6 +1453,8 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
         command = session.commands.get(command_id)
         if command is None:
             raise HTTPException(404, "unknown command")
+        if command["kind"] == "actor.pin":
+            return await self.acknowledge_pin_locked(session, command, ack)
         if command.get("_audio_pending") and not internal_audio:
             observed = ack.observed or {}
             actual = observed.get("text", "")

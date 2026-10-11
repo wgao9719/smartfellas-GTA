@@ -10,7 +10,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from service.lls.__main__ import fixture_event, fixture_session
+from service.lls.__main__ import fixture_event, fixture_role_fields, fixture_session
 from service.lls.app import create_app
 from service.lls.runtime_skills import DEVELOPMENT_SKILLS_CAPABILITY
 from service.lls.settings import Settings
@@ -92,6 +92,7 @@ async def skill_scene(tmp_path):
                         "position": {"x": 0.0, "y": 0.0, "z": 0.0},
                         "name": "Avery",
                         "actor_kind": "curated_persistent",
+                        **fixture_role_fields(),
                     },
                     "npc",
                 ),

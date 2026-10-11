@@ -22,6 +22,8 @@ The Mac builds the adapter and runs service tests. GTA runs on the Windows rig. 
    dotnet test adapter/LivingNPC.Core.Tests/LivingNPC.Core.Tests.csproj
    ```
 
+   Fetch the compile reference first. One test reads `GTA.PedHash` from it to check every role-table model name. Without the reference, that test fails and names the fetch command.
+
 6. Run the Python tests.
 
    ```sh

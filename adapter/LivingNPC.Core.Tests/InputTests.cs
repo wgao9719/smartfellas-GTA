@@ -22,7 +22,7 @@ public sealed class InputTests
 
     [Theory]
     [InlineData("instance")][InlineData("actor")][InlineData("generation")][InlineData("distance")]
-    [InlineData("mission")][InlineData("dead")][InlineData("combat")][InlineData("ownership")]
+    [InlineData("mission")][InlineData("dead")][InlineData("combat")][InlineData("ownership")][InlineData("protected")]
     public void BoundInputInvalidatesWhenActorOrWorldChanges(string change)
     {
         var game = new FakeGame(); var input = new ConversationInput();
@@ -37,6 +37,7 @@ public sealed class InputTests
             case "dead": game.Actor.Alive = false; break;
             case "combat": game.Actor.InCombat = true; break;
             case "ownership": game.Actor.Ownership = Ownership.GameScriptOwned; break;
+            case "protected": game.Actor.Policy = ControlPolicy.Protected; game.Actor.Role = PedRole.Prisoner; break;
         }
         Assert.False(input.IsCurrent(game.Actor, game.World, 7));
         input.Reset(); Assert.False(input.PushToTalkHeld);

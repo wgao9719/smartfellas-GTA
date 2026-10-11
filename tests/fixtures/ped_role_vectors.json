@@ -1,0 +1,869 @@
+{
+  "schema_version": 1,
+  "table_version": "1",
+  "cases": [
+    {
+      "name": "civilian_full_evidence",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "civilian",
+        "ownership": "ambient",
+        "policy": "ambient",
+        "reason": "civilian_evidence"
+      }
+    },
+    {
+      "name": "civilian_female_evidence",
+      "facts": {
+        "model_hash": -945854168,
+        "ped_type": 5,
+        "relationship_group_hash": 1191392768,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "civilian",
+        "ownership": "ambient",
+        "policy": "ambient",
+        "reason": "civilian_evidence"
+      }
+    },
+    {
+      "name": "facts_unavailable",
+      "facts": null,
+      "expected": {
+        "role": "unknown",
+        "ownership": "unknown",
+        "policy": "protected",
+        "reason": "facts_unavailable"
+      }
+    },
+    {
+      "name": "police_full_evidence",
+      "facts": {
+        "model_hash": 1581098148,
+        "ped_type": 6,
+        "relationship_group_hash": -1533126372,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "police",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "model_police"
+      }
+    },
+    {
+      "name": "police_ped_type_only",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 6,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "police",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "ped_type_police"
+      }
+    },
+    {
+      "name": "swat_ped_type_only",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 27,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "police",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "ped_type_police"
+      }
+    },
+    {
+      "name": "cop_group_only",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": -1533126372,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "police",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "relationship_group_police"
+      }
+    },
+    {
+      "name": "army_group_only",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": -472287501,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "military",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "relationship_group_military"
+      }
+    },
+    {
+      "name": "security_group_only",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": -183807561,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "security",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "relationship_group_security"
+      }
+    },
+    {
+      "name": "fireman_ped_type_only",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 21,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "emergency",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "ped_type_emergency"
+      }
+    },
+    {
+      "name": "medic_group_only",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": -1337836896,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "emergency",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "relationship_group_emergency"
+      }
+    },
+    {
+      "name": "prisoner_group_only",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 2124571506,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "prisoner",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "relationship_group_prisoner"
+      }
+    },
+    {
+      "name": "gang_full_evidence",
+      "facts": {
+        "model_hash": -198252413,
+        "ped_type": 15,
+        "relationship_group_hash": -1033021910,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "gang",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "model_gang"
+      }
+    },
+    {
+      "name": "gang_group_only",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 1166638144,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "gang",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "relationship_group_gang"
+      }
+    },
+    {
+      "name": "service_worker_model",
+      "facts": {
+        "model_hash": 416176080,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "service_worker",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "model_service_worker"
+      }
+    },
+    {
+      "name": "service_worker_ped_type",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 24,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "service_worker",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "ped_type_service_worker"
+      }
+    },
+    {
+      "name": "animal_model",
+      "facts": {
+        "model_hash": 351016938,
+        "ped_type": 28,
+        "relationship_group_hash": 1928531822,
+        "human": false,
+        "animal_model": true,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "animal",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "animal"
+      }
+    },
+    {
+      "name": "non_human_ped",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": false,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "animal",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "animal"
+      }
+    },
+    {
+      "name": "cuffed_civilian",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": true,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "prisoner",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "cuffed"
+      }
+    },
+    {
+      "name": "cuffed_officer",
+      "facts": {
+        "model_hash": 1581098148,
+        "ped_type": 6,
+        "relationship_group_hash": -1533126372,
+        "human": true,
+        "animal_model": false,
+        "cuffed": true,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "prisoner",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "cuffed"
+      }
+    },
+    {
+      "name": "civilian_in_police_vehicle",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": true,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "prisoner",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "in_police_vehicle"
+      }
+    },
+    {
+      "name": "officer_in_police_vehicle",
+      "facts": {
+        "model_hash": 1581098148,
+        "ped_type": 6,
+        "relationship_group_hash": -1533126372,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": true,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "police",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "model_police"
+      }
+    },
+    {
+      "name": "player_group_member",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": true,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "story_character",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "player_group_member"
+      }
+    },
+    {
+      "name": "story_model",
+      "facts": {
+        "model_hash": 1706635382,
+        "ped_type": 26,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "story_character",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "model_story_character"
+      }
+    },
+    {
+      "name": "protagonist_model",
+      "facts": {
+        "model_hash": 225514697,
+        "ped_type": 0,
+        "relationship_group_hash": 1862763509,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "protagonist",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "model_protagonist"
+      }
+    },
+    {
+      "name": "unlisted_model",
+      "facts": {
+        "model_hash": -1251702741,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "unknown",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "model_unlisted"
+      }
+    },
+    {
+      "name": "mission_ped_type",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 26,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "unknown",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "ped_type_unlisted"
+      }
+    },
+    {
+      "name": "bum_ped_type",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 23,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "unknown",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "ped_type_unlisted"
+      }
+    },
+    {
+      "name": "unlisted_group",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": -2143285144,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "unknown",
+        "ownership": "ambient",
+        "policy": "protected",
+        "reason": "relationship_group_unlisted"
+      }
+    },
+    {
+      "name": "mission_entity",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": true,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "civilian",
+        "ownership": "game_script_owned",
+        "policy": "protected",
+        "reason": "mission_entity"
+      }
+    },
+    {
+      "name": "owning_script",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false,
+        "owning_script": "am_hunting_ground"
+      },
+      "expected": {
+        "role": "civilian",
+        "ownership": "game_script_owned",
+        "policy": "protected",
+        "reason": "owning_script"
+      }
+    },
+    {
+      "name": "police_mission_entity",
+      "facts": {
+        "model_hash": 1581098148,
+        "ped_type": 6,
+        "relationship_group_hash": -1533126372,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": true,
+        "in_mod_registry": false,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "police",
+        "ownership": "game_script_owned",
+        "policy": "protected",
+        "reason": "mission_entity"
+      }
+    },
+    {
+      "name": "registered_civilian",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": true,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "civilian",
+        "ownership": "mod_owned",
+        "policy": "ambient",
+        "reason": "civilian_evidence"
+      }
+    },
+    {
+      "name": "registered_taken_by_script",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": true,
+        "in_mod_registry": true,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "civilian",
+        "ownership": "game_script_owned",
+        "policy": "protected",
+        "reason": "registered_ped_taken_by_script"
+      }
+    },
+    {
+      "name": "registered_with_persistence",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": true,
+        "in_mod_registry": true,
+        "took_persistence": true,
+        "belongs_to_mod_script": true
+      },
+      "expected": {
+        "role": "civilian",
+        "ownership": "mod_owned",
+        "policy": "ambient",
+        "reason": "civilian_evidence"
+      }
+    },
+    {
+      "name": "registered_persistence_lost",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": true,
+        "in_mod_registry": true,
+        "took_persistence": true,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "civilian",
+        "ownership": "game_script_owned",
+        "policy": "protected",
+        "reason": "registered_ped_taken_by_script"
+      }
+    },
+    {
+      "name": "registered_own_script_name",
+      "facts": {
+        "model_hash": -912318012,
+        "ped_type": 4,
+        "relationship_group_hash": 45677184,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": true,
+        "in_mod_registry": true,
+        "took_persistence": true,
+        "belongs_to_mod_script": true,
+        "owning_script": "shvdn"
+      },
+      "expected": {
+        "role": "civilian",
+        "ownership": "mod_owned",
+        "policy": "ambient",
+        "reason": "civilian_evidence"
+      }
+    },
+    {
+      "name": "registered_police_role",
+      "facts": {
+        "model_hash": 1581098148,
+        "ped_type": 6,
+        "relationship_group_hash": -1533126372,
+        "human": true,
+        "animal_model": false,
+        "cuffed": false,
+        "in_police_vehicle": false,
+        "player_group": false,
+        "mission_entity": false,
+        "in_mod_registry": true,
+        "took_persistence": false,
+        "belongs_to_mod_script": false
+      },
+      "expected": {
+        "role": "police",
+        "ownership": "mod_owned",
+        "policy": "protected",
+        "reason": "model_police"
+      }
+    }
+  ]
+}
