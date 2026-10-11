@@ -24,6 +24,7 @@ from .perception import DeliveredUtterance, PerceptionLimits, witnesses_for
 from .perception_bridge import DEVELOPMENT_PERCEPTION_CAPABILITY
 from .protocol import Command
 from .providers import create_provider, effective_provider_settings, persist_provider_configuration
+from .roles import ROLE_POLICIES, ownership_from_facts, revalidate
 from .runtime_outcomes import OutcomeRuntime
 from .runtime_skills import SkillRuntime
 from .runtime_social import SocialRuntime
@@ -983,10 +984,22 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                 event.runtime_generation,
             )
             payload = dict(payload)
-            authored_policy = actor.get("control_policy", "ambient")
-            if "protected" in {authored_policy, payload["control_policy"]}:
+            stored_kind = actor.get("actor_kind")
+            policies = {actor.get("control_policy", "ambient"), payload["control_policy"]}
+            if stored_kind != "anchored_service":
+                # FR-ACT-02: recompute role and ownership from facts; a label cannot widen policy.
+                payload["role_class"], payload["role_reason"] = revalidate(payload)
+                policies.add(ROLE_POLICIES[payload["role_class"]])
+                if ownership_from_facts(payload["ped_facts"])[0] not in {"ambient", "mod_owned"}:
+                    policies.add("protected")
+            if (
+                payload["ownership"] == "mod_owned"
+                and "ambient_ephemeral" in {stored_kind, payload["actor_kind"]}
+            ) or (stored_kind == "ambient_ephemeral" and payload["actor_kind"] != stored_kind):
+                policies.add("protected")
+            if "protected" in policies:
                 payload["control_policy"] = "protected"
-            elif "service_limited" in {authored_policy, payload["control_policy"]}:
+            elif "service_limited" in policies:
                 payload["control_policy"] = "service_limited"
             payload["allowed_actions"] = [
                 a for a in session.request.capabilities if a in actor.get("allowed_actions", [])

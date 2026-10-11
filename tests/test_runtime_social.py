@@ -6,7 +6,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from service.lls.__main__ import fixture_event, fixture_session
+from service.lls.__main__ import fixture_event, fixture_role_fields, fixture_session
 from service.lls.app import create_app
 from service.lls.settings import Settings
 from service.lls.social import FakeSocialProvider
@@ -71,7 +71,7 @@ async def social_scene(tmp_path):
                     "alive": True, "distance": 2 + i, "mission_entity": False, "busy": False,
                     "position": {"x": float(i), "y": 0.0, "z": 0.0}, "name": actor_id,
                     "actor_kind": "curated_persistent", "area_id": "block",
-                    "interior_id": "street",
+                    "interior_id": "street", **fixture_role_fields(),
                 }, actor_id))
             response = await client.post(
                 "/v1/bridge/events:batch", json={"session_id": session.id, "events": events}

@@ -19,7 +19,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from service.lls.__main__ import fixture_session  # noqa: E402
+from service.lls.__main__ import fixture_role_fields, fixture_session  # noqa: E402
 from service.lls.app import create_app  # noqa: E402
 from service.lls.providers import FakeProvider  # noqa: E402
 from service.lls.runtime import TERMINAL  # noqa: E402
@@ -227,6 +227,7 @@ async def run_load():
                         "position": {"x": float(index), "y": 0, "z": 0},
                         "name": actor_id,
                         "actor_kind": kind,
+                        **fixture_role_fields(),
                     }
 
                 participants = [actor for actor in ACTORS if actor != UNINVOLVED]

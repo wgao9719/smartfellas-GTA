@@ -11,6 +11,7 @@ import httpx
 import uvicorn
 
 from .app import create_app
+from .roles import joaat
 from .settings import Settings
 
 
@@ -32,6 +33,52 @@ def fixture_session():
             "service_os": "fake",
             "capability_flags": ["fake_game"],
         },
+    }
+
+
+def fixture_ped_facts(model="a_m_y_business_01", **overrides):
+    """Full civilian evidence from a simulated adapter. Tests override single facts."""
+    return {
+        "model_hash": joaat(model),
+        "ped_type": 4,
+        "relationship_group_hash": joaat("CIVMALE"),
+        "human": True,
+        "animal_model": False,
+        "cuffed": False,
+        "in_police_vehicle": False,
+        "player_group": False,
+        "mission_entity": False,
+        "in_mod_registry": False,
+        "took_persistence": False,
+        "belongs_to_mod_script": False,
+        **overrides,
+    }
+
+
+def fixture_role_fields(**facts):
+    return {
+        "role_class": "civilian",
+        "role_reason": "civilian_evidence",
+        "ped_facts": fixture_ped_facts(**facts),
+    }
+
+
+def fixture_actor_snapshot(**overrides):
+    """A complete ambient civilian snapshot. Missing facts would classify as protected."""
+    return {
+        "runtime_handle": 42,
+        "runtime_instance_id": "ped-1",
+        "ownership": "ambient",
+        "control_policy": "ambient",
+        "exists": True,
+        "alive": True,
+        "distance": 2,
+        "mission_entity": False,
+        "busy": False,
+        "position": {"x": 0, "y": 0, "z": 0},
+        "name": "Neighbor",
+        **fixture_role_fields(),
+        **overrides,
     }
 
 
@@ -91,19 +138,9 @@ async def fake_demo(replay_path=None):
                             sid,
                             2,
                             "actor.snapshot",
-                            {
-                                "runtime_handle": 42,
-                                "runtime_instance_id": "fake-ped-1",
-                                "ownership": "ambient",
-                                "control_policy": "ambient",
-                                "exists": True,
-                                "alive": True,
-                                "distance": 2,
-                                "mission_entity": False,
-                                "busy": False,
-                                "position": {"x": 0, "y": 0, "z": 0},
-                                "name": "Demo Neighbor",
-                            },
+                            fixture_actor_snapshot(
+                                runtime_instance_id="fake-ped-1", name="Demo Neighbor"
+                            ),
                             "demo-npc",
                         ),
                         fixture_event(

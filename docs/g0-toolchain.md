@@ -7,7 +7,7 @@ G0 is **not done**. The source builds on this Mac. No Windows rig, second Mac, g
 | .NET SDK | 10.0.100, macOS arm64 |
 | Public compile reference | SHVDN v3.6.0, SHA-256 pinned in `compatibility.yaml` |
 | Adapter build | `net48`, Debug and Release compile successfully |
-| Pure C# tests | 61 tests pass on `net10.0` |
+| Pure C# tests | 162 tests pass on `net10.0`. One reads `GTA.PedHash` from the compile reference |
 | Actual C# → Python HTTP round trip | Passed with a simulated game and explicit fake provider |
 | Native actions | `face_player` and `wait_here` have provisional executors. Runtime support is unverified. |
 | Release native capabilities | Empty until the rig establishes support |
@@ -25,9 +25,9 @@ The action controller checks the session, runtime generation, immutable runtime 
 
 The controller records `started` after task dispatch. It records `completed` only after the adapter observes the completion condition. Mission takeover cancels tracking without clearing the engine's task. Queue saturation stops dispatch. Pending acknowledgments stay queued for retry. Deferred terminal acknowledgments survive an acknowledgement-queue overflow in bounded session state.
 
-Targeting uses an explicit six-model civilian allowlist. Each transient binding gets a random decorator marker and runtime instance ID. A missing marker, changed model, or changed instance invalidates the binding. The marker is not a persistent identity. The allowlist and decorator behavior require rig verification.
+Targeting classifies nearby peds from sampled facts: model, ped type, relationship group, cuffed state, police vehicle, player group, mission flag, and owning script in Debug builds. A ped becomes a target only when its model, ped type, and relationship group all indicate a civilian and its ownership is ambient. The adapter and service share `data/ped_roles.json`. The service recomputes the role from the snapshot's facts and keeps the stricter result. Missing facts classify as unknown and protected. Refused peds receive no decorator. Each transient binding gets a random decorator marker and runtime instance ID. A missing marker, changed model, or changed instance invalidates the binding. The marker is not a persistent identity. The [classification capability sheet](actions/ped-classification-and-pin.md) lists the facts and expected values that require rig verification.
 
-The adapter uses Backspace to cancel by default. F6 selects a target. F7 opens a small typed input field. N sends PTT controls. All four keys are configurable. The input field currently supports Latin letters, digits, spaces, and basic punctuation. Escape closes text input. Controller bindings, text composition, font scaling, and full accessibility remain incomplete.
+The adapter uses Backspace to cancel by default. F6 selects a target and reports `Available`, `Busy`, `Out of range`, or `Not available`. Without an eligible ped, it names the nearest refused role, for example `Nearest: police officer — not available`. F7 opens a small typed input field. N sends PTT controls. All four keys are configurable. The input field currently supports Latin letters, digits, spaces, and basic punctuation. Escape closes text input. Controller bindings, text composition, font scaling, and full accessibility remain incomplete.
 
 ## Shared action contract
 

@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 from live_skill_check import server
 
-from service.lls.__main__ import fixture_event, fixture_session
+from service.lls.__main__ import fixture_event, fixture_role_fields, fixture_session
 
 
 async def exercise(endpoint, *, retained=False):
@@ -46,7 +46,7 @@ async def exercise(endpoint, *, retained=False):
                 "ownership": "ambient", "control_policy": "ambient", "exists": True,
                 "alive": True, "distance": 2, "mission_entity": False, "busy": False,
                 "position": {"x": 0.0, "y": 0.0, "z": 0.0}, "name": "Skill Fixture",
-                "actor_kind": "curated_persistent",
+                "actor_kind": "curated_persistent", **fixture_role_fields(),
             }, "skill-npc")
 
         await refresh()

@@ -91,7 +91,7 @@ namespace LivingNPC.GameAdapter
                 Manifest = new Dictionary<string, object> { ["game_edition"] = "legacy", ["story_mode"] = true, ["gta_build"] = Game.Version.ToString(), ["scripthookv_build"] = hookVersion,
                     ["shvdn_build"] = typeof(Script).Assembly.GetName().Version!.ToString(), ["adapter_version"] = adapterVersion,
                     ["game_os_version"] = Environment.OSVersion.VersionString, ["service_os"] = serviceOs, ["service_host_mode"] = IPAddress.IsLoopback(IPAddress.Parse(endpoint.Host)) ? "local" : "dev_lan",
-                    ["compat_layer"] = "none", ["arch"] = "x64", ["capability_flags"] = new[] { "typed_input", "ptt_control", "subtitles", "runtime_decorator_binding" } } };
+                    ["compat_layer"] = "none", ["arch"] = "x64", ["capability_flags"] = new[] { "typed_input", "ptt_control", "subtitles", "runtime_decorator_binding", "role_classifier_v1", "role_table_" + PedRoleTable.Default.Version } } };
             bridge = new BridgeWorker(endpoint, request, bootstrapToken); wasOnline = false; offlineShown = false;
             log.Write("bridge_connect", "generation=" + generation);
         }
@@ -170,10 +170,11 @@ namespace LivingNPC.GameAdapter
             if (actor == null || bridge == null) return null;
             var snapshot = Event("actor.snapshot", actor.ActorId, new {
                 runtime_handle = actor.Handle, runtime_instance_id = actor.RuntimeInstanceId,
-                ownership = actor.Ownership == Ownership.ModOwned ? "mod_owned" : actor.Ownership == Ownership.GameScriptOwned ? "game_script_owned" : "ambient",
-                control_policy = actor.Policy == ControlPolicy.Protected ? "protected" : "ambient", exists = actor.Exists, alive = actor.Alive,
+                ownership = actor.Ownership == Ownership.ModOwned ? "mod_owned" : actor.Ownership == Ownership.GameScriptOwned ? "game_script_owned" : actor.Ownership == Ownership.Unknown ? "unknown" : "ambient",
+                control_policy = actor.Policy == ControlPolicy.Protected ? "protected" : actor.Policy == ControlPolicy.ServiceLimited ? "service_limited" : "ambient", exists = actor.Exists, alive = actor.Alive,
                 distance = actor.Distance, mission_entity = actor.MissionEntity, busy = actor.Busy, in_combat = actor.InCombat, can_move = actor.CanMove,
-                position = new { x = actor.X, y = actor.Y, z = actor.Z }, name = actor.Name, actor_kind = "ambient_ephemeral" });
+                position = new { x = actor.X, y = actor.Y, z = actor.Z }, name = actor.Name, actor_kind = actor.Kind,
+                role_class = PedRoleTable.WireName(actor.Role), role_reason = actor.RoleReason, ped_facts = actor.Facts });
             if (reliable) { if (!bridge.Events.TryAdd(snapshot)) { game.ShowStatus("error", "Living Los Santos: observation queue is full."); return null; } }
             else bridge.Snapshots.ReplaceOldest(snapshot);
             return snapshot;
@@ -241,8 +242,9 @@ namespace LivingNPC.GameAdapter
                 CancelInput();
                 PruneAndPublish();
                 if (bridge == null) return;
-                var actor = game.SelectNearest(generation); SendSnapshot(actor);
-                game.ShowStatus("target", actor == null ? "No eligible nearby resident in the pilot model allowlist." : "Target: " + actor.Name); return;
+                var actor = game.SelectNearest(generation, out var refusal); SendSnapshot(actor); LogClassification(actor ?? refusal);
+                game.ShowStatus("target", actor != null ? "Target: " + actor.Name + " (" + PedClassifier.Availability(actor, game.ReadWorld(), generation) + ")"
+                    : refusal != null ? "Nearest: " + PedRoleTable.Label(refusal.Role) + " — not available" : "No nearby resident is available."); return;
             }
             if (args.KeyCode == textKey) { CancelInput(); if (LockTarget()) typing = ""; return; }
             if (args.KeyCode == pttKey && !input.PushToTalkHeld)
@@ -254,6 +256,14 @@ namespace LivingNPC.GameAdapter
                     game.ShowStatus("preparing_mic", "Living Los Santos: confirming the target before microphone capture.");
                 }
             }
+        }
+        private void LogClassification(ActorState? actor)
+        {
+#if DEVELOPMENT
+            var facts = actor?.Facts;
+            if (actor != null) log.Write("target_classified", "role=" + PedRoleTable.WireName(actor.Role) + " reason=" + actor.RoleReason + " ped_type=" + (facts?.PedType ?? -1) +
+                " relgroup=0x" + (facts?.RelationshipGroupHash ?? 0).ToString("X8") + " model=0x" + (facts?.ModelHash ?? 0).ToString("X8"));
+#endif
         }
         private void OnKeyUp(object sender, KeyEventArgs args)
         {

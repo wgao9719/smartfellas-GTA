@@ -24,6 +24,9 @@ namespace LivingNPC.Core
         public Ownership Ownership;
         public ControlPolicy Policy;
         public float X, Y, Z;
+        public PedRole Role;
+        public string RoleReason = "unclassified", Kind = "ambient_ephemeral";
+        public PedFacts? Facts;
     }
     public enum EffectStatus { Running, Completed, Failed, TakenOver }
     public sealed class EffectObservation

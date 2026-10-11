@@ -19,7 +19,11 @@ sys.path.insert(0, str(ROOT))
 
 from live_skill_check import server  # noqa: E402
 
-from service.lls.__main__ import fixture_event, fixture_session  # noqa: E402
+from service.lls.__main__ import (  # noqa: E402
+    fixture_event,
+    fixture_role_fields,
+    fixture_session,
+)
 from service.lls.storage import Repository  # noqa: E402
 
 PROFILE = "skill-probe"
@@ -78,6 +82,7 @@ async def exercise(endpoint):
                                 "runtime_instance_id": "outcome-ped",
                                 "ownership": "ambient",
                                 "control_policy": "ambient",
+                                **fixture_role_fields(),
                                 "actor_kind": "curated_persistent",
                                 "exists": True,
                                 "alive": True,

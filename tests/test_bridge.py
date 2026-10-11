@@ -5,10 +5,16 @@ from datetime import timedelta
 import httpx
 import pytest
 
-from service.lls.__main__ import fixture_event, fixture_session
+from service.lls.__main__ import (
+    fixture_event,
+    fixture_ped_facts,
+    fixture_role_fields,
+    fixture_session,
+)
 from service.lls.app import create_app
 from service.lls.protocol import ActionProposal, Event
 from service.lls.providers import FakeProvider
+from service.lls.roles import joaat
 from service.lls.runtime import now
 from service.lls.settings import Settings
 from service.lls.storage import Repository
@@ -66,6 +72,7 @@ async def open_ready(client, *, capabilities=None, capability_flags=None, actor_
             "busy": False,
             "position": {"x": 0, "y": 0, "z": 0},
             "name": "Neighbor",
+            **fixture_role_fields(),
         },
         "npc-1",
     )
@@ -1060,3 +1067,91 @@ async def test_cancelled_database_write_finishes_before_erasure(client, monkeypa
     finally:
         release.set()
         await asyncio.gather(write, return_exceptions=True)
+
+
+COP_FACTS = fixture_ped_facts("s_m_y_cop_01", ped_type=6, relationship_group_hash=joaat("COP"))
+ROLE_SNAPSHOTS = {
+    "police": {"role_class": "police", "ped_facts": COP_FACTS},
+    "gang": {
+        "role_class": "gang",
+        "ped_facts": fixture_ped_facts(
+            "g_m_y_ballaeast_01", ped_type=15, relationship_group_hash=joaat("AMBIENT_GANG_BALLAS")
+        ),
+    },
+    "animal": {
+        "role_class": "animal",
+        "ped_facts": fixture_ped_facts("a_c_chop", ped_type=28, human=False, animal_model=True),
+    },
+    "missing_facts": {"ped_facts": None},
+    "civilian_label_cop_facts": {"ped_facts": COP_FACTS},
+    "ambient_claims_mod_owned": {"ownership": "mod_owned"},
+}
+
+
+@pytest.mark.parametrize("case", list(ROLE_SNAPSHOTS))
+async def test_snapshot_role_cannot_widen_policy(client, case):
+    sid, _ = await open_ready(client, actor_overrides=ROLE_SNAPSHOTS[case])
+    session = client.app.state.runtime.sessions[sid]
+    stored = session.actors["npc-1"]
+    assert stored["control_policy"] == "protected"
+    assert stored["role_class"] == {
+        "police": "police",
+        "gang": "gang",
+        "animal": "animal",
+        "missing_facts": "unknown",
+        "civilian_label_cop_facts": "police",
+        "ambient_claims_mod_owned": "civilian",
+    }[case]
+    response, _ = await utterance(client, sid)
+    assert response.status_code == 409
+    assert session.task is None
+    assert not session.commands
+    assert (await client.get("/v1/bridge/commands?wait_seconds=0")).json()["commands"] == []
+
+
+async def test_civilian_evidence_stays_ambient(client):
+    sid, _ = await open_ready(client)
+    session = client.app.state.runtime.sessions[sid]
+    stored = session.actors["npc-1"]
+    assert (stored["control_policy"], stored["role_class"], stored["role_reason"]) == (
+        "ambient",
+        "civilian",
+        "civilian_evidence",
+    )
+    response, _ = await utterance(client, sid)
+    assert response.status_code == 200
+    await session.task
+    kinds = [c["kind"] for c in session.commands.values()]
+    assert "dialogue.chunk" in kinds and "action.execute" in kinds
+
+
+async def test_role_change_mid_scene_cancels_the_scene(client):
+    class Slow(FakeProvider):
+        async def dialogue(self, context):
+            yield "One sentence. "
+            await asyncio.sleep(1)
+            yield "Too late."
+
+    sid, actor = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    runtime.provider = Slow()
+    assert (await utterance(client, sid))[0].status_code == 200
+    await asyncio.sleep(0.01)
+    actor.update(seq=4, event_id="cuffed-snapshot")
+    actor["payload"]["ped_facts"] = fixture_ped_facts(cuffed=True)
+    response = await client.post(
+        "/v1/bridge/events:batch", json={"session_id": sid, "events": [actor]}
+    )
+    assert response.status_code == 200
+    await session.task
+    stored = session.actors["npc-1"]
+    assert (stored["role_class"], stored["role_reason"], stored["control_policy"]) == (
+        "prisoner",
+        "cuffed",
+        "protected",
+    )
+    chunks = [c for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+    assert chunks and all(c["state"] == "canceled" for c in chunks)
+    assert not any(c["kind"] == "action.execute" for c in session.commands.values())
+    assert (await utterance(client, sid, seq=5))[0].status_code == 409

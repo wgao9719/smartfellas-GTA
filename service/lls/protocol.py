@@ -19,6 +19,21 @@ ActionId = Literal[
     "flee_from_threat",
     "play_verified_gesture",
 ]
+RoleClass = Literal[
+    "civilian",
+    "service_worker",
+    "police",
+    "military",
+    "security",
+    "emergency",
+    "gang",
+    "prisoner",
+    "animal",
+    "protagonist",
+    "story_character",
+    "unknown",
+]
+Int32 = Annotated[int, Field(ge=-(2**31), le=2**31 - 1)]
 
 
 class StrictModel(BaseModel):
@@ -64,6 +79,24 @@ class Position(StrictModel):
     z: float
 
 
+class PedFacts(StrictModel):
+    """Raw adapter samples. The service recomputes the role instead of trusting a label."""
+
+    model_hash: Int32
+    ped_type: int = Field(ge=-1, le=255)
+    relationship_group_hash: Int32
+    human: bool
+    animal_model: bool
+    cuffed: bool
+    in_police_vehicle: bool
+    player_group: bool
+    mission_entity: bool
+    owning_script: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_]+$")
+    in_mod_registry: bool
+    took_persistence: bool
+    belongs_to_mod_script: bool
+
+
 class ActorSnapshot(StrictModel):
     runtime_handle: int = Field(gt=0)
     runtime_instance_id: Identifier
@@ -85,6 +118,10 @@ class ActorSnapshot(StrictModel):
     interior_id: Identifier | None = None
     can_move: bool = True
     in_combat: bool = False
+    # Optional for schema v1 compatibility; missing facts classify as unknown and protected.
+    role_class: RoleClass = "unknown"
+    role_reason: str = Field(default="unclassified", pattern=r"^[a-z0-9_]{1,64}$")
+    ped_facts: PedFacts | None = None
 
 
 class WorldSnapshot(StrictModel):

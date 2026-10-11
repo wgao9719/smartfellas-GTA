@@ -22,7 +22,7 @@ G0 is not done. No game, loader, or SHVDN combination is currently certified by 
 
 14. Check `http://127.0.0.1:8765/health`.
 15. Start Story Mode and inspect the latest `scripts/LivingNPC/LivingNPC-*.log` for `adapter_loaded`.
-16. Press F6 near an eligible resident.
+16. Press F6 near an ordinary pedestrian. Expect `Target: Nearby resident (Available)`.
 17. Press F7 to enter a message.
 18. Hold N to request microphone capture.
 19. Release N to stop capture and start transcription.
@@ -32,7 +32,7 @@ The service defaults to AI disabled. The fake provider is for simulation tests. 
 
 The [speech runtime configuration](speech-coordinator.md#runtime-configuration) selects local speech programs, models, and audio devices. Startup does not open the microphone. Audio runs on the service computer, including a Mac during Tailscale development.
 
-The adapter refuses actions in Online, missions, cutscenes, random events, loading screens, and unknown protagonist states. It limits targeting to the pilot civilian model allowlist. It never adopts a mission ped. These checks still require rig tests.
+The adapter refuses actions in Online, missions, cutscenes, random events, loading screens, and unknown protagonist states. It targets only peds whose sampled model, ped type, and relationship group all classify as civilian, with ambient ownership. Police, security, emergency, gang, animal, story, and unrecognized peds stay protected. F6 then names the nearest refused role, for example `Nearest: police officer — not available`. It never adopts a mission ped. These checks still require rig tests. Use the [classification capability sheet](actions/ped-classification-and-pin.md) to record observed values.
 
 ## Provisional native action test
 

@@ -16,10 +16,12 @@ namespace LivingNPC.GameAdapter
         private sealed class Binding
         {
             public Ped Ped = null!;
-            public string ActorId = "", Instance = "";
+            public string ActorId = "", Instance = "", Kind = "ambient_ephemeral", Name = "Nearby resident";
             public int Marker, Model;
             public long Generation;
             public bool ModOwned = false;
+            public PedFacts? StaticFacts, Facts;
+            public int FactsFrame = -1;
         }
         private sealed class TaskRecord
         {
@@ -31,9 +33,6 @@ namespace LivingNPC.GameAdapter
         private readonly int thread = Thread.CurrentThread.ManagedThreadId;
         private readonly Dictionary<string, Binding> bindings = new Dictionary<string, Binding>();
         private readonly Dictionary<string, TaskRecord> tasks = new Dictionary<string, TaskRecord>();
-        private readonly HashSet<int> civilianModels = new HashSet<int>(new[] {
-            "a_m_y_business_01", "a_m_m_business_01", "a_f_y_business_01", "a_m_y_beach_01", "a_f_y_beach_01", "a_m_y_hipster_01"
-        }.Select(Game.GenerateHash));
         private string subtitle = "", status = "Living Los Santos: connecting";
         private DateTimeOffset subtitleUntil;
         public string? SelectedActorId { get; private set; }
@@ -54,32 +53,74 @@ namespace LivingNPC.GameAdapter
                 CutsceneActive = Game.IsCutsceneActive, RandomEventActive = Game.IsRandomEventActive, Paused = Game.IsPaused,
                 Loading = Game.IsLoading, GameDatetime = World.CurrentDate, ProtagonistId = protagonist, Known = protagonist != "unknown" };
         }
-        public ActorState? SelectNearest(long generation)
+        // Binds the nearest registered or fully civilian ambient ped. Refused peds are never decorated.
+        public ActorState? SelectNearest(long generation, out ActorState? refusal)
         {
-            OnScriptThread();
+            OnScriptThread(); refusal = null;
             if (!ReadWorld().Safe) return null;
             var player = Game.Player.Character;
-            var ped = World.GetNearbyPeds(player, 8f).Where(p => p.Exists() && p.IsHuman && !p.IsDead && !p.IsPersistent && civilianModels.Contains(p.Model.Hash))
-                .OrderBy(p => p.Position.DistanceTo(player.Position)).FirstOrDefault();
-            if (ped == null) return null;
-            var existing = bindings.Values.FirstOrDefault(b => b.Ped.Handle == ped.Handle && b.Generation == generation && Valid(b));
-            if (existing != null) { SelectedActorId = existing.ActorId; return Resolve(existing.ActorId); }
-            if (bindings.Count >= 36) return null;
-            var id = Guid.NewGuid().ToString();
-            var marker = new Random(Guid.NewGuid().GetHashCode()).Next(1, int.MaxValue);
-            if (!Function.Call<bool>(Hash.DECOR_SET_INT, ped.Handle, Decorator, marker)) return null;
-            var binding = new Binding { Ped = ped, ActorId = id, Instance = Guid.NewGuid().ToString(), Marker = marker, Model = ped.Model.Hash, Generation = generation };
-            bindings[id] = binding; SelectedActorId = id;
-            return Resolve(id);
+            foreach (var ped in World.GetNearbyPeds(player, 8f).Where(p => p.Exists() && !p.IsDead).OrderBy(p => p.Position.DistanceTo(player.Position)))
+            {
+                var existing = bindings.Values.FirstOrDefault(b => b.Ped.Handle == ped.Handle && b.Generation == generation && Valid(b));
+                if (existing != null) { SelectedActorId = existing.ActorId; return Resolve(existing.ActorId); }
+                var facts = Sample(ped, null); var classified = PedClassifier.Classify(facts);
+                if (classified.Ownership != Ownership.Ambient || classified.Role != PedRole.Civilian || classified.Policy != ControlPolicy.Ambient)
+                {
+                    refusal ??= new ActorState { Name = PedRoleTable.Label(classified.Role), Role = classified.Role, RoleReason = classified.Reason, Ownership = classified.Ownership,
+                        Policy = classified.Policy, Facts = facts, Exists = true, Alive = true, Generation = generation, Distance = ped.Position.DistanceTo(player.Position) };
+                    continue;
+                }
+                if (bindings.Count >= 36) return null;
+                var id = Guid.NewGuid().ToString();
+                var marker = new Random(Guid.NewGuid().GetHashCode()).Next(1, int.MaxValue);
+                if (!Function.Call<bool>(Hash.DECOR_SET_INT, ped.Handle, Decorator, marker)) return null;
+                bindings[id] = new Binding { Ped = ped, ActorId = id, Instance = Guid.NewGuid().ToString(), Marker = marker, Model = ped.Model.Hash, Generation = generation };
+                SelectedActorId = id;
+                return Resolve(id);
+            }
+            return null;
         }
+        // Static facts are cached per binding. Dynamic facts are sampled at most once per frame.
+        private PedFacts? Sample(Ped ped, Binding? binding)
+        {
+            try
+            {
+                if (ped == null || !ped.Exists()) return null;
+                var frame = Game.FrameCount;
+                if (binding?.Facts != null && binding.FactsFrame == frame) return binding.Facts;
+                var model = ped.Model; var known = binding?.StaticFacts;
+                if (known == null || known.ModelHash != model.Hash) known = new PedFacts { ModelHash = model.Hash, Human = ped.IsHuman, AnimalModel = model.IsAnimalPed, PedType = Function.Call<int>(Hash.GET_PED_TYPE, ped.Handle) };
+                var facts = new PedFacts { ModelHash = known.ModelHash, Human = known.Human, AnimalModel = known.AnimalModel, PedType = known.PedType,
+                    RelationshipGroupHash = ped.RelationshipGroup.Hash, Cuffed = ped.IsCuffed, InPoliceVehicle = ped.IsInPoliceVehicle,
+                    PlayerGroup = Function.Call<bool>(Hash.IS_PED_GROUP_MEMBER, ped.Handle, Function.Call<int>(Hash.GET_PED_GROUP_INDEX, Game.Player.Character.Handle)),
+                    MissionEntity = ped.IsPersistent, InModRegistry = binding?.ModOwned == true,
+                    BelongsToModScript = Function.Call<bool>(Hash.DOES_ENTITY_BELONG_TO_THIS_SCRIPT, ped.Handle, false) };
+#if DEVELOPMENT
+                facts.OwningScript = OwningScript(ped);
+#endif
+                if (binding != null) { binding.StaticFacts = known; binding.Facts = facts; binding.FactsFrame = frame; }
+                return facts;
+            }
+            catch (Exception) { return null; }
+        }
+#if DEVELOPMENT
+        private static string? OwningScript(Ped ped)
+        {
+            var name = Function.Call<string>(Hash.GET_ENTITY_SCRIPT, ped.Handle, new OutputArgument());
+            if (string.IsNullOrEmpty(name)) return null;
+            var safe = new string(name.Where(c => c < 128 && (char.IsLetterOrDigit(c) || c == '_')).Take(64).ToArray());
+            return safe.Length > 0 ? safe : "unnamed_script";
+        }
+#endif
         public string[] PruneBindings(long generation)
         {
             OnScriptThread();
             var removed = new List<string>();
             foreach (var binding in bindings.Values.ToArray())
             {
-                if (binding.ModOwned) continue;
-                if (binding.Generation == generation && Valid(binding) && !binding.Ped.IsPersistent && binding.Ped.Position.DistanceTo(Game.Player.Character.Position) <= 60) continue;
+                // Registered pins can despawn or be taken by a script as well.
+                if (binding.Generation == generation && Valid(binding) && (binding.ModOwned ? PedClassifier.Classify(Sample(binding.Ped, binding)).Ownership == Ownership.ModOwned
+                    : !binding.Ped.IsPersistent && binding.Ped.Position.DistanceTo(Game.Player.Character.Position) <= 60)) continue;
                 bindings.Remove(binding.ActorId); removed.Add(binding.ActorId);
                 if (SelectedActorId == binding.ActorId) SelectedActorId = null;
             }
@@ -92,10 +133,10 @@ namespace LivingNPC.GameAdapter
             OnScriptThread();
             if (!bindings.TryGetValue(actorId, out var binding) || !Valid(binding)) return null;
             var ped = binding.Ped; var pos = ped.Position;
-            var ownership = binding.ModOwned ? Ownership.ModOwned : ped.IsPersistent ? Ownership.GameScriptOwned : Ownership.Ambient;
-            return new ActorState { ActorId = actorId, RuntimeInstanceId = binding.Instance, Name = "Nearby resident", Handle = ped.Handle, Generation = binding.Generation,
-                Exists = true, Alive = !ped.IsDead, MissionEntity = ped.IsPersistent, Ownership = ownership,
-                Policy = ownership == Ownership.GameScriptOwned || !civilianModels.Contains(ped.Model.Hash) ? ControlPolicy.Protected : ControlPolicy.Ambient,
+            var facts = Sample(ped, binding); var classified = PedClassifier.Classify(facts);
+            return new ActorState { ActorId = actorId, RuntimeInstanceId = binding.Instance, Name = binding.Name, Handle = ped.Handle, Generation = binding.Generation,
+                Exists = true, Alive = !ped.IsDead, MissionEntity = facts?.MissionEntity ?? true, Ownership = classified.Ownership, Policy = classified.Policy,
+                Role = classified.Role, RoleReason = classified.Reason, Facts = facts, Kind = binding.Kind,
                 Busy = ped.IsInVehicle() || ped.IsRagdoll || ped.IsFleeing || ped.IsOnFire,
                 InCombat = ped.IsInCombat, CanMove = !ped.IsInVehicle() && !ped.IsRagdoll,
                 Distance = pos.DistanceTo(Game.Player.Character.Position), X = pos.X, Y = pos.Y, Z = pos.Z };

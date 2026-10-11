@@ -147,6 +147,17 @@ The synthetic load check runs 200 confirmed turns with 36 tracked NPCs. It verif
 uv run --frozen python tools/simulated_load.py
 ```
 
+## Game controls
+
+| Key | Action |
+|---|---|
+| F6 | Select the nearest eligible pedestrian. The status shows `Available`, `Busy`, `Out of range`, or `Not available`, or names the nearest refused role. |
+| F7 | Type a message to the selected pedestrian. |
+| N | Hold to talk. Release to send. |
+| Backspace | Cancel the current conversation. |
+
+All keys are configurable in `scripts/LivingNPC/LivingNPC.ini`. Only ordinary civilians are eligible. Police, security, emergency, gang, animal, story, and unrecognized peds stay protected. The [classification capability sheet](docs/actions/ped-classification-and-pin.md) records what still needs rig verification.
+
 ## Build the game adapter
 
 1. Fetch the checksum-pinned public SHVDN compile reference.

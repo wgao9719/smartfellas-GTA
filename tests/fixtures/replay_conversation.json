@@ -86,7 +86,23 @@
             "y": 0,
             "z": 0
           },
-          "name": "Fixture Neighbor"
+          "name": "Fixture Neighbor",
+          "role_class": "civilian",
+          "role_reason": "civilian_evidence",
+          "ped_facts": {
+            "model_hash": -912318012,
+            "ped_type": 4,
+            "relationship_group_hash": 45677184,
+            "human": true,
+            "animal_model": false,
+            "cuffed": false,
+            "in_police_vehicle": false,
+            "player_group": false,
+            "mission_entity": false,
+            "in_mod_registry": false,
+            "took_persistence": false,
+            "belongs_to_mod_script": false
+          }
         }
       }
     },

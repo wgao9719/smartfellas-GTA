@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 import httpx
 import pytest
 
-from service.lls.__main__ import fixture_event, fixture_session
+from service.lls.__main__ import fixture_event, fixture_role_fields, fixture_session
 from service.lls.app import create_app
 from service.lls.protocol import ActionProposal
 from service.lls.providers import FakeProvider
@@ -178,6 +178,7 @@ def speech_scene(tmp_path):
                             "busy": False,
                             "position": {"x": 0, "y": 0, "z": 0},
                             "name": "Neighbor",
+                            **fixture_role_fields(),
                         },
                         "npc-1",
                     ),

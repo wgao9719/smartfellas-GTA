@@ -53,8 +53,9 @@ jobs:
           version: '0.12.17'
           python-version: '3.12'
       - run: uv sync --frozen --group dev
-      - run: dotnet test adapter/LivingNPC.Core.Tests/LivingNPC.Core.Tests.csproj --configuration Release
+      # The core tests read the reference to check role-table model names.
       - run: uv run python tools/fetch_shvdn_reference.py
+      - run: dotnet test adapter/LivingNPC.Core.Tests/LivingNPC.Core.Tests.csproj --configuration Release
       - run: dotnet build adapter/LivingNPC.GameAdapter/LivingNPC.GameAdapter.csproj --configuration Release
       - run: uv run python tests/live_bridge_check.py
       - run: uv run python tests/live_bridge_check.py --speech
