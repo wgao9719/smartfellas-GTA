@@ -7,11 +7,11 @@ import math
 import os
 from typing import Literal, Protocol
 
-import httpx
 from pydantic import Field, model_validator
 
 from .gateway_config import validate_local_endpoint, validate_remote_endpoint
 from .outbound import OutboundDenied, OutboundGate, raise_if_cancelling
+from .outbound_scrub import ScrubbedModelClient
 from .protocol import StrictModel
 from .providers import ProviderResponseError, bounded_bytes, decode_envelope
 
@@ -131,11 +131,8 @@ class OpenAIEmbeddingProvider:
                 budget_class=budget_class,
             ) as receipt,
             asyncio.timeout(self.settings.model_timeout_seconds),
-            httpx.AsyncClient(
-                timeout=httpx.Timeout(self.settings.model_timeout_seconds, connect=5),
-                follow_redirects=False,
-                trust_env=False,
-                transport=self.transport,
+            ScrubbedModelClient(
+                self.settings, local=self.local, transport=self.transport
             ) as client,
         ):
             if authorize is not None and not authorize():

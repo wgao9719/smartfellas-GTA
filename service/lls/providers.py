@@ -5,11 +5,10 @@ import json
 import os
 import re
 
-import httpx
-
 from .action_registry import action_schema
 from .gateway_config import validate_local_endpoint, validate_remote_endpoint
 from .outbound import OutboundGate
+from .outbound_scrub import ScrubbedModelClient
 from .protocol import ActionProposal
 
 SYSTEM = (
@@ -147,12 +146,7 @@ class OpenAIProvider:
         return {"Authorization": f"Bearer {key}"}
 
     def client(self):
-        return httpx.AsyncClient(
-            timeout=httpx.Timeout(self.settings.model_timeout_seconds, connect=5),
-            follow_redirects=False,
-            trust_env=False,
-            transport=self.transport,
-        )
+        return ScrubbedModelClient(self.settings, local=self.local, transport=self.transport)
 
     def context_json(self, context):
         serialized = json.dumps(context, ensure_ascii=False)
