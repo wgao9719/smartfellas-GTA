@@ -81,6 +81,9 @@ class SocialUtterance(TimedEvidence):
     turn_index: int = Field(ge=0, le=11)
     scene_epoch: int = Field(ge=0)
     retell_event_id: Identifier | None = None
+    # Lines the prompt explicitly carried. The speaker's copies of this line derive
+    # from its memories of each one, so forgetting a carrier forgets this line too.
+    carrier_event_ids: tuple[Identifier, ...] = Field(max_length=8)
 
 
 class SocialDecision(StrictModel):

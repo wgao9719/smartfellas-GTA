@@ -256,6 +256,27 @@ class SocialStore:
             raise ValueError("social context exceeds its byte budget")
         return context
 
+    def link_turn(self, profile_id, session_id, actor_id, receipt_event_id, carriers):
+        """Link a line's runtime and social copies to each other and to its carried lines.
+
+        The speaker must still remember every carried line. Deleting one of those
+        memories later removes both copies of this line from the speaker only.
+        """
+        spoken = self.event_id(session_id, receipt_event_id, actor_id)
+        with self.repo._lock:
+            for carrier in carriers:
+                if self.repo.connection.execute(
+                    "SELECT 1 FROM memory_sources s JOIN memories m ON m.memory_id=s.memory_id "
+                    "AND m.profile_id=s.profile_id WHERE s.event_id=? AND s.profile_id=? "
+                    "AND m.actor_id=? LIMIT 1",
+                    (carrier, profile_id, actor_id),
+                ).fetchone() is None:
+                    raise ValueError("social reply derives from forgotten words")
+            self.repo.link_memory_derivations(profile_id, actor_id, [
+                (receipt_event_id, spoken), (spoken, receipt_event_id),
+                *((carrier, line) for carrier in carriers for line in (receipt_event_id, spoken)),
+            ])
+
     def delivered(self, start, utterance, receipt, evidence, game_datetime):
         """Persist quoted words only. Never copy an underlying event's hidden payload."""
         with self.repo._lock:
@@ -302,6 +323,10 @@ class SocialStore:
             (start.profile_id, speaker_event),
         ).fetchone() is None:
             return {}
+        self.link_turn(
+            start.profile_id, start.session_id, utterance.actor_id, receipt.event_id,
+            utterance.carrier_event_ids,
+        )
         # Validate retained canonical proof even when its owner's memory is
         # suppressed. A changed replay must not seed a contradictory listener fact.
         self.repo.record_event(

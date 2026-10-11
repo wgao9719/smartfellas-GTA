@@ -177,11 +177,31 @@ async def test_memory_delete_requires_confirmation_and_scrubs_runtime_text(clien
     ).status_code == 409
     response = await client.request("DELETE", path, json={"confirm_memory_id": memory["memory_id"]})
     assert response.status_code == 200
-    assert response.json()["deleted"]
+    assert response.json() == {"deleted": True, "derived_memory_ids": []}
     assert command["payload"]["text"] == ""
     assert command["state"] == "canceled"
     assert not session.trace
     assert client.repository.get_memory("pilot", memory["memory_id"]) is None
+
+
+@pytest.mark.asyncio
+async def test_memory_delete_reports_the_characters_derived_lines(client):
+    branch, memory = seed(client)
+    repo = client.repository
+    repo.record_event("pilot", branch, {
+        "event_id": "event-2", "game_datetime": T2, "protagonist_id": "franklin",
+        "provenance": "heard", "confidence": 0.7, "observer_ids": ["avery"],
+        "payload": {"text": "I repeated the bicycle story."},
+    })
+    later = repo.add_memory(
+        "pilot", branch, "avery", "franklin", T2, "I repeated the bicycle story.",
+        ["event-2"], "heard",
+    )
+    repo.link_memory_derivations("pilot", "avery", [("event-1", "event-2")])
+    path = f"/v1/admin/profiles/pilot/memories/{memory['memory_id']}"
+    response = await client.request("DELETE", path, json={"confirm_memory_id": memory["memory_id"]})
+    assert response.json() == {"deleted": True, "derived_memory_ids": [later["memory_id"]]}
+    assert repo.get_memory("pilot", later["memory_id"]) is None
 
 
 @pytest.mark.asyncio

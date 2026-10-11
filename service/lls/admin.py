@@ -427,7 +427,12 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
         async with mutate_profile(profile_id):
             if await runtime.db("get_memory", profile_id, memory_id) is None:
                 raise HTTPException(404, "memory not found in this profile")
-            return result({"deleted": await runtime.db("delete_memory", profile_id, memory_id)})
+            # Session locks are held, so no runtime write changes this set before deletion.
+            derived = await runtime.db("memory_dependents", profile_id, memory_id)
+            return result({
+                "deleted": await runtime.db("delete_memory", profile_id, memory_id),
+                "derived_memory_ids": derived,
+            })
 
     @secured.post("/profiles/{profile_id}/actors/{actor_id}/reset")
     async def reset_actor(profile_id: str, actor_id: str, body: ConfirmActor):

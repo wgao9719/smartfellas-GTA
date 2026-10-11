@@ -797,7 +797,7 @@ def previous_contact(scene, number, *, retold=False):
     stamp = GAME - timedelta(minutes=10 - number)
     utterance = SimpleNamespace(
         actor_id="avery", utterance_id=f"prior-utterance-{number}",
-        retell_event_id="source" if retold else None,
+        retell_event_id="source" if retold else None, carrier_event_ids=(),
     )
     delivery = SimpleNamespace(
         event_id=f"prior-receipt-{number}", sampled_at=NOW,

@@ -1,6 +1,7 @@
 import asyncio
 import threading
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ from service.lls.app import create_app
 from service.lls.settings import Settings
 from service.lls.social import FakeSocialProvider
 from service.lls.social_bridge import DEVELOPMENT_SOCIAL_CAPABILITY
+from service.lls.social_models import SocialStart
 
 
 class Clock:
@@ -336,3 +338,104 @@ async def test_social_turn_cap_closes_runtime_scene_after_confirmed_delivery(soc
         "/v1/bridge/social/turn", json=envelope(session, actor_id="npc-a")
     )
     assert response.status_code == 409
+
+
+def prior_hearing(runtime, session, number):
+    """npc-b confirmed hearing npc-a in an earlier scene, through the social store."""
+    stamp = datetime.fromisoformat(session.game_datetime)
+    start = SocialStart(
+        scene_id=f"prior-{number}", profile_id=session.request.profile_id,
+        branch_id=session.branch_id, session_id=session.id, protagonist_id="franklin",
+        runtime_generation=1, initiator_id="npc-a",
+        participant_bindings={"npc-a": "ped-0", "npc-b": "ped-1"}, area_id="block",
+        interior_id="street", game_datetime=stamp, development_attestation=True,
+    )
+    return runtime.social.store.delivered(
+        start,
+        SimpleNamespace(
+            actor_id="npc-a", utterance_id=f"prior-{number}", retell_event_id=None,
+            carrier_event_ids=(),
+        ),
+        SimpleNamespace(event_id=f"prior-{number}:delivered", text="The pier is quiet.",
+                        sampled_at=stamp),
+        [SimpleNamespace(actor_id="npc-b", confidence=0.9)], stamp,
+    )["npc-b"]["event_id"]
+
+
+async def topic_turn(client, session):
+    response = await client.post("/v1/bridge/social/invite", json=envelope(
+        session, initiator_id="npc-b", participants={"npc-b": "ped-1", "npc-a": "ped-0"}
+    ))
+    assert response.status_code == 200, response.text
+    return await client.post("/v1/bridge/social/turn", json=envelope(session, actor_id="npc-b"))
+
+
+@pytest.mark.parametrize("copy", ["runtime", "social"])
+async def test_deleting_either_speech_copy_removes_both(social_scene, copy):
+    client, runtime, session, clock = social_scene
+    profile = session.request.profile_id
+    assert (await invite(client, session)).status_code == 200
+    command = session.commands[(await turn(client, session))["command_id"]]
+    await acknowledge(client, session, command)
+    response = await client.post("/v1/bridge/social/delivery", json=envelope(
+        session, command_id=command["id"], witnesses=[listener(session, clock)]
+    ))
+    assert response.status_code == 200, response.text
+    spoken = runtime.social.store.event_id(session.id, command["id"] + ":delivered", "npc-a")
+    copies = {"runtime": command["id"] + ":memory", "social": spoken + ":memory"}
+    assert all(runtime.repo.get_memory(profile, memory_id) for memory_id in copies.values())
+    hearing = runtime.repo.list_memories(profile, "npc-b")
+    assert sum(row["provenance"] == "reported" for row in hearing) == 1
+    assert runtime.repo.delete_memory(profile, copies[copy])
+    assert not any(runtime.repo.get_memory(profile, memory_id) for memory_id in copies.values())
+    assert runtime.repo.list_memories(profile, "npc-b") == hearing
+
+
+async def test_unheard_topic_line_forgotten_with_source(social_scene):
+    client, runtime, session, clock = social_scene
+    profile = session.request.profile_id
+    sources = [prior_hearing(runtime, session, number) for number in (1, 2)]
+    response = await topic_turn(client, session)
+    assert response.status_code == 200, response.text
+    command = session.commands[response.json()["command_id"]]
+    assert command["payload"]["text"].startswith("npc-a, you said: The pier is quiet.")
+    await acknowledge(client, session, command)  # Hearing evidence never arrives.
+    assert runtime.repo.get_memory(profile, command["id"] + ":memory") is not None
+    for source in sources:
+        assert runtime.repo.delete_memory(profile, source + ":memory")
+    assert runtime.repo.get_memory(profile, command["id"] + ":memory") is None
+    assert not any("pier" in row["text"] for row in runtime.repo.list_memories(profile, "npc-b"))
+    spoken = [row for row in runtime.repo.list_memories(profile, "npc-a") if "pier" in row["text"]]
+    assert len(spoken) == 2
+
+
+async def test_turn_provenance_failure_cancels_command(social_scene):
+    client, runtime, session, clock = social_scene
+    profile = session.request.profile_id
+    sources = [prior_hearing(runtime, session, number) for number in (1, 2)]
+
+    class Forgetting(FakeSocialProvider):
+        async def dialogue(self, context):
+            if context["social"]["phase"] == "turn":
+                # Erasure lands after the prompt is built and before the command exists.
+                for source in sources:
+                    runtime.repo.delete_memory(profile, source + ":memory")
+            async for part in super().dialogue(context):
+                yield part
+
+    runtime.provider.primary = Forgetting()
+    response = await topic_turn(client, session)
+    assert response.status_code == 409
+    assert "forgotten words" in response.text
+    [command] = [value for value in session.commands.values() if value.get("_social")]
+    assert command["state"] == "canceled"
+    assert command["payload"]["text"] == ""
+    assert session.social_scenes["social-scene"]["canceled"]
+    assert runtime.social.get_scene("social-scene")["status"] == "canceled"
+    assert any(
+        value["kind"] == "scene.cancel" and value["payload"]["scene_id"] == "social-scene"
+        for value in session.commands.values()
+    )
+    assert not runtime.repo.connection.execute(
+        "SELECT 1 FROM memory_derivations WHERE actor_id='npc-b'"
+    ).fetchall()

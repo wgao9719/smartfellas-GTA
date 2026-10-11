@@ -80,7 +80,7 @@ Only confirmed listener hearing establishes directed familiarity with the speake
 
 After two retained encounters, the speaker’s current partner can receive one exact prior quote as a topic suggestion. The quote is at most 240 characters and belongs to a previous scene. A retelling cannot become a direct shared topic. The context states who said the words and preserves their source. Other actors receive neither that quote nor the listener’s private decision history.
 
-The read respects protagonist identity, save branches, rewind, expiration, corrections, and memory controls. Persistent actors retain eligible history across service restarts. Edited anchors no longer contribute, and an edit that removes the decision or hearing form also frees that anchor's window slot. Deleted memories, deleted source events, and actor resets suppress old adaptation even if the canonical source is replayed. The service rechecks live authority and safety after storage work before scheduling.
+The read respects protagonist identity, save branches, rewind, expiration, corrections, and memory controls. Persistent actors retain eligible history across service restarts. Edited anchors no longer contribute, and an edit that removes the decision or hearing form also frees that anchor's window slot. Deleted memories, deleted source events, and actor resets suppress old adaptation even if the canonical source is replayed. Deleting a memory also removes that character's later lines that repeated or answered it, as described in [Forgetting derived lines](social-development.md#forgetting-derived-lines). The service rechecks live authority and safety after storage work before scheduling.
 
 Run the adaptation HTTP simulation:
 
@@ -88,4 +88,4 @@ Run the adaptation HTTP simulation:
 uv run --frozen python tests/live_social_adaptation_check.py
 ```
 
-The probe uses four isolated service processes and one temporary database. Two confirmed simulated encounters change a later topic after restart. HTTP memory deletion removes that source-linked topic in the next process. Independently delivered later speech remains its own event and memory. This probe does not establish erasure of every later quotation of those words. The fake provider makes zero model requests. This is development evidence for AUTO-05. Actual GTA behavior and native hearing remain unverified.
+The probe uses four isolated service processes and one temporary database. Two confirmed simulated encounters change a later topic after restart. In the third process, another NPC hears that topic line. HTTP deletion of only the first listener's hearing memories also removes both copies of that listener's topic line. The next process has no topic. The other NPC's hearing and the original speaker's own lines remain. The fake provider makes zero model requests. This is development evidence for AUTO-05. Actual GTA behavior and native hearing remain unverified.

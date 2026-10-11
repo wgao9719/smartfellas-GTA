@@ -75,7 +75,7 @@ def quote(
             [source_id], "reported", memory_id=source_id + ":memory",
         )
     utterance = SimpleNamespace(
-        actor_id=speaker, utterance_id=identifier, retell_event_id=source_id,
+        actor_id=speaker, utterance_id=identifier, retell_event_id=source_id, carrier_event_ids=(),
     )
     receipt = SimpleNamespace(event_id=identifier + ":delivered", text=text, sampled_at=at)
     heard = history.store.delivered(
@@ -565,7 +565,10 @@ def windowed_history(*, deep):
         scene = start(speaker, listener, protagonist)
         return store.delivered(
             scene,
-            SimpleNamespace(actor_id=speaker, utterance_id=scene.scene_id, retell_event_id=None),
+            SimpleNamespace(
+                actor_id=speaker, utterance_id=scene.scene_id, retell_event_id=None,
+                carrier_event_ids=(),
+            ),
             SimpleNamespace(event_id=scene.scene_id + ":delivered", text="Hi.", sampled_at=at),
             [SimpleNamespace(actor_id=listener, confidence=0.9)], at,
         )[listener]["event_id"]

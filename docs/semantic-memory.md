@@ -62,6 +62,7 @@ Edits invalidate cached vectors through the content digest. Changed configuratio
 Invalid vectors trigger reindexing or lexical fallback.
 
 Existing foreign keys remove vectors when memories disappear. Source deletion, actor reset, profile deletion, and ephemeral-session closure retain their existing deletion behavior.
+Deleting a memory also deletes its summaries and the same actor's later social lines derived from it, with their vectors. See [Forgetting derived lines](social-development.md#forgetting-derived-lines).
 An in-flight embedding response cannot recreate a deleted memory or its vector.
 
 `MemoryIndex.rebuild(...)` clears the selected actor's vectors, then rebuilds its current authorized candidate window.

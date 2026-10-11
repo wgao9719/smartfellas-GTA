@@ -307,6 +307,14 @@ class SocialEngine:
             memories=memories,
             memory_index=self.memory_index,
         )
+        # Background recall is not a carrier. Lines placed in this budget-trimmed prompt are.
+        social = context["social"]
+        topic = social["topic_continuation"]
+        carriers = tuple(dict.fromkeys([
+            *(item["event_id"] for item in social["heard"]),
+            *([topic["event_id"]] if topic else []),
+            *([social["retell_source_id"]] if social["retell_source_id"] else []),
+        ]))
 
         async def consume():
             output = ""
@@ -334,7 +342,7 @@ class SocialEngine:
             self._guard(scene)
             if scene.epoch != epoch:
                 raise SocialUnavailable("social generation became stale")
-            return result
+            return result, carriers
         except asyncio.CancelledError:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
@@ -406,7 +414,7 @@ class SocialEngine:
                     now + self.config.scene_cooldown_seconds
                 )
             for actor_id in start.participant_bindings:
-                text = await self._model(scene, actor_id, "invitation")
+                text, _ = await self._model(scene, actor_id, "invitation")
                 decision = self._decision(text, {"accept", "refuse"})
                 if decision is None:
                     # An unavailable model decision closes this attempt. It is not
@@ -457,7 +465,7 @@ class SocialEngine:
                     retell_event_id,
                     env.game_datetime,
                 )
-            text = await self._model(scene, actor_id, "turn", retelling)
+            text, carriers = await self._model(scene, actor_id, "turn", retelling)
             if not text.strip() or (retelling is not None and text != retelling["text"]):
                 raise SocialError("social reply did not preserve the requested exact quote")
             scene.pending = SocialUtterance(
@@ -470,6 +478,7 @@ class SocialEngine:
                 scene_epoch=scene.epoch,
                 sampled_at=self.utc_now(),
                 retell_event_id=retell_event_id,
+                carrier_event_ids=carriers,
             )
             return scene.pending.model_copy(deep=True)
         finally:
@@ -481,7 +490,7 @@ class SocialEngine:
         try:
             if scene.status != "active" or actor_id not in scene.start.participant_bindings:
                 raise SocialConflict("only participants can decide their continued participation")
-            text = await self._model(scene, actor_id, "participation")
+            text, _ = await self._model(scene, actor_id, "participation")
             decision = self._decision(text, {"continue", "withdraw"})
             if decision is None:
                 scene.decisions[actor_id] = "withdraw"
