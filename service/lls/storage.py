@@ -10,9 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
+import tempfile
 import threading
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -135,6 +138,7 @@ class Repository:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.path = str(path)
         self._lock = threading.RLock()
+        self._backup_lock = threading.Lock()
         self.connection = sqlite3.connect(self.path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys=ON")
@@ -364,7 +368,7 @@ class Repository:
         self._migrate()
 
     def close(self) -> None:
-        with self._lock:
+        with self._backup_lock, self._lock:
             self.connection.close()
 
     def __enter__(self) -> Repository:
@@ -1833,8 +1837,32 @@ class Repository:
             ]
 
     def backup(self, destination: str | Path) -> None:
-        if self.path != ":memory:" and Path(destination).resolve() == Path(self.path).resolve():
+        destination = Path(destination).resolve()
+        if self.path != ":memory:" and destination == Path(self.path).resolve():
             raise ValueError("backup destination cannot be the live database")
-        Path(destination).parent.mkdir(parents=True, exist_ok=True)
-        with self._lock, sqlite3.connect(str(destination)) as target:
-            self.connection.backup(target)
+        with self._backup_lock:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent, delete=False
+            ) as temporary:
+                partial = Path(temporary.name)
+            try:
+                with closing(sqlite3.connect(str(partial))) as target:
+                    if self.path == ":memory:":
+                        with self._lock:
+                            self.connection.backup(target, pages=256)
+                    else:
+                        # A separate WAL reader leaves normal repository writes available.
+                        source_uri = Path(self.path).resolve().as_uri() + "?mode=ro"
+                        with closing(sqlite3.connect(source_uri, uri=True)) as source:
+                            # Pin one view so sustained writes cannot restart every copy step.
+                            source.execute("BEGIN")
+                            source.execute("SELECT count(*) FROM sqlite_schema").fetchone()
+                            source.backup(target, pages=256)
+                    # Publish one standalone file, with no WAL sidecar to restore.
+                    target.execute("PRAGMA journal_mode=DELETE")
+                with partial.open("r+b") as completed:
+                    os.fsync(completed.fileno())
+                os.replace(partial, destination)
+            finally:
+                partial.unlink(missing_ok=True)
