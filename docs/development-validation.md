@@ -1,5 +1,51 @@
 # Development validation
 
+## Dialogue grounding on Windows
+
+2026-10-11, TOWER-PENGU, Windows PowerShell 5.1, Python 3.12.14, uv 0.12.17.
+Worktree: `smartfellas-GTA-wt/dialogue-grounding`, branch
+`win/fix-dialogue-grounding`. A separate `.venv` was created first with:
+
+```powershell
+& 'C:\Users\Brian\.lls-tools\uv\uv.exe' sync --frozen --group dev --python 'C:\Users\Brian\AppData\Roaming\uv\python\cpython-3.12.14-windows-x86_64-none\python.exe'
+```
+
+Both assigned findings reproduced before their production changes. Commands below
+used `& 'C:\Users\Brian\.lls-tools\uv\uv.exe'` as the executable:
+
+| Arguments | Before-fix result |
+|---|---|
+| `run --frozen pytest -W error tests/test_bridge.py -k 'ungrounded or grounding' -q` | 17 failed, 3 passed, 67 deselected. Invented claims reached delivery; the small-talk negatives passed. |
+| `run --frozen pytest -W error tests/test_runtime_dispatch.py -q` | 21 failed, 3 passed. Changed authorization still reached command polling. |
+| `run --frozen pytest tests/test_runtime_social.py -k grounding -q` | 9 failed, 3 passed, 18 deselected. Social narrative claims reached delivery. |
+
+Additional regressions reproduced unsafe retellings, authored remarks, long-sentence
+clipping, and direct claim paraphrases before their corresponding fixes. A preliminary
+full-suite run during regression development reported 3 failed, 1,436 passed,
+1 skipped: its loaded long-social-output fixtures still hit the default 500-character
+raw provider bound. Final fixtures explicitly configure the supported 1,000-character
+bound to exercise grounding before the independent 500-character display limit.
+
+Final checks against all source changes:
+
+| Command | Observed result |
+|---|---|
+| `& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen ruff check service tests tools` | All checks passed. |
+| `& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen pytest -W error` | 1,458 passed, 1 skipped, 0 failed in 177.06 seconds. The skip is the opt-in real whisper.cpp binary test. |
+| `git diff --check` and `git diff --cached --check` | Passed. |
+
+The final suite includes the additional action-stage eligibility refresh regression;
+the preceding complete run passed 1,457 tests with the same single skip. A new
+regression first showed that eligibility computed before speech could survive into
+the action-selector call; it now passes with eligibility refreshed after speech.
+
+See [dialogue grounding and dispatch checks](dialogue-grounding.md) for the policy,
+receipt correlation, paths covered, and vocabulary limitations. No `adapter/` files
+changed; this fix does not claim a new C# build, native action, audio-device, or GTA
+verification. No game or launcher was started, and no cloud provider was configured.
+
+The earlier sections below retain their original dates and evidence boundaries.
+
 Date: 2026-10-10. Environment: macOS 27.0, arm64, Python 3.12.4, uv 0.12.17, .NET SDK 10.0.100.
 
 These results concern the local working tree based on `200c39cfc02323f8d2811f180bd8606964810f1a`. The implementation remains uncommitted. Later changes require their own checks. No G0–G4 gate has passed.

@@ -3,6 +3,7 @@
 import json
 
 from .action_registry import ACTION_DESCRIPTIONS
+from .grounding import speech_constraints
 
 
 def clip_utf8(text, maximum):
@@ -23,6 +24,7 @@ def build_context(
     game_datetime,
     byte_budget,
     action_outcomes=(),
+    completion_lines=(),
     input_volume="normal",
 ):
     def record(item, identity):
@@ -57,6 +59,7 @@ def build_context(
         },
         "eligible_actions": {action: ACTION_DESCRIPTIONS[action] for action in eligible},
         "action_outcomes": list(action_outcomes),
+        "speech_constraints": speech_constraints(completion_lines=completion_lines),
         "context_truncated": (
             len(persona.encode("utf-8")) > 4000 or len(memories) > 8 or len(knowledge) > 8
         ),

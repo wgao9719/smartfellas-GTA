@@ -240,8 +240,12 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
 
         async def available():
             async with session.lock:
-                runtime.expire_commands(session)
-                await runtime.flush_outcomes(session)
+                while True:
+                    runtime.expire_commands(session)
+                    runtime.reauthorize_commands(session)
+                    if not session.outcome_pending:
+                        break
+                    await runtime.flush_outcomes(session)
                 output = []
                 for command in session.commands.values():
                     if command["seq"] > after and command["state"] not in TERMINAL:

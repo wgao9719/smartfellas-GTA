@@ -848,6 +848,154 @@ class MarkupProvider(FakeProvider):
             yield part
 
 
+@pytest.mark.parametrize("claim", [
+    "Lester has a new mission for you.",
+    "Your next objective is to steal that car.",
+    "I've got a job for you: rob the bank.",
+    "Michael secretly betrayed Trevor.",
+    "The truth is that Brad is dead.",
+    "Your reward is 500 dollars and the shop now gives you a permanent discount.",
+    "That haircut costs twenty dollars.",
+    "The repair is free for you.",
+    "I have repaired your car.",
+    "You have unlocked the garage.",
+    "Lester is now your loyal ally.",
+    "Amanda has left Michael for good.",
+    "I already moved the car to the docks.",
+    "I've turned to face you.",
+    "Done, I finished the task.",
+])
+async def test_ungrounded_sentence_never_reaches_delivery_or_memory(client, claim):
+    sid, _ = await open_ready(client, capabilities=[])
+    runtime = client.app.state.runtime
+    runtime.provider = MarkupProvider("Nice weather today. ", claim, " I already ate.")
+    session = runtime.sessions[sid]
+    response, _ = await utterance(client, sid, "Tell me something.")
+    assert response.status_code == 200
+    await session.task
+    chunks = [c for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+    spoken = "".join(c["payload"]["text"] for c in chunks)
+    assert claim not in spoken
+    assert spoken.strip() == "Nice weather today. I already ate."
+    for command in chunks:
+        await delivery_ack(client, session, command)
+    assert all(claim not in u.text for u in session.delivered_utterances.values())
+
+
+@pytest.mark.parametrize("line", ["I work at the docks", "Nice weather today", "I already ate"])
+async def test_grounding_preserves_ordinary_small_talk(client, line):
+    sid, _ = await open_ready(client, capabilities=[])
+    runtime = client.app.state.runtime
+    runtime.provider = MarkupProvider(line)
+    await utterance(client, sid)
+    session = runtime.sessions[sid]
+    await session.task
+    assert "".join(
+        c["payload"]["text"] for c in session.commands.values() if c["kind"] == "dialogue.chunk"
+    ) == line
+
+
+async def test_ungrounded_turn_uses_neutral_fallback_and_only_then_selects_action(client):
+    class ClaimProvider(MarkupProvider):
+        async def action(self, context, utterance, eligible):
+            self.spoken = utterance
+            return ActionProposal(action_id="face_player")
+
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    provider = ClaimProvider("I've turned to face you.")
+    runtime.provider = provider
+    await utterance(client, sid)
+    session = runtime.sessions[sid]
+    await session.task
+    assert provider.spoken == "I'm not sure what to say right now."
+    actions = [c for c in session.commands.values() if c["kind"] == "action.execute"]
+    assert len(actions) == 1 and actions[0]["state"] == "queued"
+
+
+async def test_grounding_waits_for_whole_long_sentence_across_provider_tokens(client):
+    sid, _ = await open_ready(client, capabilities=[])
+    runtime = client.app.state.runtime
+    # The previous 400-character delivery split could expose a claim's subject
+    # before the rest of the sentence revealed its unsupported reward.
+    line = "For you " + "after all that talk " * 23 + "the reward is 500 dollars."
+    runtime.provider = MarkupProvider(*(line[i:i + 17] for i in range(0, len(line), 17)))
+    await utterance(client, sid)
+    session = runtime.sessions[sid]
+    await session.task
+    assert "".join(
+        c["payload"]["text"] for c in session.commands.values() if c["kind"] == "dialogue.chunk"
+    ) == "I'm not sure what to say right now."
+
+
+async def test_grounding_keeps_long_safe_sentence_within_delivery_bounds(client):
+    sid, _ = await open_ready(client, capabilities=[])
+    runtime = client.app.state.runtime
+    line = "I work at the docks " * 30 + "most days."
+    runtime.provider = MarkupProvider(line)
+    await utterance(client, sid)
+    session = runtime.sessions[sid]
+    await session.task
+    chunks = [c["payload"] for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+    assert "".join(c["text"] for c in chunks) == line
+    assert all(len(c["text"]) <= 500 for c in chunks)
+    assert chunks[-1]["final"]
+
+
+@pytest.mark.parametrize("status", [None, "started", "failed", "completed"])
+async def test_grounding_completion_needs_corresponding_completed_ack(client, status):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    await utterance(client, sid)
+    await session.task
+    action = next(c for c in session.commands.values() if c["kind"] == "action.execute")
+    for command in list(session.commands.values()):
+        if command["kind"] == "dialogue.chunk":
+            await delivery_ack(client, session, command)
+    states = ["started", "completed"] if status == "completed" else [status] if status else []
+    for state in states:
+        response = await client.post(
+            f"/v1/bridge/commands/{action['id']}/ack",
+            json={"session_id": sid, "runtime_generation": 1, "status": state},
+        )
+        assert response.status_code == 200, response.text
+    before = set(session.commands)
+    claim = "I've turned to face you."
+    runtime.provider = MarkupProvider(claim + " I already moved the car to the docks.")
+    response, _ = await utterance(client, sid, "What happened?", seq=4)
+    assert response.status_code == 200, response.text
+    await session.task
+    spoken = "".join(
+        c["payload"]["text"] for cid, c in session.commands.items()
+        if cid not in before and c["kind"] == "dialogue.chunk"
+    ).strip()
+    assert spoken == (claim if status == "completed" else "I'm not sure what to say right now.")
+
+
+async def test_action_stage_refreshes_eligibility_after_speech(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+
+    class ChangedDuringDialogue(FakeProvider):
+        called = False
+
+        async def dialogue(self, context):
+            assert "face_player" in context["eligible_actions"]
+            session.actors["npc-1"]["allowed_actions"] = []
+            yield "Nice weather today."
+
+        async def action(self, context, utterance, eligible):
+            self.called = True
+            return None
+
+    runtime.provider = provider = ChangedDuringDialogue()
+    await utterance(client, sid)
+    await session.task
+    assert not provider.called
+
+
 def delivered_event(client, command):
     row = client.app.state.repository.connection.execute(
         "SELECT data FROM events WHERE profile_id=? AND event_id=?",
