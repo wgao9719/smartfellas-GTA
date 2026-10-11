@@ -36,6 +36,7 @@ namespace LivingNPC.Core
         public string Token { get; set; } = "";
         public string PolicyVersion { get; set; } = "";
         public string[] Capabilities { get; set; } = Array.Empty<string>();
+        public string[] CapabilityFlags { get; set; } = Array.Empty<string>();
         public string BranchId { get; set; } = "";
         public int SchemaVersion { get; set; }
     }
@@ -49,14 +50,14 @@ namespace LivingNPC.Core
         public string Kind { get; set; } = "";
         public string OccurredAtUtc { get; set; } = DateTimeOffset.UtcNow.ToString("O");
         public string GameDatetime { get; set; } = "";
-        public string ProtagonistId { get; set; } = "";
+        [JsonProperty(Required = Required.Always)] public string ProtagonistId { get; set; } = "";
         public string? ActorId { get; set; }
         public long RuntimeGeneration { get; set; }
         public object Payload { get; set; } = new object();
     }
     public sealed class Command
     {
-        public int SchemaVersion { get; set; } = 1;
+        [JsonProperty(Required = Required.Always)] public int SchemaVersion { get; set; } = 1;
         public string Id { get; set; } = "";
         public long Seq { get; set; }
         public string Kind { get; set; } = "";

@@ -1,0 +1,645 @@
+{
+  "contract": "Living Los Santos schema v1",
+  "notes": "Both pytest and xUnit validate every payload. Original illustrative spec examples remain explicit rejected deviations; valid counterparts show the accepted contract. Structural validation does not grant native execution capability.",
+  "cases": [
+    {
+      "id": "session_open_valid",
+      "message_type": "session_open",
+      "valid": true,
+      "reason": "Canonical schema-v1 contract example.",
+      "payload": {
+        "schema_version": 1,
+        "profile_id": "profile_001",
+        "save_slot": "slot_001",
+        "profile_confirmed": true,
+        "protagonist_id": "franklin",
+        "game_datetime": "2013-09-17T11:28:48",
+        "runtime_generation": 7,
+        "manifest": {
+          "game_edition": "legacy",
+          "story_mode": true,
+          "gta_build": "fixture",
+          "scripthookv_build": "fixture",
+          "shvdn_build": "fixture",
+          "adapter_version": "fixture",
+          "game_os_version": "windows",
+          "service_os": "windows",
+          "service_host_mode": "local",
+          "compat_layer": "none",
+          "arch": "x64",
+          "capability_flags": [
+            "typed_input",
+            "subtitles"
+          ]
+        },
+        "capabilities": [
+          "face_player",
+          "wait_here"
+        ]
+      }
+    },
+    {
+      "id": "session_open_unknown_member",
+      "message_type": "session_open",
+      "valid": false,
+      "reason": "Unknown top-level fields cannot acquire protocol meaning.",
+      "payload": {
+        "schema_version": 1,
+        "profile_id": "profile_001",
+        "save_slot": "slot_001",
+        "profile_confirmed": true,
+        "protagonist_id": "franklin",
+        "game_datetime": "2013-09-17T11:28:48",
+        "runtime_generation": 7,
+        "manifest": {
+          "game_edition": "legacy",
+          "story_mode": true,
+          "gta_build": "fixture",
+          "scripthookv_build": "fixture",
+          "shvdn_build": "fixture",
+          "adapter_version": "fixture",
+          "game_os_version": "windows",
+          "service_os": "windows",
+          "service_host_mode": "local",
+          "compat_layer": "none",
+          "arch": "x64",
+          "capability_flags": [
+            "typed_input",
+            "subtitles"
+          ]
+        },
+        "capabilities": [
+          "face_player",
+          "wait_here"
+        ],
+        "arbitrary_instruction": "run_native"
+      }
+    },
+    {
+      "id": "session_response_valid",
+      "message_type": "session_response",
+      "valid": true,
+      "reason": "Canonical schema-v1 contract example.",
+      "payload": {
+        "schema_version": 1,
+        "session_id": "ses",
+        "token": "synthetic-contract-token",
+        "policy_version": "p1",
+        "capabilities": [
+          "face_player",
+          "wait_here"
+        ],
+        "capability_flags": [
+          "typed_input",
+          "subtitles"
+        ],
+        "branch_id": "branch_001"
+      }
+    },
+    {
+      "id": "session_response_unknown_member",
+      "message_type": "session_response",
+      "valid": false,
+      "reason": "Unknown top-level fields cannot acquire protocol meaning.",
+      "payload": {
+        "schema_version": 1,
+        "session_id": "ses",
+        "token": "synthetic-contract-token",
+        "policy_version": "p1",
+        "capabilities": [
+          "face_player",
+          "wait_here"
+        ],
+        "capability_flags": [
+          "typed_input",
+          "subtitles"
+        ],
+        "branch_id": "branch_001",
+        "arbitrary_instruction": "run_native"
+      }
+    },
+    {
+      "id": "event_valid",
+      "message_type": "event",
+      "valid": true,
+      "reason": "Accepted counterpart to the illustrative section 7.2 example: adds protagonist_id and payload.scene_id for isolation and leaves observer derivation to validated perception.",
+      "adapted_from_spec_section": "7.2",
+      "payload": {
+        "schema_version": 1,
+        "event_id": "evt_01JEXAMPLE",
+        "session_id": "ses_8d2a",
+        "seq": 184,
+        "kind": "player.utterance_text",
+        "occurred_at_utc": "2026-10-10T16:13:00Z",
+        "game_datetime": "2013-09-17T11:28:48",
+        "actor_id": "npc_2d9e",
+        "runtime_generation": 7,
+        "payload": {
+          "text": "Can you follow me?",
+          "input_mode": "typed",
+          "scene_id": "scene_094"
+        },
+        "protagonist_id": "franklin"
+      }
+    },
+    {
+      "id": "event_unknown_member",
+      "message_type": "event",
+      "valid": false,
+      "reason": "Unknown top-level fields cannot acquire protocol meaning.",
+      "payload": {
+        "schema_version": 1,
+        "event_id": "evt_01JEXAMPLE",
+        "session_id": "ses_8d2a",
+        "seq": 184,
+        "kind": "player.utterance_text",
+        "occurred_at_utc": "2026-10-10T16:13:00Z",
+        "game_datetime": "2013-09-17T11:28:48",
+        "actor_id": "npc_2d9e",
+        "runtime_generation": 7,
+        "payload": {
+          "text": "Can you follow me?",
+          "input_mode": "typed",
+          "scene_id": "scene_094"
+        },
+        "protagonist_id": "franklin",
+        "arbitrary_instruction": "run_native"
+      }
+    },
+    {
+      "id": "proposal_valid",
+      "message_type": "proposal",
+      "valid": true,
+      "reason": "Accepted counterpart to the illustrative section 7.3 example: model selection contains action, arguments and player reason; actor, turn and command identity are bound by the service.",
+      "adapted_from_spec_section": "7.3",
+      "payload": {
+        "action_id": "follow_player",
+        "arguments": {
+          "max_follow_meters": 15
+        },
+        "reason_for_player": "Agreed to accompany player"
+      }
+    },
+    {
+      "id": "proposal_unknown_member",
+      "message_type": "proposal",
+      "valid": false,
+      "reason": "Unknown top-level fields cannot acquire protocol meaning.",
+      "payload": {
+        "action_id": "follow_player",
+        "arguments": {
+          "max_follow_meters": 15
+        },
+        "reason_for_player": "Agreed to accompany player",
+        "arbitrary_instruction": "run_native"
+      }
+    },
+    {
+      "id": "command_valid",
+      "message_type": "command",
+      "valid": true,
+      "reason": "Canonical schema-v1 contract example.",
+      "payload": {
+        "schema_version": 1,
+        "id": "cmd1",
+        "seq": 1,
+        "kind": "action.execute",
+        "session_id": "ses",
+        "actor_id": "npc",
+        "runtime_generation": 7,
+        "runtime_instance_id": "instance-1",
+        "expires_at": "2026-10-10T12:00:10Z",
+        "idempotency_key": "cmd1",
+        "payload": {
+          "action_id": "face_player",
+          "arguments": {
+            "duration_seconds": 1.5
+          },
+          "policy_version": "p1",
+          "scene_id": "scene-1",
+          "consent": false,
+          "turn_id": "turn_094"
+        }
+      }
+    },
+    {
+      "id": "command_unknown_member",
+      "message_type": "command",
+      "valid": false,
+      "reason": "Unknown top-level fields cannot acquire protocol meaning.",
+      "payload": {
+        "schema_version": 1,
+        "id": "cmd1",
+        "seq": 1,
+        "kind": "action.execute",
+        "session_id": "ses",
+        "actor_id": "npc",
+        "runtime_generation": 7,
+        "runtime_instance_id": "instance-1",
+        "expires_at": "2026-10-10T12:00:10Z",
+        "idempotency_key": "cmd1",
+        "payload": {
+          "action_id": "face_player",
+          "arguments": {
+            "duration_seconds": 1.5
+          },
+          "policy_version": "p1",
+          "scene_id": "scene-1",
+          "consent": false,
+          "turn_id": "turn_094"
+        },
+        "arbitrary_instruction": "run_native"
+      }
+    },
+    {
+      "id": "ack_valid",
+      "message_type": "ack",
+      "valid": true,
+      "reason": "Canonical schema-v1 contract example.",
+      "payload": {
+        "session_id": "ses",
+        "runtime_generation": 7,
+        "status": "completed",
+        "reason": "heading_observed",
+        "observed": {
+          "heading_error_degrees": 3
+        }
+      }
+    },
+    {
+      "id": "ack_unknown_member",
+      "message_type": "ack",
+      "valid": false,
+      "reason": "Unknown top-level fields cannot acquire protocol meaning.",
+      "payload": {
+        "session_id": "ses",
+        "runtime_generation": 7,
+        "status": "completed",
+        "reason": "heading_observed",
+        "observed": {
+          "heading_error_degrees": 3
+        },
+        "arbitrary_instruction": "run_native"
+      }
+    },
+    {
+      "id": "session_open_object_generation",
+      "message_type": "session_open",
+      "valid": false,
+      "reason": "Runtime generation must be an integer.",
+      "payload": {
+        "schema_version": 1,
+        "profile_id": "profile_001",
+        "save_slot": "slot_001",
+        "profile_confirmed": true,
+        "protagonist_id": "franklin",
+        "game_datetime": "2013-09-17T11:28:48",
+        "runtime_generation": {
+          "value": 7
+        },
+        "manifest": {
+          "game_edition": "legacy",
+          "story_mode": true,
+          "gta_build": "fixture",
+          "scripthookv_build": "fixture",
+          "shvdn_build": "fixture",
+          "adapter_version": "fixture",
+          "game_os_version": "windows",
+          "service_os": "windows",
+          "service_host_mode": "local",
+          "compat_layer": "none",
+          "arch": "x64",
+          "capability_flags": [
+            "typed_input",
+            "subtitles"
+          ]
+        },
+        "capabilities": [
+          "face_player",
+          "wait_here"
+        ]
+      }
+    },
+    {
+      "id": "session_open_object_capabilities",
+      "message_type": "session_open",
+      "valid": false,
+      "reason": "Offered capabilities must be an array.",
+      "payload": {
+        "schema_version": 1,
+        "profile_id": "profile_001",
+        "save_slot": "slot_001",
+        "profile_confirmed": true,
+        "protagonist_id": "franklin",
+        "game_datetime": "2013-09-17T11:28:48",
+        "runtime_generation": 7,
+        "manifest": {
+          "game_edition": "legacy",
+          "story_mode": true,
+          "gta_build": "fixture",
+          "scripthookv_build": "fixture",
+          "shvdn_build": "fixture",
+          "adapter_version": "fixture",
+          "game_os_version": "windows",
+          "service_os": "windows",
+          "service_host_mode": "local",
+          "compat_layer": "none",
+          "arch": "x64",
+          "capability_flags": [
+            "typed_input",
+            "subtitles"
+          ]
+        },
+        "capabilities": {
+          "face_player": true
+        }
+      }
+    },
+    {
+      "id": "session_response_object_session_id",
+      "message_type": "session_response",
+      "valid": false,
+      "reason": "Session identity must be a string.",
+      "payload": {
+        "schema_version": 1,
+        "session_id": {
+          "id": "ses"
+        },
+        "token": "synthetic-contract-token",
+        "policy_version": "p1",
+        "capabilities": [
+          "face_player",
+          "wait_here"
+        ],
+        "capability_flags": [
+          "typed_input",
+          "subtitles"
+        ],
+        "branch_id": "branch_001"
+      }
+    },
+    {
+      "id": "session_response_object_capabilities",
+      "message_type": "session_response",
+      "valid": false,
+      "reason": "Negotiated capabilities must be an array.",
+      "payload": {
+        "schema_version": 1,
+        "session_id": "ses",
+        "token": "synthetic-contract-token",
+        "policy_version": "p1",
+        "capabilities": {
+          "face_player": true
+        },
+        "capability_flags": [
+          "typed_input",
+          "subtitles"
+        ],
+        "branch_id": "branch_001"
+      }
+    },
+    {
+      "id": "event_object_sequence",
+      "message_type": "event",
+      "valid": false,
+      "reason": "Event sequence must be an integer.",
+      "payload": {
+        "schema_version": 1,
+        "event_id": "evt_01JEXAMPLE",
+        "session_id": "ses_8d2a",
+        "seq": {
+          "value": 184
+        },
+        "kind": "player.utterance_text",
+        "occurred_at_utc": "2026-10-10T16:13:00Z",
+        "game_datetime": "2013-09-17T11:28:48",
+        "actor_id": "npc_2d9e",
+        "runtime_generation": 7,
+        "payload": {
+          "text": "Can you follow me?",
+          "input_mode": "typed",
+          "scene_id": "scene_094"
+        },
+        "protagonist_id": "franklin"
+      }
+    },
+    {
+      "id": "event_missing_protagonist",
+      "message_type": "event",
+      "valid": false,
+      "reason": "Protagonist isolation requires identity on every event.",
+      "payload": {
+        "schema_version": 1,
+        "event_id": "evt_01JEXAMPLE",
+        "session_id": "ses_8d2a",
+        "seq": 184,
+        "kind": "player.utterance_text",
+        "occurred_at_utc": "2026-10-10T16:13:00Z",
+        "game_datetime": "2013-09-17T11:28:48",
+        "actor_id": "npc_2d9e",
+        "runtime_generation": 7,
+        "payload": {
+          "text": "Can you follow me?",
+          "input_mode": "typed",
+          "scene_id": "scene_094"
+        }
+      }
+    },
+    {
+      "id": "event_spec_7_2",
+      "message_type": "event",
+      "valid": false,
+      "reason": "Deliberate deviation: the illustrative spec omits protagonist_id and payload.scene_id and includes observed_by. The implementation requires protagonist/scene isolation and derives listeners from validated perception instead of trusting a caller-supplied observer list.",
+      "spec_section": "7.2",
+      "deliberate_deviation": true,
+      "payload": {
+        "schema_version": 1,
+        "event_id": "evt_01JEXAMPLE",
+        "session_id": "ses_8d2a",
+        "seq": 184,
+        "kind": "player.utterance_text",
+        "occurred_at_utc": "2026-10-10T16:13:00Z",
+        "game_datetime": "2013-09-17T11:28:48",
+        "actor_id": "npc_2d9e",
+        "runtime_generation": 7,
+        "payload": {
+          "text": "Can you follow me?",
+          "input_mode": "typed",
+          "observed_by": [
+            "npc_2d9e"
+          ]
+        }
+      }
+    },
+    {
+      "id": "proposal_unknown_action",
+      "message_type": "proposal",
+      "valid": false,
+      "reason": "Actions must be registered identifiers.",
+      "payload": {
+        "action_id": "arbitrary_native",
+        "arguments": {
+          "max_follow_meters": 15
+        },
+        "reason_for_player": "Agreed to accompany player"
+      }
+    },
+    {
+      "id": "proposal_argument_out_of_range",
+      "message_type": "proposal",
+      "valid": false,
+      "reason": "Follow distance is bounded to 1..30 meters.",
+      "payload": {
+        "action_id": "follow_player",
+        "arguments": {
+          "max_follow_meters": 31
+        },
+        "reason_for_player": "Agreed to accompany player"
+      }
+    },
+    {
+      "id": "proposal_missing_argument",
+      "message_type": "proposal",
+      "valid": false,
+      "reason": "Navigation proposals require a point with bounded coordinates.",
+      "payload": {
+        "action_id": "go_to_safe_point",
+        "arguments": {},
+        "reason_for_player": "Agreed to accompany player"
+      }
+    },
+    {
+      "id": "proposal_spec_7_3",
+      "message_type": "proposal",
+      "valid": false,
+      "reason": "Deliberate deviation: this is the model action-selection object, not a proposal audit wrapper. The service binds actor and turn from its authenticated scene and assigns command identity; model-supplied proposal_id, actor_id and conversation_turn_id are rejected. A durable proposal audit wrapper remains separate work.",
+      "spec_section": "7.3",
+      "deliberate_deviation": true,
+      "payload": {
+        "proposal_id": "ap_001",
+        "actor_id": "npc_2d9e",
+        "action_id": "follow_player",
+        "arguments": {
+          "max_follow_meters": 15
+        },
+        "reason_for_player": "Agreed to accompany player",
+        "conversation_turn_id": "turn_094"
+      }
+    },
+    {
+      "id": "command_missing_schema_version",
+      "message_type": "command",
+      "valid": false,
+      "reason": "Every service command must explicitly carry its major schema version.",
+      "payload": {
+        "id": "cmd1",
+        "seq": 1,
+        "kind": "action.execute",
+        "session_id": "ses",
+        "actor_id": "npc",
+        "runtime_generation": 7,
+        "runtime_instance_id": "instance-1",
+        "expires_at": "2026-10-10T12:00:10Z",
+        "idempotency_key": "cmd1",
+        "payload": {
+          "action_id": "face_player",
+          "arguments": {
+            "duration_seconds": 1.5
+          },
+          "policy_version": "p1",
+          "scene_id": "scene-1",
+          "consent": false,
+          "turn_id": "turn_094"
+        }
+      }
+    },
+    {
+      "id": "command_wrong_schema_version",
+      "message_type": "command",
+      "valid": false,
+      "reason": "The adapter rejects unsupported command schema versions before execution.",
+      "payload": {
+        "schema_version": 2,
+        "id": "cmd1",
+        "seq": 1,
+        "kind": "action.execute",
+        "session_id": "ses",
+        "actor_id": "npc",
+        "runtime_generation": 7,
+        "runtime_instance_id": "instance-1",
+        "expires_at": "2026-10-10T12:00:10Z",
+        "idempotency_key": "cmd1",
+        "payload": {
+          "action_id": "face_player",
+          "arguments": {
+            "duration_seconds": 1.5
+          },
+          "policy_version": "p1",
+          "scene_id": "scene-1",
+          "consent": false,
+          "turn_id": "turn_094"
+        }
+      }
+    },
+    {
+      "id": "command_null_schema_version",
+      "message_type": "command",
+      "valid": false,
+      "reason": "A null command schema version is not an explicit major version.",
+      "payload": {
+        "schema_version": null,
+        "id": "cmd1",
+        "seq": 1,
+        "kind": "action.execute",
+        "session_id": "ses",
+        "actor_id": "npc",
+        "runtime_generation": 7,
+        "runtime_instance_id": "instance-1",
+        "expires_at": "2026-10-10T12:00:10Z",
+        "idempotency_key": "cmd1",
+        "payload": {
+          "action_id": "face_player",
+          "arguments": {
+            "duration_seconds": 1.5
+          },
+          "policy_version": "p1",
+          "scene_id": "scene-1",
+          "consent": false,
+          "turn_id": "turn_094"
+        }
+      }
+    },
+    {
+      "id": "ack_object_generation",
+      "message_type": "ack",
+      "valid": false,
+      "reason": "Acknowledgment generation must be an integer.",
+      "payload": {
+        "session_id": "ses",
+        "runtime_generation": {
+          "value": 7
+        },
+        "status": "completed",
+        "reason": "heading_observed",
+        "observed": {
+          "heading_error_degrees": 3
+        }
+      }
+    },
+    {
+      "id": "ack_array_observed",
+      "message_type": "ack",
+      "valid": false,
+      "reason": "Observed execution facts must be an object.",
+      "payload": {
+        "session_id": "ses",
+        "runtime_generation": 7,
+        "status": "completed",
+        "reason": "heading_observed",
+        "observed": [
+          "completed"
+        ]
+      }
+    }
+  ]
+}

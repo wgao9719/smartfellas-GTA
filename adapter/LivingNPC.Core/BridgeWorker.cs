@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -21,6 +22,7 @@ namespace LivingNPC.Core
         private readonly Uri endpoint;
         private long cursor;
         public volatile bool RequiresReconnect;
+        public volatile bool ProtocolFault;
         public float Fps;
         public int ActorCount;
         private int failures;
@@ -85,6 +87,7 @@ namespace LivingNPC.Core
                 {
                     var value = Wire.Decode<SessionResponse>(await Send(eventClient, HttpMethod.Post, "/v1/bridge/sessions", request, bootstrapToken).ConfigureAwait(false));
                     if (value.SchemaVersion != 1 || value.SessionId.Length == 0 || value.Token.Length == 0 || value.PolicyVersion.Length == 0) throw new InvalidDataException("invalid_session");
+                    value.Capabilities = value.Capabilities.Intersect(request.Capabilities).ToArray();
                     session = value; online = true;
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
@@ -93,6 +96,7 @@ namespace LivingNPC.Core
                     LastFailure = "session_rejected_" + e.Status;
                     Notices.ReplaceOldest(e.Status == 409
                         ? "Save/profile association refused. Verify ProfileId, SaveSlot and ParentBranchId in LivingNPC.ini, then reload and confirm. Use a new profile for a different save."
+                        : e.Status == 426 ? "Protocol version mismatch. Update the Living Los Santos adapter and service together, then reload the adapter."
                         : LastFailure);
                     return;
                 }
@@ -106,7 +110,7 @@ namespace LivingNPC.Core
             LastFailure = error is HttpRequestException ? "bridge_http_failure" : error is OperationCanceledException ? "bridge_timeout" : "bridge_protocol_failure";
             if (Interlocked.Increment(ref failures) >= 2) online = false;
         }
-        private void Success() { Interlocked.Exchange(ref failures, 0); online = !RequiresReconnect; }
+        private void Success() { Interlocked.Exchange(ref failures, 0); online = !RequiresReconnect && !ProtocolFault; }
         private async Task Delay(int ms) { try { await Task.Delay(ms, stop.Token).ConfigureAwait(false); } catch (OperationCanceledException) { } }
         private async Task ControlLoop()
         {
@@ -176,6 +180,12 @@ namespace LivingNPC.Core
                     Success(); await Delay(30).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
+                catch (Newtonsoft.Json.JsonException)
+                {
+                    ProtocolFault = true; online = false; LastFailure = "bridge_protocol_failure";
+                    Notices.ReplaceOldest("Command schema mismatch. AI stopped. Update the adapter and service together, then reload the adapter.");
+                    return;
+                }
                 catch (Exception e) { Fail(e); await Delay(300).ConfigureAwait(false); }
             }
         }

@@ -19,6 +19,7 @@ The following commit fixes those failures. Its own Windows run must confirm them
 
 ## Done
 
+- Schema-v1 command versions are explicit and required on both bridge sides. Session opening reports actionable major-version mismatches and negotiates optional capabilities. Shared Python/C# contract fixtures preserve the spec examples and explain deliberate differences; see [wire contract](wire-contract.md).
 - Authenticated Python service with streaming dialogue, action proposals, acknowledgments, cancellation, and durable action outcomes.
 - SQLite memory with scoped knowledge, relationships, save-timeline branches, and optional semantic retrieval.
 - Provider controls with budgets, explicit cloud consent, and a local OpenAI-compatible option. AI starts disabled.

@@ -6,6 +6,8 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using LivingNPC.Core;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace LivingNPC.Core.Tests;
@@ -105,6 +107,73 @@ public class BridgeTests
             Assert.Equal("", worker.LastFailure);
         }
     }
+    [Theory][InlineData(false)][InlineData(true)]
+    public void CommandSchemaVersionMustBePresentAndNonNull(bool nullVersion)
+    {
+        var command = JObject.Parse(Wire.Encode(ControllerTests.Action()));
+        if (nullVersion) command["schema_version"] = null; else command.Remove("schema_version");
+        Assert.Throws<JsonSerializationException>(() => Wire.Decode<Command>(command.ToString()));
+    }
+    [Fact] public async Task SchemaMismatchGivesPlayerAnActionableNotice()
+    {
+        var calls = 0;
+        var rejected = new Handler((_, _) => {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.UpgradeRequired) { Content = new StringContent("private response body") });
+        });
+        using var worker = new BridgeWorker(new Uri("http://127.0.0.1:8765"), new SessionRequest { SchemaVersion = 2 }, "", eventHandler: rejected);
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (worker.Notices.Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(5);
+        Assert.True(worker.Notices.TryTake(out var notice));
+        Assert.Equal("Protocol version mismatch. Update the Living Los Santos adapter and service together, then reload the adapter.", notice);
+        Assert.Equal("session_rejected_426", worker.LastFailure);
+        Assert.Null(worker.Session); Assert.False(worker.Online); Assert.Equal(1, calls);
+    }
+    [Fact] public async Task MissingCommandVersionLatchesSafetyStopAcrossSuccessfulHeartbeat()
+    {
+        var command = JObject.Parse(Wire.Encode(ControllerTests.Action("unversioned"))); command.Remove("schema_version");
+        var heartbeatStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var heartbeatRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var heartbeatFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var events = new Handler(async (request, token) => {
+            if (request.RequestUri!.AbsolutePath.EndsWith("sessions")) return Json(Wire.Encode(new SessionResponse { SessionId = "ses", Token = "token", PolicyVersion = "p1", SchemaVersion = 1 }));
+            heartbeatStarted.TrySetResult(); await heartbeatRelease.Task.WaitAsync(token); heartbeatFinished.TrySetResult(); return Json("{}");
+        });
+        var poll = new Handler(async (_, _) => {
+            await heartbeatStarted.Task; Interlocked.Increment(ref calls);
+            return Json(new JObject { ["commands"] = new JArray(command), ["cursor"] = 1 }.ToString());
+        });
+        var game = new FakeGame(); var controller = ControllerTests.Controller(game);
+        controller.Commands.TryAdd(ControllerTests.Action()); controller.Tick(ControllerTests.Now);
+        Assert.True(controller.Acks.TryTake(out var started)); Assert.Equal("started", started.Status);
+        controller.Commands.TryAdd(ControllerTests.Action("pending"));
+        using var worker = new BridgeWorker(new Uri("http://127.0.0.1:8765"), new SessionRequest(), "", eventHandler: events, pollHandler: poll);
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (!worker.ProtocolFault && DateTime.UtcNow < deadline) await Task.Delay(5);
+        Assert.True(worker.ProtocolFault); Assert.False(worker.Online); Assert.Equal(0, worker.Commands.Count);
+        // The script forwards the worker fault on its tick, even while offline.
+        controller.StopForProtocolFault();
+        Assert.True(controller.FailedClosed); Assert.Equal(1, game.Releases); Assert.Equal("error", game.Status);
+        for (var n = 0; n < 2; n++) { Assert.True(controller.Acks.TryTake(out var canceled)); Assert.Equal("safety_stop", canceled.Reason); }
+        heartbeatRelease.TrySetResult(); await heartbeatFinished.Task.WaitAsync(TimeSpan.FromSeconds(2)); await Task.Delay(50);
+        Assert.False(worker.Online); Assert.True(worker.ProtocolFault); Assert.Equal(1, calls);
+        controller.Commands.TryAdd(ControllerTests.Action("later")); controller.Tick(ControllerTests.Now.AddSeconds(1));
+        Assert.True(controller.Acks.TryTake(out var later)); Assert.Equal("safety_stop", later.Reason); Assert.Equal(1, game.Starts);
+    }
+    [Fact] public async Task SessionCapabilitiesCannotExceedTheAdaptersOffer()
+    {
+        var events = new Handler((request, _) => Task.FromResult(request.RequestUri!.AbsolutePath.EndsWith("sessions")
+            ? Json(Wire.Encode(new SessionResponse { SessionId = "ses", Token = "token", PolicyVersion = "p1", SchemaVersion = 1, Capabilities = new[] { "face_player", "wait_here" }, CapabilityFlags = new[] { "subtitles" } }))
+            : Json("{}")));
+        var poll = new Handler(async (_, token) => { await Task.Delay(Timeout.Infinite, token); return Json("{}"); });
+        using var worker = new BridgeWorker(new Uri("http://127.0.0.1:8765"), new SessionRequest { Capabilities = new[] { "face_player", "follow_player" } }, "", eventHandler: events, pollHandler: poll);
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (worker.Session == null && DateTime.UtcNow < deadline) await Task.Delay(5);
+        Assert.NotNull(worker.Session);
+        Assert.Equal(new[] { "face_player" }, worker.Session.Capabilities);
+        Assert.Equal(new[] { "subtitles" }, worker.Session.CapabilityFlags);
+    }
     [Fact]
     public async Task PriorityControlDoesNotWaitForEventOrCommandPoll()
     {
@@ -146,7 +215,7 @@ public class BridgeTests
     }
     [Fact] public void PythonWireFixtureDecodesActorBindingAndUtcExpiry()
     {
-        var batch = Wire.Decode<CommandBatch>("{\"commands\":[{\"id\":\"cmd\",\"seq\":1,\"kind\":\"action.execute\",\"session_id\":\"ses\",\"actor_id\":\"npc\",\"runtime_instance_id\":\"instance-1\",\"runtime_generation\":7,\"expires_at\":\"2026-10-10T12:00:10+00:00\",\"idempotency_key\":\"effect\",\"payload\":{}}],\"cursor\":1}");
+        var batch = Wire.Decode<CommandBatch>("{\"commands\":[{\"schema_version\":1,\"id\":\"cmd\",\"seq\":1,\"kind\":\"action.execute\",\"session_id\":\"ses\",\"actor_id\":\"npc\",\"runtime_instance_id\":\"instance-1\",\"runtime_generation\":7,\"expires_at\":\"2026-10-10T12:00:10+00:00\",\"idempotency_key\":\"effect\",\"payload\":{}}],\"cursor\":1}");
         Assert.Equal("instance-1", Assert.Single(batch.Commands).RuntimeInstanceId);
         Assert.Equal(TimeSpan.Zero, batch.Commands[0].ExpiresAt.Offset);
     }

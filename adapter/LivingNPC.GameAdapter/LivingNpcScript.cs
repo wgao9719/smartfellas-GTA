@@ -138,7 +138,8 @@ namespace LivingNPC.GameAdapter
             }
             if (bridge == null) Connect(world);
             if (input.Bound && !input.IsCurrent(game.Resolve(input.ActorId!), world, generation)) CancelInput();
-            if (bridge!.Session != null && controller == null) controller = new CommandController(game, bridge.Session.SessionId, generation, bridge.Session.PolicyVersion, capabilities);
+            if (bridge!.Session != null && controller == null) controller = new CommandController(game, bridge.Session.SessionId, generation, bridge.Session.PolicyVersion, bridge.Session.Capabilities);
+            if (bridge.ProtocolFault) controller?.StopForProtocolFault();
             if (bridge.Online)
             {
                 if (!worldSent) { bridge.Events.TryAdd(Event("world.snapshot", null, new { online = world.Online, mission_active = world.MissionActive, cutscene_active = world.CutsceneActive, random_event_active = world.RandomEventActive, paused = world.Paused, protagonist_id = world.ProtagonistId })); worldSent = true; }
@@ -155,14 +156,17 @@ namespace LivingNPC.GameAdapter
                 if (controller != null)
                 {
                     while (controller.Commands.Remaining > 0 && bridge.Commands.TryTake(out var command)) controller.Commands.TryAdd(command);
-                    controller.Tick(DateTimeOffset.UtcNow);
-                    while (bridge.Acks.Remaining > 0 && controller.Acks.TryTake(out var ack)) bridge.Acks.TryAdd(ack);
                 }
             }
             else if (!offlineShown)
             {
                 log.Write("bridge_offline", bridge.LastFailure);
                 CancelInput(); game.ShowStatus("offline", "Living Los Santos: service unavailable. AI stopped."); offlineShown = true;
+            }
+            if (controller != null)
+            {
+                if (bridge.Online || bridge.ProtocolFault) controller.Tick(DateTimeOffset.UtcNow);
+                while (bridge.Acks.Remaining > 0 && controller.Acks.TryTake(out var ack)) bridge.Acks.TryAdd(ack);
             }
             wasOnline = bridge.Online;
             if (bridge.Notices.TryTake(out var notice)) { log.Write("bridge_notice", notice); game.ShowStatus("error", "Living Los Santos: " + notice); }

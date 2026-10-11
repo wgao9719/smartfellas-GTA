@@ -15,6 +15,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
+from .action_registry import ACTION_IDS
 from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
 from .bridge_limits import MAX_BODY_BYTES
 from .context import build_context
@@ -27,7 +28,7 @@ from .perception import DeliveredUtterance, PerceptionLimits, witnesses_for
 from .perception_bridge import DEVELOPMENT_PERCEPTION_CAPABILITY
 from .protocol import Command
 from .providers import create_provider, effective_provider_settings, persist_provider_configuration
-from .roles import ROLE_POLICIES, ownership_from_facts, revalidate
+from .roles import ROLE_POLICIES, TABLE_VERSION, ownership_from_facts, revalidate
 from .runtime_outcomes import OutcomeRuntime
 from .runtime_pin import PinRuntime
 from .runtime_skills import SkillRuntime
@@ -342,6 +343,39 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         if isinstance(branch, dict):
             branch = branch["branch_id"]
         await self.thread_job(install_pilot_pack, self.repo, request.profile_id)
+        supported_flags = {
+            "typed_input", "subtitles", "actor_pin", "role_classifier_v1",
+            "role_table_" + TABLE_VERSION,
+        }
+        if self.settings.speech.enabled:
+            supported_flags.add("ptt_control")
+        for enabled, feature in (
+            (self.settings.dev_perception, "development:perception:v1"),
+            (self.settings.dev_social, "development:social:v1"),
+            (self.settings.dev_skills, "development:skills:v1"),
+            (self.settings.dev_neighborhood, "development:neighborhood:v1"),
+        ):
+            if enabled and not self.settings.release:
+                supported_flags.add(feature)
+        for actor in await self.db("list_actors", request.profile_id):
+            if (
+                actor.get("actor_kind") == "anchored_service"
+                and actor.get("control_policy") == "service_limited"
+                and actor.get("service_integration_id")
+            ):
+                supported_flags.add("service:" + actor["service_integration_id"])
+        # Existing authorization paths consume only the negotiated intersection.
+        request = request.model_copy(deep=True)
+        request.capabilities = list(
+            dict.fromkeys(
+                capability for capability in request.capabilities if capability in ACTION_IDS
+            )
+        )
+        request.manifest.capability_flags = list(
+            dict.fromkeys(
+                flag for flag in request.manifest.capability_flags if flag in supported_flags
+            )
+        )
         session = Session(session_id, secrets.token_urlsafe(32), request, branch)
         session.last_activity = self.clock()
         session.game_datetime = request.game_datetime.isoformat()
@@ -393,6 +427,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         if presented and isinstance(payload.get(presented), str):
             payload = {**payload, presented: display_text(payload[presented])}
         command = {
+            "schema_version": 1,
             "id": self.id_factory("cmd"),
             "seq": session.command_seq + 1,
             "kind": kind,

@@ -83,7 +83,7 @@ namespace LivingNPC.Core
         {
             if (results.Count >= 4096 && !results.ContainsKey(command.IdempotencyKey)) { FailedClosed = true; game.ShowStatus("error", "Session command limit reached. Reload the adapter."); return; }
             if (command.SchemaVersion != 1)
-            { Acknowledge(command, "rejected", "schema_mismatch"); Stop("Command schema mismatch. AI stopped. Reload the adapter."); return; }
+            { Acknowledge(command, "rejected", "schema_mismatch"); StopForProtocolFault(); return; }
             if (results.TryGetValue(command.IdempotencyKey, out var previous))
             {
                 if (!Acks.TryAdd(new Ack { CommandId = command.Id, SessionId = SessionId, RuntimeGeneration = Generation, Status = previous.Status, Reason = previous.Reason, Observed = previous.Observed })) FailedClosed = true;
@@ -151,6 +151,7 @@ namespace LivingNPC.Core
         {
             if (++nativeFailures >= NativeFailureLimit) Stop("Repeated native command failures. AI stopped. Reload the adapter.");
         }
+        public void StopForProtocolFault() => Stop("Command schema mismatch. AI stopped. Update the adapter and service together, then reload the adapter.");
         private void Stop(string message)
         {
             if (stopMessage != null) return;
