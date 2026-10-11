@@ -1,6 +1,6 @@
 # Living Los Santos
 
-Living Los Santos is a GTA V Legacy Story Mode project for interactive, persistent, evolving NPCs. Developers build on Macs. The game adapter runs on Windows with Script Hook V and ScriptHookVDotNet.
+Living Los Santos is a GTA V Legacy Story Mode project for interactive, persistent, evolving NPCs in-game. Developers build on Macs. The game adapter runs on Windows with Script Hook V and ScriptHookVDotNet.
 
 **Status: development foundation. G0 through G4 have not passed.** The Windows rig will connect through Tailscale later. No result in this repository proves GTA gameplay, Windows audio, or release readiness. The [progress and handoff note](docs/progress.md) lists open issues and next steps.
 
