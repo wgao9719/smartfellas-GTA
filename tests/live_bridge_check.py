@@ -71,12 +71,40 @@ def verify_pin(database, probe):
     print(json.dumps(result))
 
 
+def verify_social(database, probe):
+    """Confirmed hearing is scoped to the pair; ambient memory ends with the session."""
+    profile = probe["profile_id"]
+    with closing(sqlite3.connect(database)) as connection:
+        events = [json.loads(row[0]) for row in connection.execute(
+            "SELECT data FROM events WHERE profile_id=?", (profile,)
+        )]
+        remaining = connection.execute(
+            "SELECT count(*) FROM actors WHERE profile_id=? AND actor_kind='ambient_ephemeral'",
+            (profile,),
+        ).fetchone()[0]
+        memories = connection.execute(
+            "SELECT count(*) FROM memories WHERE profile_id=?", (profile,)
+        ).fetchone()[0]
+    heard = [e for e in events if e["event_type"] == "social.quote_delivered"
+             and e["provenance"] == "reported"]
+    assert len(heard) == 4, heard
+    assert {e["payload"]["scope_id"] for e in heard} == {"street-0", "street-1"}
+    assert remaining == memories == 0, (remaining, memories)
+    print(json.dumps({"check": "ambient_social_storage", "heard_lines": len(heard),
+                      "bystander_hearing": 0, "ambient_actors_after_close": remaining,
+                      "memories_after_close": memories, "game_verified": False}))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--speech", action="store_true", help="Use synthetic audio devices")
     parser.add_argument("--whisper", action="store_true", help="Whisper the typed or spoken input")
+    parser.add_argument("--embodied", action="store_true", help="Exercise the social controller")
+    parser.add_argument("--social", action="store_true", help="Simulate ambient social dialogue")
     parser.add_argument("--pin", action="store_true", help="Pin a pedestrian and check durability")
     args = parser.parse_args()
+    if args.embodied:
+        args.social = True
     bundled = ROOT / ".dotnet" / ("dotnet.exe" if os.name == "nt" else "dotnet")
     dotnet = os.environ.get("LLS_DOTNET") or shutil.which("dotnet")
     dotnet = dotnet or (str(bundled) if bundled.is_file() else None)
@@ -112,6 +140,8 @@ def main():
                 "--database",
                 str(database),
             ]
+            if args.social:
+                server_arguments.append("--ambient-social")
             if args.speech:
                 server_arguments.append("--speech")
             service = subprocess.Popen(
@@ -149,16 +179,18 @@ def main():
                         *(["--speech"] if args.speech else []),
                         *(["--whisper"] if args.whisper else []),
                         *(["--pin"] if args.pin else []),
+                        *(["--social"] if args.social else []),
+                        *(["--embodied"] if args.embodied else []),
                     ],
                     cwd=ROOT,
                     env=environment,
                     check=True,
                     timeout=90,
-                    capture_output=args.pin,
+                    capture_output=args.pin or args.social,
                     text=True,
                 )
                 # Pin mode runs its own conversation and checks durability in verify_pin.
-                if not args.pin:
+                if not args.pin and not args.social:
                     # Durable receipts must quote display-safe text with the sanitized speaker.
                     delivered = stored_payloads(database, "dialogue.delivered")
                     assert len(delivered) == 2, delivered
@@ -192,10 +224,11 @@ def main():
                 except subprocess.TimeoutExpired:
                     service.kill()
                     service.wait(timeout=3)
-            if args.pin:
+            if args.pin or args.social:
                 print(probe.stdout, end="")
                 lines = probe.stdout.strip().splitlines()
-                verify_pin(Path(temporary) / "probe.sqlite3", json.loads(lines[-1]))
+                verify = verify_social if args.social else verify_pin
+                verify(Path(temporary) / "probe.sqlite3", json.loads(lines[-1]))
 
 
 if __name__ == "__main__":

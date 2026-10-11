@@ -30,14 +30,9 @@ namespace LivingNPC.Core
             var action = (string?)command.Payload["action_id"] ?? "";
             if (!capabilities.Contains(action)) return "capability_unverified";
             if (actor.Policy == ControlPolicy.ServiceLimited && action != "face_player") return "service_limited";
-            if (action != "face_player" && action != "wait_here") return "no_executor";
             if (command.Payload["arguments"] is not JObject args) return "invalid_arguments";
-            // These bounded G0 primitives accept only a duration. Model text cannot add authority.
-            var argumentError = ActionRegistry.Default.ValidateArguments(action, args);
+            var argumentError = NativeActions.Check(action, args, actor, command.Payload["consent"]?.Type == JTokenType.Boolean && (bool)command.Payload["consent"]!);
             if (argumentError != null) return argumentError;
-            var duration = args["duration_seconds"];
-            // G0's unverified native prototype has a stricter duration than metadata.
-            if (duration != null && (double)duration > 5) return "invalid_duration";
             if (cooldowns.TryGetValue(actor.ActorId + ":" + action, out var until) && now < until) return "cooldown";
             return null;
         }

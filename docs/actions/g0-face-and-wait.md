@@ -14,6 +14,8 @@ Status: **UNVERIFIED ON GTA**. Compile reference: SHVDN v3.6.0. Supported game b
 
 `GET_SCRIPT_TASK_STATUS` values, task hashes, completion tolerances, and task-clear ownership are provisional mappings. Compilation is not runtime evidence. A task reporting active can still fail to change the ped. Both actions require observed completion after dispatch.
 
+The additional development executors are documented in the [task catalog](development-task-catalog.md). The G0 limits above still apply to facing and waiting.
+
 1. Record the exact GTA, Script Hook V, and SHVDN versions.
 2. Test a valid ambient ped at 2 m and 8 m.
 3. Test a mod-owned persistent ped once curated spawning exists.

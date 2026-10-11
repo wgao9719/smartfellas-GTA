@@ -10,7 +10,7 @@ from test_bridge import open_ready, utterance
 from test_social import scene as scene
 
 from service.lls.embeddings import EmbeddingConfig
-from service.lls.gateway_config import DailyBudget, GatewayConfig
+from service.lls.gateway_config import ChatterBudget, DailyBudget, GatewayConfig
 from service.lls.memory_index import MemoryIndex
 from service.lls.providers import create_provider
 from service.lls.settings import Settings
@@ -169,7 +169,7 @@ async def test_foreground_runtime_routes_semantic_memory_into_context(
 
 
 @pytest.mark.parametrize("erase_after_fetch", [False, True])
-async def test_social_engine_routes_semantic_memory_through_background_budget(
+async def test_social_engine_routes_semantic_memory_through_chatter_budget(
     scene,
     monkeypatch,
     erase_after_fetch,
@@ -177,6 +177,7 @@ async def test_social_engine_routes_semantic_memory_through_background_budget(
     boundary = EmbeddingAndDialogueHTTP()
     transport = httpx.MockTransport(boundary)
     settings = configuration(release=False)
+    settings.ai_gateway.chatter = ChatterBudget(max_requests=100)
     await scene.provider.aclose()
     provider = create_provider(settings, scene.repo, transport=transport)
     scene.engine.provider = provider
@@ -222,7 +223,7 @@ async def test_social_engine_routes_semantic_memory_through_background_budget(
         requests = scene.repo.connection.execute(
             "SELECT budget_class FROM ai_requests WHERE model='fixture-embedding'",
         ).fetchall()
-        assert len(requests) == 2 and {row[0] for row in requests} == {"background"}
+        assert len(requests) == 2 and {row[0] for row in requests} == {"chatter"}
         for context in boundary.contexts:
             if context["actor"]["actor_id"] != "avery":
                 assert context["memories"] == []

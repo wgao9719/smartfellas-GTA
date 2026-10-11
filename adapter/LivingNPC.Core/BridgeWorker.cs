@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -30,6 +31,7 @@ namespace LivingNPC.Core
         public readonly BoundedQueue<EventEnvelope> Events = new BoundedQueue<EventEnvelope>(128);
         public readonly BoundedQueue<EventEnvelope> Snapshots = new BoundedQueue<EventEnvelope>(36);
         public readonly BoundedQueue<Command> Commands = new BoundedQueue<Command>(64);
+        public readonly BoundedQueue<SocialDeliveryDispatch> SocialDeliveries = new BoundedQueue<SocialDeliveryDispatch>(32);
         public readonly BoundedQueue<Ack> Acks = new BoundedQueue<Ack>(512);
         public SessionResponse? Session => session;
         public bool Online => online;
@@ -115,17 +117,38 @@ namespace LivingNPC.Core
         private async Task EventLoop()
         {
             var heartbeatAt = DateTimeOffset.UtcNow;
+            var snapshotsAt = DateTimeOffset.UtcNow;
+            var batch = new List<EventEnvelope>();
             while (!stop.IsCancellationRequested)
             {
                 try
                 {
+                    if (SocialDeliveries.TryPeek(out var delivery))
+                    {
+                        try
+                        {
+                            await Send(eventClient, HttpMethod.Post, "/v1/bridge/events:batch", new { session_id = session!.SessionId, events = delivery.Snapshots }, session.Token).ConfigureAwait(false);
+                            await Send(eventClient, HttpMethod.Post, "/v1/bridge/commands/" + Uri.EscapeDataString(delivery.Ack.CommandId) + "/ack", delivery.Ack, session.Token).ConfigureAwait(false);
+                            await Send(eventClient, HttpMethod.Post, "/v1/bridge/social/delivery", delivery.Body, session.Token).ConfigureAwait(false);
+                        }
+                        catch (PermanentFailure e) { LastFailure = "social_delivery_rejected_" + e.Status; Notices.ReplaceOldest(LastFailure); SocialDeliveries.TryTake(out _); if (RequiresReconnect) return; continue; }
+                        SocialDeliveries.TryTake(out _); Success(); continue;
+                    }
                     if (Acks.TryPeek(out var ack))
                     {
                         try { await Send(eventClient, HttpMethod.Post, "/v1/bridge/commands/" + Uri.EscapeDataString(ack.CommandId) + "/ack", ack, session!.Token).ConfigureAwait(false); }
                         catch (PermanentFailure e) { LastFailure = "ack_rejected_" + e.Status; Notices.ReplaceOldest(LastFailure); RequiresReconnect = true; online = false; return; }
                         Acks.TryTake(out _); Success(); continue;
                     }
-                    var queue = Events.Count > 0 ? Events : Snapshots;
+                    if (Events.Count == 0 && (batch.Count > 0 || Snapshots.Count > 0) && DateTimeOffset.UtcNow >= snapshotsAt)
+                    {
+                        if (batch.Count == 0) while (batch.Count < 16 && Snapshots.TryTake(out var snapshot)) { snapshot.SessionId = session!.SessionId; batch.Add(snapshot); }
+                        try { await Send(eventClient, HttpMethod.Post, "/v1/bridge/events:batch", new { session_id = session!.SessionId, events = batch }, session.Token).ConfigureAwait(false); }
+                        catch (PermanentFailure e) { batch.Clear(); LastFailure = "snapshot_rejected_" + e.Status; Notices.ReplaceOldest(LastFailure); continue; }
+                        foreach (var snapshot in batch) snapshot.Accepted = true;
+                        batch.Clear(); snapshotsAt = DateTimeOffset.UtcNow.AddMilliseconds(500); Success(); continue;
+                    }
+                    var queue = Events;
                     if (queue.TryPeek(out var item))
                     {
                         item.SessionId = session!.SessionId;

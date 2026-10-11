@@ -17,6 +17,48 @@ The first GitHub Actions run passed on macOS and failed on Windows. The second r
 
 The following commit fixes those failures. Its own Windows run must confirm them.
 
+## NPC-to-NPC first slice (2026-10-11)
+
+Implemented current-session ambient social participation, recipient-owned deterministic
+decisions, dedicated social prompts with observed partner/activity/weather context, a
+separate durable chatter budget and dashboard controls, authored fallback dialogue,
+display-time receipt validation, and scoped social interruption/revalidation cleanup.
+The automatic scheduler still runs one scene per session.
+
+The C# fake-street probe now exercises eight ambient actors over real HTTP. Two exchange
+four lines, reserve four dialogue calls, stop at the turn limit, and create four confirmed
+hearing events for that pair only. Closing the session removes its ambient actors and
+memories. The fake provider makes no external model requests.
+
+Validation on this Mac: Ruff passed; Python suite **1,394 passed, 4 skipped**; C# core
+**281 passed**; `tests/live_bridge_check.py --social` and `--speech` passed. These are
+simulated game/audio checks from the first slice. A subsequent Debug integration implements
+nearby scans, overhead text, ped-to-ped tasks, and native hearing; it is compiled and
+simulation-tested, but G0–G4 remain unpassed. See the
+[NPC-to-NPC plan](npc-to-npc-plan.md) for the remaining rig work.
+
+## Debug social integration follow-up
+
+The adapter now scans up to eight nearby civilians, stages bounded approach/facing/chat
+and ambient voice tasks, renders overhead text, and captures native listener observations.
+One generated scene within 12 m can coexist with native-only chatter in the 12–35 m band.
+Transport preserves render snapshots → acknowledgment → hearing order across retries.
+Unrelated actor removal no longer cancels social or foreground conversations.
+
+Automatic first-turn retelling selects only a speaker's own retained heard words, excludes
+whispers, and preserves the existing exact-quote lineage and deletion rules.
+
+Validation after the follow-up: **1,436 Python tests passed, 4 skipped; 307 C# tests
+passed; Ruff and Debug/Release builds passed.** The embodied HTTP probe also passed
+against the isolated fixture and the running fallback service.
+
+The service is runnable with authored fallback and no model configuration. Debug and Release
+adapter builds compile; the Debug bundle is staged in `artifacts/adapter-social-debug`.
+The production social-controller probe passed against real HTTP, including the running
+fallback service. All game observations in that probe are simulated. Native tasks, rendering,
+voice availability, and frame cost remain unverified on Windows. See the
+[social capability sheet](actions/npc-social-embodiment.md).
+
 ## Done
 
 - Authenticated Python service with streaming dialogue, action proposals, acknowledgments, cancellation, and durable action outcomes.
@@ -70,7 +112,7 @@ The handoff's six open issues are closed. The first handoff note described one o
 - All seven G0 rig checks in the [implementation plan](implementation-plan.md#g0-mandatory-checks). These need the Windows GTA V Legacy rig. The second Mac has repeated only the Mac half of G0-7.
 - Native perception incidents, native actions, persistent spawning, and save reconciliation inside GTA.
 - Real microphone, Windows voice models, provider performance, and frame-time measurements.
-- Native NPC-to-NPC conversations, native learned behaviors, and visible neighborhood changes.
+- GTA verification of the implemented Debug NPC-to-NPC path, native learned behaviors, and visible neighborhood changes. The [NPC-to-NPC plan](npc-to-npc-plan.md) records remaining capabilities.
 
 ## Next steps
 

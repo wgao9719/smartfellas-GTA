@@ -11,17 +11,17 @@ The scheduler is off by default. It requires all four gates:
 - `LLS_DEV_SOCIAL_AUTONOMY=1`
 - The authenticated session manifest includes `development:social:v1`.
 
-Release adapters do not advertise this capability. The scheduler does not add a bridge capability or enable provider spending. Hosted and local model calls use the Gateway background allowance. That allowance defaults to zero and persists independently of the scheduler's counters.
+Release adapters do not advertise this capability. The scheduler does not add a bridge capability or enable provider spending. Hosted and local social model calls use the separate Gateway chatter allowance. That allowance defaults to zero and persists independently of the scheduler's counters.
 
 ## Eligibility and consent
 
-Both NPCs must have registered persistent identities, distinct current runtime bindings, and fresh actor snapshots. The player must remain within 20 meters of each NPC. The NPCs must share an area and interior and remain within 10 meters of each other.
+Both NPCs must have registered persistent or current-session ambient identities, distinct current runtime bindings, and fresh actor snapshots. The player must remain within 20 meters of each NPC. The NPCs must share an area and interior and remain within 10 meters of each other.
 
 World and actor snapshots must be at most two seconds old. Protected game states, danger, foreground conversation, active dialogue commands, and active action commands prevent initiation. The engine rechecks eligibility before and after provider work.
 
 The scheduler favors the least-attempted eligible pair. Within each pair, the actor with fewer initiations becomes the initiator. After two distinct confirmed encounters, that initiator’s own familiarity breaks equal-attempt ties. The familiarity tie-breaker counts at most three encounters. Oldest attempt and stable actor ordering resolve later ties. Attempts apply actor and pair cooldowns, including refused attempts.
 
-Each NPC independently accepts or refuses, including the initiator. Before its turn, the actor independently reviews whether to continue. Refusal and withdrawal end the scene without assigning another NPC's decision.
+Each NPC independently accepts or refuses, including the initiator. Ambient actors decide deterministically from their own state; persistent actors use model decisions. Before its turn, the actor independently reviews whether to continue. Refusal and withdrawal end the scene without assigning another NPC's decision.
 
 ## Delivery and hearing
 
@@ -48,7 +48,7 @@ The development bridge must submit `/v1/bridge/social/delivery` with evidence fo
 | `scene_timeout_seconds` | 60 | 5–120 | Entire scene, including provider waits |
 | `worker_timeout_seconds` | 45 | 1–90 | Each scheduled worker |
 
-The first worker reserves four calls: two invitation decisions, one participation review, and one turn. Later workers reserve two calls. Refusal does not refund reservations. These conservative limits supplement Gateway quotas. Scheduler counters are ephemeral and restart with a new session.
+For two persistent actors, the first worker reserves four calls: two invitation decisions, one participation review, and one turn. Later workers reserve two calls. Ambient decisions reserve zero calls, so an all-ambient scene reserves one call per line. Mixed scenes count each persistent decision separately. Optional semantic retrieval also consumes the durable chatter budget. Refusal does not refund reservations. These conservative limits supplement Gateway quotas. Scheduler counters are ephemeral and restart with a new session.
 
 The scheduler waits for the final turn's hearing evidence before it completes at the turn limit. Hearing timeout cancels any pending subtitle. Scene and worker time limits cancel and join active provider work. Model and storage cleanup does not acquire the session lock while a caller joins the worker under that lock.
 
@@ -89,3 +89,16 @@ uv run --frozen python tests/live_social_adaptation_check.py
 ```
 
 The probe uses four isolated service processes and one temporary database. Two confirmed simulated encounters change a later topic after restart. In the third process, another NPC hears that topic line. HTTP deletion of only the first listener's hearing memories also removes both copies of that listener's topic line. The next process has no topic. The other NPC's hearing and the original speaker's own lines remain. The fake provider makes zero model requests. This is development evidence for AUTO-05. Actual GTA behavior and native hearing remain unverified.
+
+
+## Automatic retelling
+
+The first turn of a new automatic scene may select one retained quote from the speaker's
+own memory. Selection examines at most eight source identifiers from a bounded retrieval.
+Eligible sources are player words the speaker heard, or a confirmed quote from an NPC
+outside the current participants. Whispers and current-scene quotes are excluded.
+
+The existing retelling path rechecks branch, protagonist, session, observer, memory
+retention, exact text, and hop limits before generation and delivery. Listeners receive
+reported words with lineage only after hearing is confirmed. Hidden source payload fields
+never become dialogue. Deleting the source memory prevents selection and derived reuse.

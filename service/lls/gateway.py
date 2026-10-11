@@ -135,6 +135,11 @@ class GatewayProvider:
         raise_if_cancelling()
         task = asyncio.current_task()
         self.turn_routes[task] = None
+        if self.name == "disabled" and "social" in context:
+            from .ambient_social import smalltalk
+
+            yield smalltalk(context)
+            return
         if self.name in {"disabled", "fake"}:
             async for chunk in self.primary.dialogue(context):
                 yield chunk
@@ -170,7 +175,12 @@ class GatewayProvider:
                     # Never splice a second model's answer into a partial first answer.
                     yield " " + NEUTRAL_LINE
                     return
-        yield NEUTRAL_LINE
+        if "social" in context:
+            from .ambient_social import smalltalk
+
+            yield smalltalk(context)
+        else:
+            yield NEUTRAL_LINE
 
     async def action(self, context, utterance, eligible, *, budget_class="foreground"):
         raise_if_cancelling()

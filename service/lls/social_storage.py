@@ -3,6 +3,7 @@
 import hashlib
 import json
 
+from .activity import describe
 from .context import build_context
 from .social_adaptation import SocialAdaptation, decision_memory_text
 from .storage import _date
@@ -135,16 +136,54 @@ class SocialStore:
                 "lineage": [*lineage, event_id],
             }
 
+    def automatic_retelling(self, start, actor_id, game_datetime):
+        """Choose bounded, retained heard words; never select hidden event payloads."""
+        with self.repo._lock:
+            memories = self.repo.retrieve_memories(
+                start.profile_id, start.branch_id, actor_id, start.protagonist_id,
+                game_datetime.isoformat(), "player conversation heard told", token_budget=384,
+                session_id=start.session_id,
+            )
+            candidates = list(dict.fromkeys(
+                event_id for memory in memories
+                if memory["provenance"] in {"heard", "reported"}
+                for event_id in memory["source_event_ids"]
+            ))[:8]
+            for event_id in candidates:
+                try:
+                    quote = self.retelling_source(start, actor_id, event_id, game_datetime)
+                    source = self.repo._sources(
+                        start.profile_id, start.branch_id, _date(game_datetime.isoformat()),
+                        [event_id], "reported", "player:" + start.protagonist_id,
+                    )[0]
+                except ValueError:
+                    continue
+                payload = source.get("payload", {})
+                # Whispered player speech and the current scene are not automatic topics.
+                if payload.get("whisper") or len(quote["text"]) > 240:
+                    continue
+                if source.get("event_type") == "player.utterance_text":
+                    return event_id
+                if (
+                    source.get("event_type") == "social.quote_delivered"
+                    and source.get("provenance") == "reported"
+                    and payload.get("teller_id") not in start.participant_bindings
+                    and (payload.get("session_id"), payload.get("scene_id"))
+                    != (start.session_id, start.scene_id)
+                ):
+                    return event_id
+            return None
+
     def context(
         self, start, actor_id, environment, *, phase, heard, retelling, byte_budget,
         memories=None, memory_index=None,
     ):
-        actor = self.repo.get_actor(start.profile_id, actor_id)
+        actor = self.repo.get_actor(start.profile_id, actor_id, session_id=start.session_id)
         stamp = environment.game_datetime.isoformat()
         if memories is None:
             memories = self.repo.retrieve_memories(
                 start.profile_id, start.branch_id, actor_id, start.protagonist_id, stamp,
-                "conversation acquaintances social", token_budget=384,
+                "conversation acquaintances social", token_budget=384, session_id=start.session_id,
             )
         elif memory_index is not None:
             memories = memory_index.revalidate_memories(
@@ -161,6 +200,7 @@ class SocialStore:
             group_ids=tuple(actor.get("group_ids", [])[:16]),
             region_id=start.area_id,
             token_budget=256,
+            session_id=start.session_id,
         )
         relationship = self.repo.get_relationship(
             start.profile_id,
@@ -168,6 +208,7 @@ class SocialStore:
             actor_id,
             start.protagonist_id,
             stamp,
+            session_id=start.session_id,
         )
         history = SocialAdaptation(self.repo).read(
             start.profile_id, start.branch_id, start.protagonist_id, stamp,
@@ -202,6 +243,19 @@ class SocialStore:
             "decision_owner": actor_id,
             "initiator_id": start.initiator_id,
             "participant_ids": list(start.participant_bindings),
+            "partners": [
+                {
+                    "actor_id": other,
+                    "appearance": (self.repo.get_actor(
+                        start.profile_id, other, session_id=start.session_id
+                    ) or {}).get("persona", {}).get("appearance", "another person"),
+                    "current_activity": describe(
+                        environment.actors[other].activity.model_dump()
+                        if environment.actors[other].activity else None
+                    ),
+                }
+                for other in start.participant_bindings if other != actor_id
+            ],
             "heard": list(heard[-4:]),
             "retell_text": retelling["text"] if retelling else None,
             "retell_source_id": retelling["event_id"] if retelling else None,
@@ -240,8 +294,12 @@ class SocialStore:
         reserved = len(json.dumps(social, ensure_ascii=False).encode()) + 64
         context, _ = build_context(
             actor=actor,
-            snapshot={"area_id": start.area_id},
-            world={"online": False, "mission_active": False},
+            snapshot={"area_id": start.area_id, "activity": (
+                environment.actors[actor_id].activity.model_dump()
+                if environment.actors[actor_id].activity else None
+            )},
+            world={"weather": environment.weather, "online": environment.online,
+                   "mission_active": environment.mission_active},
             memories=memories,
             knowledge=knowledge,
             relationship=relationship,
@@ -353,6 +411,7 @@ class SocialStore:
                 [speaker_event],
                 "directly_observed",
                 memory_id=speaker_event + ":memory",
+                session_id=start.session_id,
             )
         heard = {}
         for item in evidence:
@@ -390,6 +449,7 @@ class SocialStore:
                 "reported",
                 confidence=confidence,
                 memory_id=identifier + ":memory",
+                session_id=start.session_id,
             )
             heard[item.actor_id] = {
                 "event_id": identifier,

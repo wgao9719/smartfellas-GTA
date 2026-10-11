@@ -56,6 +56,41 @@ public class BridgeTests
         Assert.True(good.Accepted); Assert.False(bad.Accepted);
         Assert.DoesNotContain("accepted", Wire.Encode(good));
     }
+    [Theory]
+    [InlineData(false)][InlineData(true)]
+    public async Task SocialReceiptRetriesInSnapshotAckHearingOrder(bool rejectHearing)
+    {
+        var calls = new System.Collections.Generic.List<string>();
+        var bodies = new System.Collections.Generic.List<string>();
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempt = 0;
+        var events = new Handler(async (request, _) => {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("sessions")) return Json("{\"session_id\":\"ses\",\"token\":\"token\",\"policy_version\":\"p1\",\"schema_version\":1,\"branch_id\":\"branch\",\"capabilities\":[]}");
+            if (path.EndsWith("heartbeat")) return Json("{}");
+            calls.Add(path);
+            if (path.EndsWith("social/delivery"))
+            {
+                bodies.Add(await request.Content!.ReadAsStringAsync());
+                if (++attempt == 1) return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                done.TrySetResult();
+                if (rejectHearing) return new HttpResponseMessage(HttpStatusCode.Conflict);
+            }
+            return Json("{}");
+        });
+        var poll = new Handler(async (_, token) => { await Task.Delay(Timeout.Infinite, token); return Json("{}"); });
+        using var worker = new BridgeWorker(new Uri("http://127.0.0.1:8765"), new SessionRequest(), "", new Handler((_, _) => Task.FromResult(Json("{}"))), events, poll);
+        worker.SocialDeliveries.TryAdd(new SocialDeliveryDispatch {
+            Snapshots = new[] { new EventEnvelope { SessionId = "ses", Kind = "world.snapshot" } },
+            Ack = new Ack { SessionId = "ses", CommandId = "line", Status = "completed" },
+            Body = new { scene_id = "social", command_id = "line", sampled_at = "immutable" }
+        });
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (worker.SocialDeliveries.Count > 0 && DateTime.UtcNow < deadline) await Task.Delay(5);
+        Assert.Equal(new[] { "/v1/bridge/events:batch", "/v1/bridge/commands/line/ack", "/v1/bridge/social/delivery", "/v1/bridge/events:batch", "/v1/bridge/commands/line/ack", "/v1/bridge/social/delivery" }, calls);
+        Assert.Equal(bodies[0], bodies[1]); Assert.Equal(0, worker.SocialDeliveries.Count); Assert.False(worker.RequiresReconnect);
+    }
     [Fact] public void PythonWireFixtureDecodesActorBindingAndUtcExpiry()
     {
         var batch = Wire.Decode<CommandBatch>("{\"commands\":[{\"id\":\"cmd\",\"seq\":1,\"kind\":\"action.execute\",\"session_id\":\"ses\",\"actor_id\":\"npc\",\"runtime_instance_id\":\"instance-1\",\"runtime_generation\":7,\"expires_at\":\"2026-10-10T12:00:10+00:00\",\"idempotency_key\":\"effect\",\"payload\":{}}],\"cursor\":1}");

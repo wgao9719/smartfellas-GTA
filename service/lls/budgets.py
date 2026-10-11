@@ -1,11 +1,11 @@
 """Durable, content-free AI request accounting independent of player profiles."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from .gateway_config import DailyBudget, ModelPrice
+from .gateway_config import ChatterBudget, DailyBudget, ModelPrice
 
 
 class BudgetExceeded(ValueError):
@@ -25,12 +25,14 @@ class BudgetLedger:
         self.repository = repository
 
     def reserve(self, *, now, budget_class, provider, model, micro_usd, limit, price=None):
-        if budget_class not in {"foreground", "background"}:
+        if budget_class not in {"foreground", "background", "chatter"}:
             raise ValueError("unknown AI budget class")
         if not isinstance(limit, DailyBudget) or type(micro_usd) is not int or micro_usd < 0:
             raise ValueError("invalid AI budget reservation")
         if any(not isinstance(x, str) or not 1 <= len(x) <= 128 for x in (provider, model)):
             raise ValueError("invalid provider or model identifier")
+        if budget_class == "chatter" and not isinstance(limit, ChatterBudget):
+            raise ValueError("chatter requires a minute and daily budget")
         day = utc_day(now)
         request_id = uuid4().hex
         repo = self.repository
@@ -44,6 +46,15 @@ class BudgetLedger:
             ).fetchone()
             if count >= limit.max_requests or spent + micro_usd > limit.micro_usd_limit:
                 raise BudgetExceeded("daily AI request or configured spending budget exhausted")
+            if budget_class == "chatter":
+                cutoff = (now.astimezone(timezone.utc) - timedelta(seconds=60)).isoformat()
+                recent = repo.connection.execute(
+                    "SELECT count(*) FROM ai_requests WHERE budget_class='chatter' "
+                    "AND day IN (?,?) AND created_at>?",
+                    (day, utc_day(now - timedelta(seconds=60)), cutoff),
+                ).fetchone()[0]
+                if recent >= limit.max_requests_per_minute:
+                    raise BudgetExceeded("NPC chatter minute budget exhausted")
             repo.connection.execute(
                 "INSERT INTO ai_requests VALUES(?,?,?,?,?,?,?,'reserved',NULL,NULL,?,?)",
                 (
@@ -101,7 +112,7 @@ class BudgetLedger:
         result = {"day_utc": day, "currency": "USD", "cost_basis": "configured_price_estimate"}
         repo = self.repository
         with repo._lock:
-            for category in ("foreground", "background"):
+            for category in ("foreground", "background", "chatter"):
                 row = repo.connection.execute(
                     "SELECT count(*) AS requests,coalesce(sum(charged_micro_usd),0) AS charged,"
                     "coalesce(sum(state='reserved'),0) AS pending,"

@@ -20,6 +20,8 @@ Living Los Santos is a GTA V Legacy Story Mode project for interactive, persiste
 - Whisper mode uses a hold key or a typed `/w ` prefix. Whispers reach only nearby targets, and development perception limits overhearing to the whisper radius.
 - The development perception interface filters witnesses and runs optional authored triggers with actor-private evidence.
 - Development social scenes support recipient-owned invitations, private contexts, bounded turns, and memories from confirmed delivered quotes.
+- Debug native social integration scans eight nearby civilians, dispatches bounded chat tasks, renders overhead lines, and sends listener evidence. See [setup and verification limits](docs/actions/npc-social-embodiment.md).
+- Ambient social scenes use recipient-owned rule decisions, a separate chatter budget, display-time receipts, and authored zero-request fallback. A C# fake-street probe exercises eight ambient pedestrians and four confirmed lines.
 - An optional development scheduler initiates social scenes and requests turns. It waits for separate delivery and hearing evidence.
 - Retained hearing changes social partner preferences and later topics. Own refusals create temporary game-time pauses. Memory controls remove these effects.
 - A development neighborhood simulation tracks 48 named characters through virtual schedules, bounded catch-up, and reservations for future embodiment.
@@ -36,7 +38,7 @@ Living Los Santos is a GTA V Legacy Story Mode project for interactive, persiste
 - The adapter samples the selected pedestrian's movement, ambient scenario, and phone use. Dialogue context describes them as the actor's current activity. The [capability sheet](docs/actions/ambient-persona-and-activity.md) lists the unverified natives.
 - Provider controls persist configured-price budgets, cloud consent, and an explicit local fallback. Revocation cancels active remote requests.
 
-AI starts disabled. The fake provider requires explicit development selection. Hosted AI requires explicit cloud opt-in and model configuration. Release adapter builds advertise no native action capabilities while game validation remains pending.
+AI starts disabled. The fake provider requires explicit development selection. Hosted AI requires explicit cloud opt-in and model configuration. Release adapter builds advertise no native action capabilities while game validation remains pending. Debug builds can opt into the [18-action development catalog](docs/actions/development-task-catalog.md), including movement, gestures, vehicle tasks, and combat.
 
 The [semantic memory guide](docs/semantic-memory.md) explains optional embeddings, shared budgets, and lexical fallback. The [memory consolidation guide](docs/memory-consolidation.md) covers importance scoring and episode summaries.
 

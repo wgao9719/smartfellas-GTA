@@ -10,7 +10,7 @@ public class RegistryTests
     [Fact] public void EmbeddedRegistryContainsOnlyTheFiniteUnverifiedCatalog()
     {
         var registry = ActionRegistry.Default;
-        Assert.Equal(8, registry.ActionIds.Count);
+        Assert.Equal(18, registry.ActionIds.Count);
         Assert.Equal("1", registry.Version);
         foreach (var id in registry.ActionIds)
         {

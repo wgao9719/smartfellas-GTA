@@ -6,6 +6,7 @@ namespace LivingNPC.Core
     // State only. The adapter owns key events; no audio or game call lives here.
     public sealed class ConversationInput
     {
+        public bool AllowActions { get; set; }
         public string? SceneId { get; private set; }
         public string? ActorId { get; private set; }
         public string? RuntimeInstanceId { get; private set; }
@@ -61,6 +62,7 @@ namespace LivingNPC.Core
             if (!Bound) return null;
             var payload = new Dictionary<string, object> { ["scene_id"] = SceneId!, ["runtime_instance_id"] = RuntimeInstanceId! };
             if (Whisper) payload["whisper"] = true;
+            if (AllowActions) payload["consent"] = true;
             return payload;
         }
 
@@ -70,6 +72,7 @@ namespace LivingNPC.Core
             if (!Bound || string.IsNullOrWhiteSpace(typed.Text)) return null;
             var payload = new Dictionary<string, object> { ["text"] = typed.Text, ["input_mode"] = "typed", ["scene_id"] = SceneId! };
             if (typed.Whisper) payload["whisper"] = true;
+            if (AllowActions) payload["consent"] = true;
             return payload;
         }
 

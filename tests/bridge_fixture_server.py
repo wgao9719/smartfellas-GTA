@@ -84,6 +84,7 @@ def main():
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--database", required=True)
     parser.add_argument("--speech", action="store_true")
+    parser.add_argument("--ambient-social", action="store_true")
     parser.add_argument("--social", action="store_true")
     parser.add_argument("--social-autonomy", action="store_true")
     parser.add_argument("--skills", action="store_true")
@@ -93,6 +94,8 @@ def main():
         parser.error("--social-autonomy requires --social")
     if args.skill_autonomy and not args.skills:
         parser.error("--skill-autonomy requires --skills")
+    if args.ambient_social:
+        args.social = args.social_autonomy = True
     settings = Settings(
         host="127.0.0.1",
         port=args.port,
@@ -105,7 +108,7 @@ def main():
         dev_skills=args.skills,
         dev_skill_autonomy=args.skill_autonomy,
         skill_scheduler={"actor_cooldown_seconds": 0},
-        social_scheduler={"max_turns_per_scene": 2},
+        social_scheduler={"max_turns_per_scene": 4 if args.ambient_social else 2},
         speech=SpeechConfig(
             enabled=args.speech, tts_provider="piper" if args.speech else "disabled"
         ),

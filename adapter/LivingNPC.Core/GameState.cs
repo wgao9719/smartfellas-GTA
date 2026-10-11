@@ -11,7 +11,7 @@ namespace LivingNPC.Core
         public bool Online, MissionActive, CutsceneActive, RandomEventActive, Paused, Loading;
         public bool Known = true;
         public bool Safe => Known && !Online && !MissionActive && !CutsceneActive && !RandomEventActive && !Paused && !Loading;
-        public string ProtagonistId = "";
+        public string ProtagonistId = "", Weather = "";
         public DateTime GameDatetime;
     }
     public sealed class ActorState
@@ -20,10 +20,12 @@ namespace LivingNPC.Core
         public int Handle;
         public long Generation;
         public bool Exists, Alive, Busy, InCombat, MissionEntity, CanMove;
+        public bool InVehicle, IsDriver, VehicleStopped, HasFirearm, ModFollowing;
         public float Distance;
         public Ownership Ownership;
         public ControlPolicy Policy;
-        public float X, Y, Z;
+        public float X, Y, Z, Heading;
+        public string AreaId = "", InteriorId = "";
         public PedRole Role;
         public string RoleReason = "unclassified", Kind = "ambient_ephemeral";
         public PedFacts? Facts;

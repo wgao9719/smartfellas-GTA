@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from service.lls.gateway_config import DailyBudget, GatewayConfig, ModelPrice
+from service.lls.gateway_config import ChatterBudget, GatewayConfig, ModelPrice
 from service.lls.perception import DeliveredUtterance, Witness
 from service.lls.providers import create_provider
 from service.lls.settings import Settings
@@ -436,13 +436,13 @@ async def test_protected_world_stops_invitation_before_model_work(scene, flag):
 
 
 @pytest.mark.parametrize(
-    "change", ["ephemeral", "protected", "service", "absent", "binding", "distance"]
+    "change", ["other_session", "protected", "service", "absent", "binding", "distance"]
 )
 async def test_unavailable_participants_cannot_join(scene, change):
     actor = scene.repo.get_actor("profile", "bea")
-    if change == "ephemeral":
+    if change == "other_session":
         actor["actor_kind"] = "ambient_ephemeral"
-        actor["session_id"] = "session"
+        actor["session_id"] = "other-session"
         with scene.repo.connection:
             scene.repo.connection.execute(
                 "DELETE FROM actors WHERE profile_id=? AND actor_id=?", ("profile", "bea")
@@ -753,7 +753,7 @@ async def test_retelling_rejects_sources_from_other_profiles_and_branches(scene)
 
 
 @pytest.mark.parametrize("provider_name", ["openai", "local_openai"])
-async def test_social_calls_use_background_quota_only(scene, monkeypatch, provider_name):
+async def test_social_calls_use_chatter_quota_only(scene, monkeypatch, provider_name):
     monkeypatch.setenv("LLM_API_KEY", "synthetic-social-key")
     requests = []
 
@@ -767,7 +767,7 @@ async def test_social_calls_use_background_quota_only(scene, monkeypatch, provid
         cloud_opt_in=True,
         dialogue_model="test-social",
         ai_gateway=GatewayConfig(
-            background=DailyBudget(max_requests=3, max_estimated_usd=1),
+            chatter=ChatterBudget(max_requests=3, max_estimated_usd=1),
             prices={
                 "test-social": ModelPrice(
                     input_usd_per_million=1,
@@ -785,7 +785,8 @@ async def test_social_calls_use_background_quota_only(scene, monkeypatch, provid
         await invite(scene)
         usage = provider.usage_summary()
         assert len(requests) == 3
-        assert usage["background"]["requests"] == 3
+        assert usage["chatter"]["requests"] == 3
+        assert usage["background"]["requests"] == 0
         assert usage["foreground"]["requests"] == 0
     finally:
         await provider.aclose()

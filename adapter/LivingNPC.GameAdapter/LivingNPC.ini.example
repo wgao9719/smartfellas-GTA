@@ -24,7 +24,11 @@ ScriptHookVBuild=UNVERIFIED
 ServiceOS=windows
 
 [Development]
-; Debug builds only. This enables unverified G0 face/wait primitives for rig testing.
+; Debug builds only. Enables the unverified task catalog and grants action consent
+; for typed/voice turns (movement, vehicles, and combat included). Backspace cancels.
 EnableUnverifiedActions=false
 ; Debug builds only. Keeps pinned peds from despawning through an unverified persistence call.
 EnableUnverifiedPinPersistence=false
+
+; Debug only: nearby NPC conversations, overhead text, native chat tasks and hearing.
+EnableUnverifiedSocial=false

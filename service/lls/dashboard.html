@@ -103,6 +103,9 @@
         <label for="foreground-usd">Foreground estimated USD per UTC day<input id="foreground-usd" type="number" min="0" max="10000" step="any"></label>
         <label for="background-requests">Background requests per UTC day<input id="background-requests" type="number" min="0" max="100000" step="1"></label>
         <label for="background-usd">Background estimated USD per UTC day<input id="background-usd" type="number" min="0" max="10000" step="any"></label>
+        <label for="chatter-requests">NPC chatter requests per UTC day<input id="chatter-requests" type="number" min="0" max="100000" step="1"></label>
+        <label for="chatter-usd">NPC chatter estimated USD per UTC day<input id="chatter-usd" type="number" min="0" max="10000" step="any"></label>
+        <label for="chatter-minute">NPC chatter requests per minute<input id="chatter-minute" type="number" min="0" max="60" step="1"></label>
       </div>
       <p class="small muted">Requests reserve their maximum estimated cost before dispatch. Missing usage retains the reservation. Profile resets do not reset daily usage.</p>
     </details>
@@ -297,10 +300,11 @@
       for(const direction of ['input','output'])
         el(lane+'-'+direction+'-price').value=price?price[direction+'_usd_per_million']:'';
     }
-    for(const lane of ['foreground','background']){
+    for(const lane of ['foreground','background','chatter']){
       el(lane+'-requests').value=gateway[lane].max_requests;
       el(lane+'-usd').value=gateway[lane].max_estimated_usd;
     }
+    el('chatter-minute').value=gateway.chatter.max_requests_per_minute;
     const fallback=gateway.local_fallback;
     el('fallback-enabled').checked=Boolean(fallback);
     el('fallback-endpoint').value=fallback?.endpoint||'http://127.0.0.1:1234/v1';
@@ -328,8 +332,9 @@
     config.embedding.model=el('embedding-model').value.trim();
     config.embedding.base_url=el('embedding-endpoint').value.trim();
     config.embedding.dimensions=el('embedding-dimensions').value===''?null:numberValue('embedding-dimensions');
-    for(const lane of ['foreground','background'])config.ai_gateway[lane]={
+    for(const lane of ['foreground','background','chatter'])config.ai_gateway[lane]={
       max_requests:numberValue(lane+'-requests'),max_estimated_usd:numberValue(lane+'-usd')};
+    config.ai_gateway.chatter.max_requests_per_minute=numberValue('chatter-minute');
     for(const lane of ['dialogue','action']){
       const model=config[lane+'_model']||config.dialogue_model;
       if(lane==='action'&&model===config.dialogue_model)continue;

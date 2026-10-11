@@ -9,8 +9,17 @@ from fastapi import HTTPException
 from .social_bridge import DEVELOPMENT_SOCIAL_CAPABILITY
 from .social_models import SocialActorState, SocialConfig, SocialEnvironment, SocialStart
 
+SOCIAL_EMBODIMENT_CAPABILITY = "development:social-embodiment:v1"
+
 
 class SocialRuntime:
+    @staticmethod
+    def social_embodied(session):
+        return SOCIAL_EMBODIMENT_CAPABILITY in session.request.manifest.capability_flags
+
+    def social_player_radius(self, session):
+        return 12 if self.social_embodied(session) else 20
+
     def initialize_social(self, social_factory=None):
         self.social_scene_owners = {}
         self.social = None
@@ -74,13 +83,17 @@ class SocialRuntime:
             if (
                 not record
                 or record["actor_kind"]
-                not in {"curated_persistent", "spawned_persistent", "anchored_service"}
+                not in {
+                    "curated_persistent", "spawned_persistent",
+                    "anchored_service", "ambient_ephemeral",
+                }
                 or record.get("flags", {}).get("no_spontaneous_speech")
+                or actor.get("in_vehicle") or actor.get("mod_following")
                 or not self.conversation_policy.check(actor, world).allowed
                 or not 0 <= stamp - actor.get("_sampled_at", -float("inf")) <= 2
                 or not actor.get("area_id")
                 or not actor.get("interior_id")
-                or actor.get("distance", float("inf")) > 20
+                or actor.get("distance", float("inf")) > self.social_player_radius(session)
             ):
                 continue
             result[actor_id] = actor
@@ -128,6 +141,7 @@ class SocialRuntime:
             if (
                 not actor
                 or actor["runtime_instance_id"] != instance_id
+                or actor.get("in_vehicle") or actor.get("mod_following")
                 or not self.conversation_policy.check(actor, world).allowed
                 or not actor.get("area_id")
                 or not actor.get("interior_id")
@@ -142,6 +156,7 @@ class SocialRuntime:
                 actor_id=actor_id,
                 runtime_instance_id=instance_id,
                 sampled_at=wall - timedelta(seconds=age),
+                activity=actor.get("activity"),
                 **{
                     name: actor[name]
                     for name in (
@@ -160,18 +175,11 @@ class SocialRuntime:
                 },
             )
         foreground = bool(
-            (session.task and not session.task.done())
-            or session.speech_state
-            in {
-                "opening_mic",
-                "recording",
-                "stopping_mic",
-                "transcribing",
-                "generating",
-                "speaking",
-            }
+            (session.task and not session.task.done() and session.foreground_actor_id in actors)
+            or (session.speech_identity and session.speech_identity.actor_id in actors
+                and session.speech_state not in {"idle", "refused", "failed"})
             or any(
-                c["kind"] == "dialogue.chunk"
+                c["actor_id"] in actors and c["kind"] == "dialogue.chunk"
                 and not c.get("_social")
                 and c["state"] not in {"completed", "failed", "canceled", "expired", "rejected"}
                 for c in session.commands.values()
@@ -186,8 +194,11 @@ class SocialRuntime:
             game_datetime=datetime.fromisoformat(session.game_datetime),
             sampled_at=wall - timedelta(seconds=world_age),
             actors=actors,
-            player_present=all(session.actors[a]["distance"] <= 20 for a in actors),
+            player_present=all(
+                session.actors[a]["distance"] <= self.social_player_radius(session) for a in actors
+            ),
             foreground_dialogue=foreground,
+            weather=world.get("weather"),
             danger=any(a.in_combat for a in actors.values()),
             **{
                 name: world[name]
@@ -229,7 +240,7 @@ class SocialRuntime:
                 await self.social.forget_session(session.id)
             session.social_scenes.clear()
 
-    async def stop_session_work(self, session, *, erase=False):
+    async def stop_session_work(self, session, *, erase=False, preserve_social=False):
         if self.skill_scheduler is not None:
             await self.skill_scheduler.join(session, erase=erase)
         if self.neighborhood.scheduler is not None:
@@ -237,8 +248,53 @@ class SocialRuntime:
         await self.memory_consolidator.join(session, erase=erase)
         await self.stop_session_skills(session, erase=erase)
         await self.stop_session_speech(session, erase=erase)
-        await self.stop_session_social(session, erase=erase)
+        if not preserve_social:
+            await self.stop_session_social(session, erase=erase)
         await self.flush_outcomes(session)
+
+    async def stop_social_scene(self, session, scene_id, reason="interrupted"):
+        state = session.social_scenes.get(scene_id)
+        if not state or state["canceled"]:
+            return
+        state["canceled"] = True
+        scheduler = self.social_scheduler
+        scheduled = scheduler.states.get(session.id) if scheduler else None
+        if scheduled and scheduled.scene_id == scene_id:
+            await scheduler.join(session)
+        if scene_id in self.social.scenes:
+            await self.social.cancel_scene(scene_id, reason)
+        for command in session.commands.values():
+            if command.get("_social", {}).get("scene_id") == scene_id and command["state"] not in {
+                "completed", "failed", "rejected", "expired", "canceled"
+            }:
+                command["state"] = "canceled"
+        self.command(session, "scene.cancel", None, {"scene_id": scene_id})
+
+    async def interrupt_social_actor(self, session, actor_id):
+        for scene_id, state in list(session.social_scenes.items()):
+            if actor_id in state["participants"]:
+                await self.stop_social_scene(session, scene_id, "player_addressed_participant")
+
+    async def stop_actor_work(self, session, actor_id):
+        """A nearby ped disappearing must not interrupt unrelated conversations."""
+        for scene_id, state in list(session.social_scenes.items()):
+            if actor_id in state["participants"]:
+                await self.stop_social_scene(session, scene_id, "actor_unavailable")
+        identity = session.speech_identity
+        skill = session.skill_run
+        active = (
+            session.foreground_actor_id == actor_id
+            or (identity is not None and identity.actor_id == actor_id)
+            or (skill is not None and skill["identity"].actor_id == actor_id)
+            or any(
+                c.get("actor_id") == actor_id and not c.get("_social")
+                and c["state"] not in {"completed", "failed", "rejected", "expired", "canceled"}
+                for c in session.commands.values()
+            )
+        )
+        if active:
+            self.cancel(session, preserve_social=True)
+            await self.stop_session_work(session, preserve_social=True)
 
     async def refresh_social(self, session):
         async with session.lock:
@@ -251,11 +307,7 @@ class SocialRuntime:
             try:
                 self.social_environment(session, scene_id)
             except HTTPException:
-                self.cancel(session)
-                await self.stop_session_work(session)
-                if not session.closed:
-                    self.command(session, "scene.cancel", None, {"scene_id": None})
-                break
+                await self.stop_social_scene(session, scene_id, "revalidation_failed")
 
     async def social_call(self, session, body, operation):
         from .social import SocialError
@@ -291,9 +343,10 @@ class SocialRuntime:
                         "curated_persistent",
                         "spawned_persistent",
                         "anchored_service",
+                        "ambient_ephemeral",
                     }:
                         raise HTTPException(
-                            409, "social scenes require registered persistent actors"
+                            409, "social scenes require registered current-session actors"
                         )
                 session.social_scenes[body.scene_id] = {
                     "epoch": session.epoch,
@@ -304,6 +357,13 @@ class SocialRuntime:
                 try:
                     environment = self.social_environment(session, body.scene_id)
                     initiator = environment.actors[body.initiator_id]
+                    if self.social_embodied(session):
+                        from math import dist
+
+                        positions = [tuple(a.position.model_dump().values())
+                                     for a in environment.actors.values()]
+                        if any(dist(a, b) > 6 for a in positions for b in positions):
+                            raise HTTPException(409, "native social pair exceeds approach radius")
                     session.social_scenes[body.scene_id].update(
                         area_id=initiator.area_id, interior_id=initiator.interior_id
                     )
@@ -355,6 +415,13 @@ class SocialRuntime:
             async with session.lock:
                 self.ensure_current(session, body.runtime_generation)
                 self.social_environment(session, body.scene_id)
+                if operation == "invite" and result["status"] == "active" and self.social_embodied(
+                    session
+                ):
+                    self.command(session, "social.scene", None, {
+                        "scene_id": body.scene_id, "participants": dict(body.participants),
+                        "duration_seconds": 45,
+                    })
                 if operation == "turn":
                     command = self.command(
                         session,
@@ -367,6 +434,10 @@ class SocialRuntime:
                             "turn_id": result.utterance_id,
                             "chunk_index": 0,
                             "final": True,
+                            **(
+                                {"presentation": "overhead"}
+                                if self.social_embodied(session) else {}
+                            ),
                         },
                     )
                     command["_social"] = {

@@ -6,7 +6,6 @@ from math import dist
 
 from .action_registry import ACTION_DESCRIPTIONS as ACTION_DESCRIPTIONS
 from .action_registry import ACTION_IDS
-from .protocol import ActionProposal
 
 POLICY_VERSION = "1"
 
@@ -17,61 +16,100 @@ class Decision:
     reason: str
 
 
+# Native implementations remain opt-in development capabilities. Metadata alone
+# never enables them. These sets also keep parameterized actions selectable.
+CONSENT_ACTIONS = frozenset({
+    "follow_player", "go_to_safe_point", "run_to_point", "wander_nearby",
+    "enter_vehicle", "leave_vehicle", "drive_to_point", "cruise_vehicle",
+    "fight_target", "shoot_at_target",
+})
+VEHICLE_ACTIONS = frozenset({"leave_vehicle", "drive_to_point", "cruise_vehicle"})
+POINT_ACTIONS = frozenset({"go_to_safe_point", "run_to_point", "drive_to_point"})
+TARGET_ACTIONS = frozenset({"look_at", "enter_vehicle", "fight_target", "shoot_at_target"})
+STATIONARY_ACTIONS = frozenset({
+    "face_player", "wait_here", "look_at", "hands_up", "cower", "play_verified_gesture",
+    "stop_following",
+})
+
+
 class ActionPolicy:
     def __init__(self, *, clock=time.monotonic):
         self.clock = clock
 
     def eligible(self, actor, world, capabilities, consent=False):
-        eligible = []
-        for action in capabilities:
-            if action not in ACTION_IDS:
-                continue
-            # Targeted movement and animations require additional engine proofs.
-            if action in {"go_to_safe_point", "play_verified_gesture"}:
-                continue
-            proposal = ActionProposal(action_id=action)
-            if self.check(proposal, actor, world, capabilities, consent).allowed:
-                eligible.append(action)
-        return eligible
+        return [action for action in capabilities if action in ACTION_IDS
+                and self.availability(action, actor, world, capabilities, consent).allowed]
 
-    def check(self, proposal, actor, world, capabilities, consent=False):
+    def availability(self, action, actor, world, capabilities, consent=False):
         presence = check_presence(actor, world, clock=self.clock)
         if not presence.allowed:
             return presence
         if actor.get("control_policy") != "ambient" or actor.get("ownership") not in {
-            "ambient",
-            "mod_owned",
+            "ambient", "mod_owned",
         }:
             return Decision(False, "protected_actor")
         if actor.get("mission_entity") and actor.get("ownership") != "mod_owned":
             return Decision(False, "game_script_owned")
-        if proposal.action_id not in capabilities:
+        if action not in ACTION_IDS or action not in capabilities:
             return Decision(False, "capability_unavailable")
-        if (
-            proposal.action_id in {"follow_player", "go_to_safe_point", "wander_nearby"}
-            and not consent
-        ):
+        if action in CONSENT_ACTIONS and not consent:
             return Decision(False, "consent_required")
-        if proposal.action_id not in {
-            "face_player",
-            "wait_here",
-            "play_verified_gesture",
-        } and not actor.get("can_move", True):
+        if actor.get("distance", 1000) > 15:
+            return Decision(False, "actor_out_of_range")
+        if action in VEHICLE_ACTIONS:
+            if not actor.get("in_vehicle"):
+                return Decision(False, "not_in_vehicle")
+            if action == "leave_vehicle" and not actor.get("vehicle_stopped"):
+                return Decision(False, "vehicle_moving")
+            if action != "leave_vehicle" and not actor.get("is_driver"):
+                return Decision(False, "not_driver")
+        elif actor.get("in_vehicle"):
+            return Decision(False, "actor_in_vehicle")
+        elif action not in STATIONARY_ACTIONS and not actor.get("can_move", True):
             return Decision(False, "actor_cannot_move")
-        if proposal.action_id == "stop_following" and not actor.get("mod_following", False):
+        if action == "stop_following" and not actor.get("mod_following", False):
             return Decision(False, "no_mod_follow_task")
-        if proposal.action_id == "flee_from_threat" and not actor.get("observed_threat", False):
+        targets = actor.get("action_context", {}).get("targets", [])
+        if action == "flee_from_threat" and not any(t["is_threat"] for t in targets):
             return Decision(False, "no_observed_threat")
-        if proposal.action_id == "play_verified_gesture":
-            return Decision(False, "gesture_mapping_unverified")
-        if proposal.action_id == "go_to_safe_point":
-            point = proposal.arguments.point
-            if (
-                not point
-                or dist(tuple(actor["position"].values()), (point.x, point.y, point.z)) > 15
-            ):
+        if action in TARGET_ACTIONS:
+            kind = "vehicle" if action == "enter_vehicle" else "ped"
+            if not any(t["kind"] == kind for t in targets):
+                return Decision(False, "no_visible_target")
+        if action == "shoot_at_target" and not actor.get("has_firearm"):
+            return Decision(False, "no_equipped_firearm")
+        return Decision(True, "authorized")
+
+    def check(self, proposal, actor, world, capabilities, consent=False):
+        action = proposal.action_id
+        available = self.availability(action, actor, world, capabilities, consent)
+        if not available.allowed:
+            return available
+        args = proposal.arguments
+        if args.duration_seconds is not None and args.duration_seconds > (
+            5 if action in {"face_player", "wait_here"} else 10
+        ):
+            return Decision(False, "invalid_duration")
+        if action == "play_verified_gesture" and args.gesture_id != "wave":
+            return Decision(False, "unknown_gesture")
+        if action in POINT_ACTIONS:
+            point = args.point
+            if not point or dist(
+                tuple(actor["position"][k] for k in ("x", "y", "z")),
+                (point.x, point.y, point.z),
+            ) > 15:
                 return Decision(False, "point_outside_local_area")
-            return Decision(False, "navigation_unverified")
+        if action in TARGET_ACTIONS or action == "flee_from_threat":
+            target_id = args.threat_actor_id if action == "flee_from_threat" else args.target_id
+            target = next((t for t in actor.get("action_context", {}).get("targets", [])
+                           if t["target_id"] == target_id), None)
+            kind = "vehicle" if action == "enter_vehicle" else "ped"
+            if not target or target["kind"] != kind:
+                return Decision(False, "target_unavailable")
+            if action == "flee_from_threat" and not target["is_threat"]:
+                return Decision(False, "no_observed_threat")
+            if action == "enter_vehicle" and not target.get(args.seat + "_seat_free", False):
+                return Decision(False, "seat_unavailable")
         return Decision(True, "authorized")
 
 

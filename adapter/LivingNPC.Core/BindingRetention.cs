@@ -12,9 +12,10 @@ namespace LivingNPC.Core
         public const int MaxBindings = 36, Headroom = 4;
         // The caller passes only bindings it may release, never the selected actor or a pin.
         // Returns the actor ids to release, farthest first. An unknown distance counts as farthest.
-        public static string[] Evict(int bound, IEnumerable<KeyValuePair<string, float>> releasable)
+        public static string[] Evict(int bound, IEnumerable<KeyValuePair<string, float>> releasable, int headroom = Headroom)
         {
-            var excess = bound - (MaxBindings - Headroom);
+            if (headroom < 0 || headroom >= MaxBindings) throw new System.ArgumentOutOfRangeException(nameof(headroom));
+            var excess = bound - (MaxBindings - headroom);
             if (excess <= 0) return new string[0];
             return releasable.OrderByDescending(c => float.IsNaN(c.Value) ? float.PositiveInfinity : c.Value)
                 .ThenBy(c => c.Key, System.StringComparer.Ordinal).Take(excess).Select(c => c.Key).ToArray();

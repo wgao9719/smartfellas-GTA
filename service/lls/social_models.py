@@ -5,7 +5,7 @@ from datetime import datetime
 from pydantic import Field, field_validator
 
 from .perception import TimedEvidence
-from .protocol import Identifier, Position, Protagonist, StrictModel
+from .protocol import ActorActivity, Identifier, Position, Protagonist, StrictModel
 
 DEVELOPMENT_SOCIAL_CAPABILITY = "development:social:v1"
 
@@ -39,6 +39,7 @@ class SocialStart(StrictModel):
 
 
 class SocialActorState(TimedEvidence):
+    activity: ActorActivity | None = None
     actor_id: Identifier
     runtime_instance_id: Identifier
     position: Position
@@ -55,6 +56,7 @@ class SocialActorState(TimedEvidence):
 
 
 class SocialEnvironment(TimedEvidence):
+    weather: str | None = Field(default=None, max_length=32)
     profile_id: Identifier
     branch_id: Identifier
     session_id: Identifier

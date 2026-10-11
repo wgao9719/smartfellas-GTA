@@ -32,6 +32,7 @@ class SocialSchedulerConfig(StrictModel):
 @dataclass
 class _Schedule:
     calls: int = 0
+    pair_radius: float = 10
     recent_calls: deque = field(default_factory=deque)
     attempts: int = 0
     pair_attempts: dict = field(default_factory=dict)
@@ -89,6 +90,12 @@ class SocialScheduler:
             and not session.closed
             and DEVELOPMENT_SOCIAL_CAPABILITY in session.request.manifest.capability_flags
         )
+
+    def _decision_calls(self, session, actor_id):
+        actor = self.runtime.repo.get_actor(
+            session.request.profile_id, actor_id, session_id=session.id
+        )
+        return int(not actor or actor["actor_kind"] != "ambient_ephemeral")
 
     def _reserve(self, state, count):
         now = self.runtime.clock()
@@ -169,7 +176,8 @@ class SocialScheduler:
                 and 0 <= now - actor.get("_sampled_at", -float("inf")) <= 2
                 and actor.get("area_id")
                 and actor.get("interior_id")
-                and actor.get("distance", float("inf")) <= 20
+                and actor.get("distance", float("inf"))
+                <= self.runtime.social_player_radius(session)
             ):
                 current[actor_id] = actor
         return current
@@ -188,7 +196,7 @@ class SocialScheduler:
                     tuple(a["position"][axis] for axis in ("x", "y", "z")),
                     tuple(b["position"][axis] for axis in ("x", "y", "z")),
                 )
-                > 10
+                > state.pair_radius
                 or now - state.pair_last.get(pair, -float("inf"))
                 < self.config.pair_cooldown_seconds
                 or any(
@@ -277,6 +285,7 @@ class SocialScheduler:
             ):
                 return
             state = self.states.setdefault(session.id, _Schedule())
+            state.pair_radius = 6 if self.runtime.social_embodied(session) else 10
             now = self.runtime.clock()
             if state.scene_id:
                 if state.abort_reason:
@@ -308,7 +317,9 @@ class SocialScheduler:
                     return
                 if not self._capacity_available():
                     return
-                if not self._reserve(state, 2):
+                if not self._reserve(state, 1 + self._decision_calls(
+                    session, self.runtime.social.get_scene(state.scene_id)["turn_owner"]
+                )):
                     await self._finish_locked(session, state, "model_call_limit")
                     return
                 state.ready = False
@@ -361,7 +372,9 @@ class SocialScheduler:
                     return
                 # Two independent invitation decisions, one participation review,
                 # and one turn. Early refusal does not refund this scheduler cap.
-                if not self._reserve(state, 4):
+                if not self._reserve(state, 1 + sum(
+                    self._decision_calls(session, actor) for actor in pair
+                ) + self._decision_calls(session, pair[0])):
                     state.status, state.reason = "limited", "model_call_limit"
                     return
                 now = self.runtime.clock()
@@ -417,11 +430,19 @@ class SocialScheduler:
                     state.status, state.reason = review["status"], review["reason"]
                     state.scene_id = None
                     return
+                retell = None
+                if state.turns == 0:
+                    start = self.runtime.social.scenes[state.scene_id].start
+                    retell = await self.runtime.thread_job(
+                        self.runtime.social.store.automatic_retelling, start, actor,
+                        datetime.fromisoformat(session.game_datetime),
+                    )
                 turn = await self.runtime.social_call(
                     session,
                     SocialTurn(
                         **self._envelope(session, state.scene_id),
                         actor_id=actor,
+                        retell_event_id=retell,
                     ),
                     "turn",
                 )

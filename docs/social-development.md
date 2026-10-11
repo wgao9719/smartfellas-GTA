@@ -1,8 +1,8 @@
 # Development NPC social scenes
 
-The service can run bounded scenes between two or three persistent NPCs through explicit development endpoints. Each participant receives its own character context. Invitations require recipient-owned acceptance. Scenes have a turn owner, expiry, turn limit, and interruption checks.
+The service can run bounded scenes between two or three registered NPCs through explicit development endpoints. Each participant receives its own character context. Invitations require recipient-owned acceptance. Scenes have a turn owner, expiry, turn limit, and interruption checks.
 
-An optional [development scheduler](social-autonomy.md) starts two-NPC scenes and requests turns without caller invitation or turn requests. It requires separate fresh hearing evidence before another turn. Native hearing, lasting NPC-to-NPC behavior changes, and game integration remain unfinished. This implementation does not prove autonomous GTA activity.
+An optional [development scheduler](social-autonomy.md) starts two-NPC scenes and requests turns without caller invitation or turn requests. It requires separate fresh hearing evidence before another turn. Debug native integration is implemented but has not been tested in GTA. This implementation does not prove autonomous GTA activity.
 
 ## Gates
 
@@ -11,7 +11,7 @@ Social scenes require all of these conditions:
 - The service runs with `LLS_RELEASE=0`.
 - The service runs with `LLS_DEV_SOCIAL=1`.
 - The authenticated bridge manifest advertises `development:social:v1`.
-- Every participant has a registered persistent actor and a current runtime binding.
+- Every participant has a registered persistent actor or current-session ambient identity and a current runtime binding.
 - Fresh actor and world snapshots show an eligible shared area and interior.
 
 Release adapters do not advertise this capability. The social gate is independent of the development perception gate. Social requests cannot add native action capabilities.
@@ -22,7 +22,7 @@ The four endpoints are `/v1/bridge/social/invite`, `/turn`, `/review`, and `/del
 
 The engine asks every participant, including the initiator, through that participant's private context. The initiator cannot accept for another participant. Invalid decision output fails closed. The fake provider refuses unless the participant's authored fixture explicitly enables invitations.
 
-Hosted or local model work uses the gateway's background allowance. Its default is zero. Setting up foreground conversations does not authorize background spending.
+Hosted or local social model work uses the gateway's separate chatter allowance. Its daily default is zero; its rolling minute cap defaults to eight. Setting up foreground conversations does not authorize background spending.
 
 Each generated utterance belongs to one participant and one pending turn. A subtitle acknowledgment alone does not give another NPC knowledge. The development adapter must separately submit fresh listener evidence for the exact delivered quote. Unknown hearing, stale evidence, identity changes, different interiors, or nonparticipants cannot receive that quote.
 
@@ -53,3 +53,43 @@ Each spoken line records the lines its prompt explicitly carried: a retold sourc
 Deleting a memory also deletes that character's later lines whose prompts carried it, including both copies of each line, transitively. Every deleted memory gets its own content-free scrub marker, and replay cannot restore it. Deletion stays scoped to one character. Other characters' memories of hearing those lines are their own experiences, and the canonical speaker event remains their proof. The administrative delete response lists the derived memory IDs it removed. Links contain identifiers only, and actor reset and profile deletion remove them.
 
 Schema version 4 recovers links only from what earlier speaker events prove: each line's two copies and retold sources. Topic and in-scene carriers from before version 4 were never recorded. Paraphrases that a model produces from general recall are not tracked, and canonical events keep the delivered words. Forgetting a whole conversation is not implemented.
+
+## Ambient first slice
+
+Ambient identities, knowledge retrieval, relationships, decisions, and hearing memories are
+scoped to the current gameplay session. Closing the session removes those identities and
+memories unless the actor was pinned. Ambient acceptance and continuation use only the
+recipient's own persona, activity, familiarity, and recent refusal history; they make no
+model requests. Persistent actors keep model decisions.
+
+Each social turn has a dedicated system prompt and one speaker's private context. Partner
+context contains only an identifier, appearance, and observed activity. Optional `weather`
+in `world.snapshot` reaches the prompt, as does actual game time. Missing weather stays
+unknown. Hidden partner names and biographies are not copied.
+
+A dialogue acknowledgment may supply `observed.displayed_at` as a timezone-aware ISO time.
+It must fall between command creation and acknowledgment arrival; invalid times are rejected
+before delivery writes. Hearing freshness uses that time. Legacy acknowledgments retain
+queue time. Acknowledgment alone still grants no listener memory. The C# controller reports
+the first tick on which it observes that the subtitle rendered, and preserves that timestamp
+on replay. The Debug social controller now has native hearing checks and separate overhead
+text; see [embodiment](actions/npc-social-embodiment.md) for the opt-in and unverified rig checks.
+
+Typed input and push-to-talk interrupt the addressed participant's scene; unrelated scenes
+may continue. Explicit cancellation of a social scene and social revalidation cleanup affect
+only that scene. Global shutdown, world-state protection, erasure, and provider replacement
+retain their broader cleanup behavior.
+
+When dialogue AI is disabled or unavailable, the service can use the authored
+`data/ambient_smalltalk.json` bank. These lines make no external factual claims. Persistent
+model-owned invitation decisions fail closed when a model is unavailable.
+
+Run the cross-language ambient probe:
+
+```sh
+uv run --frozen python tests/live_bridge_check.py --social
+```
+
+Eight simulated pedestrians produce one four-line scene. It verifies the scheduler's
+four-call reservation and turn limit with explicit hearing through the real HTTP boundary.
+The fake provider makes zero external model requests. No result attests GTA behavior.

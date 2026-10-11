@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
+using System.Linq;
+using Newtonsoft.Json.Linq;
 using System.Windows.Forms;
 using GTA;
 using LivingNPC.Core;
@@ -22,6 +24,10 @@ namespace LivingNPC.GameAdapter
         private readonly PinConfirmation pinConfirmation = new PinConfirmation();
         private BridgeWorker? bridge;
         private CommandController? controller;
+        private SocialController? social;
+        private readonly bool socialEnabled = false;
+        private DateTimeOffset nextNearbySample, nextAmbientScene;
+        private readonly Dictionary<string, DateTimeOffset> ambientCooldowns = new Dictionary<string, DateTimeOffset>();
         private long generation = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), seq;
         private string? typing;
         private readonly ConversationInput input = new ConversationInput();
@@ -69,11 +75,12 @@ namespace LivingNPC.GameAdapter
 #if DEVELOPMENT
             enabled = endpoint.Scheme == "http" && endpoint.UserInfo.Length == 0 && endpoint.AbsolutePath == "/" &&
                 (loopback || (devLan && addressValid && PrivateDevAddress(address!) && bootstrapToken.Length >= 24));
-            capabilities = nativeOptIn ? new[] { "face_player", "wait_here" } : Array.Empty<string>();
+            capabilities = nativeOptIn ? NativeActions.DevelopmentCapabilities : Array.Empty<string>();
 #else
             enabled = endpoint.Scheme == "http" && endpoint.UserInfo.Length == 0 && endpoint.AbsolutePath == "/" && loopback && !devLan;
             capabilities = Array.Empty<string>();
 #endif
+            input.AllowActions = capabilities.Length > 0;
             targetKey = settings.GetValue("Input", "TargetKey", Keys.F6);
             textKey = settings.GetValue("Input", "TextKey", Keys.F7);
             pttKey = settings.GetValue("Input", "PttKey", Keys.N);
@@ -81,6 +88,7 @@ namespace LivingNPC.GameAdapter
             cancelKey = settings.GetValue("Input", "CancelKey", Keys.Back);
             pinKey = settings.GetValue("Input", "PinKey", Keys.F8);
 #if DEVELOPMENT
+            socialEnabled = settings.GetValue("Development", "EnableUnverifiedSocial", false);
             game.PinPersistence = settings.GetValue("Development", "EnableUnverifiedPinPersistence", false);
 #endif
             Tick += OnTick; KeyDown += OnKeyDown; KeyUp += OnKeyUp; Aborted += OnAborted;
@@ -94,7 +102,7 @@ namespace LivingNPC.GameAdapter
         }
         private void Connect(WorldState world)
         {
-            controller?.Cancel(input.SceneId); bridge?.Dispose(); game.Reset(); controller = null;
+            social?.Cancel(); social = null; controller?.Cancel(input.SceneId); bridge?.Dispose(); game.Reset(); controller = null; ambientCooldowns.Clear();
             generation++; seq = 0; worldSent = false; removedActors.Clear(); input.Reset(); targetSnapshot = null; typing = null;
             protagonist = world.ProtagonistId; lastGameDate = world.GameDatetime;
             var request = new SessionRequest { ProfileId = profileId, ParentBranchId = parentBranchId, ProtagonistId = protagonist, GameDatetime = world.GameDatetime.ToString("s"), RuntimeGeneration = generation, Capabilities = capabilities,
@@ -109,6 +117,7 @@ namespace LivingNPC.GameAdapter
         private string[] CapabilityFlags()
         {
             var flags = new List<string> { "typed_input", "ptt_control", "subtitles", "runtime_decorator_binding", "role_classifier_v1", "role_table_" + PedRoleTable.Default.Version, "actor_pin" };
+            if (socialEnabled) { flags.Add("development:social:v1"); flags.Add("development:social-embodiment:v1"); }
             if (game.PinPersistence) flags.Add("pin_persistence_unverified");
             return flags.ToArray();
         }
@@ -124,17 +133,17 @@ namespace LivingNPC.GameAdapter
             var timer = Stopwatch.StartNew(); var world = game.ReadWorld();
             if (!world.Safe)
             {
-                if (bridge != null) { CancelInput(); bridge.Dispose(); bridge = null; controller = null; game.Reset(); }
+                if (bridge != null) { CancelInput(); social?.Cancel(); social = null; bridge.Dispose(); bridge = null; controller = null; game.Reset(); }
                 game.ShowStatus("disabled", "Living Los Santos: unavailable in the current game state."); game.Render(null); return;
             }
             // A full game-date rewind and a protagonist switch invalidate every old binding/command.
             if (bridge == null || bridge.RequiresReconnect || world.ProtagonistId != protagonist || world.GameDatetime < lastGameDate.AddSeconds(-2)) Connect(world);
             lastGameDate = world.GameDatetime;
             if (input.Bound && !input.IsCurrent(game.Resolve(input.ActorId!), world, generation)) CancelInput();
-            if (bridge!.Session != null && controller == null) controller = new CommandController(game, bridge.Session.SessionId, generation, bridge.Session.PolicyVersion, capabilities);
+            if (bridge!.Session != null && controller == null) { controller = new CommandController(game, bridge.Session.SessionId, generation, bridge.Session.PolicyVersion, capabilities); if (socialEnabled) social = new SocialController(game, bridge.Session.SessionId, generation); }
             if (bridge.Online)
             {
-                if (!worldSent) { bridge.Events.TryAdd(Event("world.snapshot", null, new { online = world.Online, mission_active = world.MissionActive, cutscene_active = world.CutsceneActive, random_event_active = world.RandomEventActive, paused = world.Paused, protagonist_id = world.ProtagonistId })); worldSent = true; }
+                if (!worldSent) { bridge.Events.TryAdd(Event("world.snapshot", null, new { online = world.Online, mission_active = world.MissionActive, cutscene_active = world.CutsceneActive, random_event_active = world.RandomEventActive, paused = world.Paused, protagonist_id = world.ProtagonistId, weather = world.Weather })); worldSent = true; }
                 if (!wasOnline) { log.Write("bridge_ready", "generation=" + generation); game.ShowStatus("ready", "Living Los Santos: " + targetKey + " target, " + textKey + " text (/w whispers), " + pttKey + " push to talk, " + whisperKey + " whisper, " + pinKey + " twice to pin, " + cancelKey + " cancel."); offlineShown = false; }
                 if (input.PushToTalkHeld && !input.PushToTalkStartQueued)
                 {
@@ -147,33 +156,38 @@ namespace LivingNPC.GameAdapter
                 }
                 if (controller != null)
                 {
-                    while (controller.Commands.Remaining > 0 && bridge.Commands.TryTake(out var command)) controller.Commands.TryAdd(command);
+                    while (controller.Commands.Remaining > 0 && bridge.Commands.TryTake(out var command))
+                    {
+                        if (social != null && SocialController.Owns(command)) social.Handle(command, DateTimeOffset.UtcNow);
+                        else { if (command.Kind == "scene.cancel") social?.Cancel((string?)command.Payload["scene_id"]); controller.Commands.TryAdd(command); }
+                    }
                     controller.Tick(DateTimeOffset.UtcNow);
                     while (bridge.Acks.Remaining > 0 && controller.Acks.TryTake(out var ack)) bridge.Acks.TryAdd(ack);
+                    TickSocial(world);
                 }
             }
             else if (!offlineShown)
             {
                 log.Write("bridge_offline", bridge.LastFailure);
-                CancelInput(); game.ShowStatus("offline", "Living Los Santos: service unavailable. AI stopped."); offlineShown = true;
+                CancelInput(); social?.Cancel(); game.ShowStatus("offline", "Living Los Santos: service unavailable. AI stopped."); offlineShown = true;
             }
             wasOnline = bridge.Online;
             if (bridge.Notices.TryTake(out var notice)) { log.Write("bridge_notice", notice); game.ShowStatus("error", "Living Los Santos: " + notice); }
-            bridge.Fps = Game.FPS; bridge.ActorCount = game.SelectedActorId == null ? 0 : 1;
+            bridge.Fps = Game.FPS; bridge.ActorCount = game.BoundActorCount;
             if (DateTimeOffset.UtcNow >= nextSample && bridge.Online)
             {
                 PruneAndPublish();
                 if (bridge == null) { game.Render(typing); return; }
                 var pending = pinConfirmation.PendingActorId; pinConfirmation.Expire(DateTimeOffset.UtcNow);
                 if (pending != null && game.Resolve(pending) is var pinned && (pinned == null || pinned.Ownership == Ownership.ModOwned)) pinConfirmation.Complete(pending);
-                bridge.Snapshots.ReplaceOldest(Event("world.snapshot", null, new { online = world.Online, mission_active = world.MissionActive, cutscene_active = world.CutsceneActive, random_event_active = world.RandomEventActive, paused = world.Paused, protagonist_id = world.ProtagonistId }));
+                bridge.Snapshots.ReplaceOldest(Event("world.snapshot", null, new { online = world.Online, mission_active = world.MissionActive, cutscene_active = world.CutsceneActive, random_event_active = world.RandomEventActive, paused = world.Paused, protagonist_id = world.ProtagonistId, weather = world.Weather }));
                 if (game.SelectedActorId != null) SendSnapshot(game.Resolve(game.SelectedActorId));
                 nextSample = DateTimeOffset.UtcNow.AddMilliseconds(500);
             }
             if (typing != null) Game.DisableAllControlsThisFrame();
             game.Render(typing, input.Whisper);
             timer.Stop();
-            if (timer.ElapsedMilliseconds > 20) { log.Write("slow_tick", "milliseconds=" + timer.ElapsedMilliseconds); CancelInput(); game.ShowStatus("slow", "Living Los Santos: slow adapter tick. Pending AI stopped."); }
+            if (timer.ElapsedMilliseconds > 20) { log.Write("slow_tick", "milliseconds=" + timer.ElapsedMilliseconds); social?.Cancel(null, true); CancelInput(); game.ShowStatus("slow", "Living Los Santos: slow adapter tick. Pending AI stopped."); }
         }
         private void PruneAndPublish()
         {
@@ -187,22 +201,58 @@ namespace LivingNPC.GameAdapter
         private EventEnvelope? SendSnapshot(ActorState? actor, bool reliable = false)
         {
             if (actor == null || bridge == null) return null;
-            var snapshot = Event("actor.snapshot", actor.ActorId, new {
+            var snapshot = ActorSnapshot(actor);
+            if (reliable) { if (!bridge.Events.TryAdd(snapshot)) { game.ShowStatus("error", "Living Los Santos: observation queue is full."); return null; } }
+            else bridge.Snapshots.ReplaceOldest(snapshot);
+            return snapshot;
+        }
+        private EventEnvelope ActorSnapshot(ActorState actor)
+        {
+            return Event("actor.snapshot", actor.ActorId, new {
                 runtime_handle = actor.Handle, runtime_instance_id = actor.RuntimeInstanceId,
                 ownership = actor.Ownership == Ownership.ModOwned ? "mod_owned" : actor.Ownership == Ownership.GameScriptOwned ? "game_script_owned" : actor.Ownership == Ownership.Unknown ? "unknown" : "ambient",
                 control_policy = actor.Policy == ControlPolicy.Protected ? "protected" : actor.Policy == ControlPolicy.ServiceLimited ? "service_limited" : "ambient", exists = actor.Exists, alive = actor.Alive,
                 distance = actor.Distance, mission_entity = actor.MissionEntity, busy = actor.Busy, in_combat = actor.InCombat, can_move = actor.CanMove,
-                position = new { x = actor.X, y = actor.Y, z = actor.Z }, name = actor.Name, actor_kind = actor.Kind,
+                in_vehicle = actor.InVehicle, is_driver = actor.IsDriver, vehicle_stopped = actor.VehicleStopped,
+                has_firearm = actor.HasFirearm, mod_following = actor.ModFollowing, action_context = actor.ActorId == game.SelectedActorId ? game.ActionContext(actor.ActorId) : new JObject(),
+                position = new { x = actor.X, y = actor.Y, z = actor.Z }, heading = actor.Heading, area_id = actor.AreaId, interior_id = actor.InteriorId, name = actor.Name, actor_kind = actor.Kind,
                 role_class = PedRoleTable.WireName(actor.Role), role_reason = actor.RoleReason, ped_facts = actor.Facts, activity = actor.Activity });
-            if (reliable) { if (!bridge.Events.TryAdd(snapshot)) { game.ShowStatus("error", "Living Los Santos: observation queue is full."); return null; } }
-            else bridge.Snapshots.ReplaceOldest(snapshot);
-            return snapshot;
+        }
+        private void TickSocial(WorldState world)
+        {
+            if (social == null || bridge?.Session == null) return;
+            var now = DateTimeOffset.UtcNow;
+            if (now >= nextNearbySample) { SendSnapshot(game.ScanNearby(generation, now)); nextNearbySample = now.AddMilliseconds(75); }
+            social.Tick(now);
+            while (bridge.Acks.Remaining > 0 && social.Acks.TryTake(out var ack)) bridge.Acks.TryAdd(ack);
+            while (bridge.SocialDeliveries.Remaining > 0 && social.Deliveries.TryTake(out var delivery))
+            {
+                var command = delivery.Item1; var observed = delivery.Item2; var sampleWorld = observed.World;
+                var snapshots = new List<EventEnvelope> { Event("world.snapshot", null, new { online = sampleWorld.Online, mission_active = sampleWorld.MissionActive, cutscene_active = sampleWorld.CutsceneActive, random_event_active = sampleWorld.RandomEventActive, paused = sampleWorld.Paused, protagonist_id = sampleWorld.ProtagonistId, weather = sampleWorld.Weather }) };
+                snapshots.AddRange(observed.Actors.Select(ActorSnapshot));
+                // All evidence belongs to the render frame, even if the game clock advanced this tick.
+                foreach (var snapshot in snapshots) { snapshot.GameDatetime = sampleWorld.GameDatetime.ToString("s"); snapshot.ProtagonistId = sampleWorld.ProtagonistId; }
+                bridge.SocialDeliveries.TryAdd(new SocialDeliveryDispatch {
+                    Ack = new Ack { CommandId = command.Id, SessionId = bridge.Session.SessionId, RuntimeGeneration = generation, Status = "completed", Reason = "overhead_rendered", Observed = new Dictionary<string, object> { ["delivery"] = "subtitle", ["text"] = (string)command.Payload["text"]!, ["display_rule"] = DisplayText.Rule, ["displayed_at"] = observed.DisplayedAt.ToString("O") } },
+                    Snapshots = snapshots.ToArray(),
+                    Body = new { session_id = bridge.Session.SessionId, runtime_generation = generation, protagonist_id = sampleWorld.ProtagonistId, scene_id = (string)command.Payload["scene_id"]!, game_datetime = sampleWorld.GameDatetime.ToString("s"), command_id = command.Id, witnesses = observed.Witnesses }
+                });
+            }
+            while (bridge.Controls.Remaining > 0 && social.Cancellations.TryTake(out var id)) bridge.Controls.TryAdd(Event("scene.cancel", null, new { scene_id = id }));
+            if (social.FailedClosed) { social.Cancel(); bridge.RequiresReconnect = true; return; }
+            if (now < nextAmbientScene || social.ActiveCount >= 2) return;
+            foreach (var expired in ambientCooldowns.Where(p => p.Value <= now).Select(p => p.Key).ToArray()) ambientCooldowns.Remove(expired);
+            var actors = game.NearbyActors.Select(game.Resolve).Where(a => SocialController.Eligible(a, generation) && a!.Distance > 12 && !ambientCooldowns.ContainsKey(a.ActorId) && a.ActorId != input.ActorId && a.Activity?.OnPhone != true).Select(a => a!).ToArray();
+            for (var i = 0; i < actors.Length; i++) for (var j = i + 1; j < actors.Length; j++)
+                if (social.StartAmbient("ambient-" + Guid.NewGuid().ToString("N"), new[] { actors[i], actors[j] }, now))
+                { ambientCooldowns[actors[i].ActorId] = ambientCooldowns[actors[j].ActorId] = now.AddSeconds(120); nextAmbientScene = now.AddSeconds(30); return; }
         }
         private bool LockTarget()
         {
             if (bridge?.Online != true || game.SelectedActorId == null) return false;
             var actor = game.Resolve(game.SelectedActorId);
             if (!input.TryBind(actor, game.ReadWorld(), generation)) return false;
+            social?.CancelActor(actor!.ActorId);
             targetSnapshot = SendSnapshot(actor, true);
             if (targetSnapshot == null) { input.Reset(); return false; }
             return true;
@@ -308,6 +358,6 @@ namespace LivingNPC.GameAdapter
             }
             else CancelInput();
         }
-        private void OnAborted(object sender, EventArgs args) { CancelInput(); bridge?.Dispose(); game.Reset(); log.Write("adapter_stopped"); log.Dispose(); }
+        private void OnAborted(object sender, EventArgs args) { social?.Cancel(); CancelInput(); bridge?.Dispose(); game.Reset(); log.Write("adapter_stopped"); log.Dispose(); }
     }
 }

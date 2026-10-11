@@ -21,6 +21,16 @@ ActionId = Literal[
     "wander_nearby",
     "flee_from_threat",
     "play_verified_gesture",
+    "run_to_point",
+    "look_at",
+    "hands_up",
+    "cower",
+    "enter_vehicle",
+    "leave_vehicle",
+    "drive_to_point",
+    "cruise_vehicle",
+    "fight_target",
+    "shoot_at_target",
 ]
 RoleClass = Literal[
     "civilian",
@@ -144,6 +154,20 @@ class ActorActivity(StrictModel):
         return value if value is None or value in activity_table.SCENARIOS else "other"
 
 
+class ActionTarget(StrictModel):
+    target_id: Identifier
+    kind: Literal["ped", "vehicle"]
+    name: str = Field(max_length=128)
+    position: Position
+    is_threat: bool = False
+    driver_seat_free: bool = False
+    passenger_seat_free: bool = False
+
+
+class ActionContext(StrictModel):
+    targets: list[ActionTarget] = Field(default_factory=list, max_length=8)
+
+
 class ActorSnapshot(StrictModel):
     runtime_handle: int = Field(gt=0)
     runtime_instance_id: Identifier
@@ -159,11 +183,18 @@ class ActorSnapshot(StrictModel):
     actor_kind: Literal[
         "curated_persistent", "spawned_persistent", "ambient_ephemeral", "anchored_service"
     ] = "ambient_ephemeral"
+    heading: float | None = Field(default=None, ge=0, le=360)
     model: str = Field(default="", max_length=128)
     service_integration_id: Identifier | None = None
     area_id: Identifier | None = None
     interior_id: Identifier | None = None
     can_move: bool = True
+    in_vehicle: bool = False
+    is_driver: bool = False
+    vehicle_stopped: bool = False
+    has_firearm: bool = False
+    mod_following: bool = False
+    action_context: ActionContext = Field(default_factory=ActionContext)
     in_combat: bool = False
     # Optional for schema v1 compatibility; missing facts classify as unknown and protected.
     role_class: RoleClass = "unknown"
@@ -173,6 +204,7 @@ class ActorSnapshot(StrictModel):
 
 
 class WorldSnapshot(StrictModel):
+    weather: str | None = Field(default=None, max_length=32)
     online: bool
     mission_active: bool
     cutscene_active: bool
@@ -202,6 +234,7 @@ class PinRequest(StrictModel):
 
 
 class VoiceControl(StrictModel):
+    consent: bool = False
     scene_id: Identifier
     runtime_instance_id: Identifier
     whisper: bool = False
@@ -303,6 +336,8 @@ class SessionClose(StrictModel):
 
 
 class ActionArguments(StrictModel):
+    target_id: Identifier | None = None
+    seat: Literal["driver", "passenger"] | None = None
     max_follow_meters: float | None = Field(default=None, ge=1, le=30)
     duration_seconds: float | None = Field(default=None, ge=0.1, le=30)
     radius: float | None = Field(default=None, ge=1, le=20)
@@ -339,6 +374,7 @@ class DialogueChunk(StrictModel):
     chunk_index: int = Field(ge=0)
     final: bool
     delivery_mode: Literal["subtitle", "audio"] = "subtitle"
+    presentation: Literal["overhead"] | None = None
     audio_duration_ms: int | None = Field(default=None, ge=1, le=30000)
 
 
@@ -362,10 +398,24 @@ class PinCommand(StrictModel):
     actor_kind: Literal["spawned_persistent"]
 
 
+class SocialSceneCommand(StrictModel):
+    scene_id: Identifier
+    participants: dict[Identifier, Identifier] = Field(min_length=2, max_length=3)
+    duration_seconds: float = Field(default=45, gt=0, le=45)
+
+    @model_validator(mode="after")
+    def distinct_bindings(self):
+        if len(set(self.participants.values())) != len(self.participants):
+            raise ValueError("social participants require distinct instances")
+        return self
+
+
 class Command(StrictModel):
     id: Identifier
     seq: int = Field(ge=1)
-    kind: Literal["dialogue.chunk", "action.execute", "scene.cancel", "status", "actor.pin"]
+    kind: Literal[
+        "dialogue.chunk", "action.execute", "scene.cancel", "status", "actor.pin", "social.scene"
+    ]
     session_id: Identifier
     actor_id: Identifier | None
     runtime_generation: int = Field(ge=0)
@@ -382,6 +432,7 @@ class Command(StrictModel):
             "scene.cancel": Cancel,
             "status": StatusMessage,
             "actor.pin": PinCommand,
+            "social.scene": SocialSceneCommand,
         }[self.kind]
         payload_type.model_validate(self.payload)
         if (

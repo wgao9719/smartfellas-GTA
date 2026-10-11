@@ -69,6 +69,10 @@ class DailyBudget(StrictModel):
         )
 
 
+class ChatterBudget(DailyBudget):
+    max_requests_per_minute: int = Field(default=8, ge=0, le=60)
+
+
 class LocalFallback(StrictModel):
     endpoint: str = Field(min_length=1, max_length=512)
     dialogue_model: Identifier
@@ -82,6 +86,9 @@ class GatewayConfig(StrictModel):
     foreground: DailyBudget = Field(default_factory=DailyBudget)
     background: DailyBudget = Field(
         default_factory=lambda: DailyBudget(max_requests=0, max_estimated_usd=0)
+    )
+    chatter: ChatterBudget = Field(
+        default_factory=lambda: ChatterBudget(max_requests=0, max_estimated_usd=0)
     )
     max_prompt_tokens: int = Field(default=16384, ge=1024, le=131072)
     dialogue_output_tokens: int = Field(default=300, ge=1, le=4096)

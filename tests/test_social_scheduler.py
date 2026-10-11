@@ -792,3 +792,44 @@ async def test_invalid_model_decision_keeps_its_reason_without_creating_a_bounda
     )
     assert all(row["last_boundary_at"] is None for row in history.values())
     assert all(row["recent_boundary_count"] == 0 for row in history.values())
+
+
+def test_native_pair_radius_filters_before_fairness_selection():
+    scheduler = SocialScheduler(type("Runtime", (), {"clock": lambda self: 100.0, "repo": None})())
+    state = _Schedule(pair_radius=6)
+    actors = {
+        name: {"position": {"x": x, "y": 0, "z": 0}, "area_id": "block",
+               "interior_id": "street", "runtime_instance_id": name}
+        for name, x in (("a", 0), ("b", 9), ("c", 10))
+    }
+    assert scheduler._pairs(state, actors) == [("b", "c")]
+    assert scheduler._pair(state, actors, {}, "2013-09-17T12:00:00") == ("b", "c")
+
+
+@pytest.mark.parametrize("scope", ["heard", "whisper", "other_actor", "forgotten"])
+async def test_automatic_topic_retells_only_own_retained_nonwhispered_words(automatic, scope):
+    _, runtime, session, _ = automatic
+    owner = "npc-c" if scope == "other_actor" else "npc-a"
+    quote = "I am heading to the pier later."
+    runtime.repo.record_event(session.request.profile_id, session.branch_id, {
+        "event_id": "player-topic", "event_type": "player.utterance_text",
+        "game_datetime": session.game_datetime, "protagonist_id": "franklin",
+        "observer_ids": [owner], "provenance": "heard", "confidence": 1,
+        "payload": {"text": quote, "whisper": scope == "whisper",
+                    "hidden_debug_note": "Never show this."},
+    })
+    memory = runtime.repo.add_memory(
+        session.request.profile_id, session.branch_id, owner, "franklin",
+        session.game_datetime, "The player said: " + quote, ["player-topic"], "heard",
+        session_id=session.id,
+    )
+    if scope == "forgotten":
+        runtime.repo.delete_memory(session.request.profile_id, memory["memory_id"])
+    state = await tick(automatic)
+    command = session.commands[state["pending_command_id"]]
+    assert (command["payload"]["text"] == quote) is (scope == "heard")
+    assert "Never show this" not in command["payload"]["text"]
+    if scope == "heard":
+        await heard(automatic)
+        reported = heard_memories(runtime, session, "npc-b")
+        assert any(quote in memory["text"] for memory in reported)

@@ -59,6 +59,10 @@ def build_context(
         "relationship": {
             k: relationship[k] for k in ("familiarity", "trust", "affinity", "fear", "respect")
         },
+        "action_context": {
+            "position": snapshot.get("position"),
+            "targets": list(snapshot.get("action_context", {}).get("targets", [])),
+        },
         "eligible_actions": {action: ACTION_DESCRIPTIONS[action] for action in eligible},
         "action_outcomes": list(action_outcomes),
         "context_truncated": (
@@ -83,6 +87,8 @@ def build_context(
         elif len(context["input"].encode("utf-8")) > 128:
             original = context["input"]
             context["input"] = clip_utf8(original, len(original.encode("utf-8")) // 2)
+        elif context["action_context"]["targets"]:
+            context["action_context"]["targets"].pop()
         elif context["action_outcomes"]:
             context["action_outcomes"].pop(0)
         else:

@@ -12,7 +12,7 @@ namespace LivingNPC.Core
             public Command Command = null!;
             public string Action = "", Instance = "";
         }
-        private sealed class Subtitle { public Command Command = null!; public string Text = "", Speaker = ""; public DateTimeOffset Until; public bool Delivered; }
+        private sealed class Subtitle { public Command Command = null!; public string Text = "", Speaker = ""; public DateTimeOffset Until; public DateTimeOffset? DisplayedAt; public bool Delivered; }
         private readonly Queue<Subtitle> subtitles = new Queue<Subtitle>();
         private Subtitle? showing;
         private string? statusScene;
@@ -54,10 +54,14 @@ namespace LivingNPC.Core
                 if (Acks.Remaining < 4) break;
                 var actor = game.Resolve(item.Command.ActorId!);
                 var invalid = actor == null || !actor.Exists || !actor.Alive || actor.Generation != Generation || actor.RuntimeInstanceId != item.Instance;
-                var unsafeActor = actor != null && (actor.Busy || actor.InCombat || actor.Policy == ControlPolicy.Protected || actor.Ownership == Ownership.GameScriptOwned || actor.Distance > 15);
+                var unsafeActor = actor != null && (actor.Busy || (actor.InCombat && !NativeActions.IsCombat(item.Action) && item.Action != "flee_from_threat") || actor.Policy == ControlPolicy.Protected || actor.Ownership == Ownership.GameScriptOwned || actor.Distance > 15);
                 if (invalid || !world.Safe || unsafeActor)
                 {
-                    // Never clear tasks after an engine/mission takeover.
+                    // Leaving our radius ends an owned task; an engine/mission takeover does not.
+                    if (!invalid && world.Safe && actor != null && actor.Distance > 15 && !actor.Busy &&
+                        (!actor.InCombat || NativeActions.IsCombat(item.Action) || item.Action == "flee_from_threat") &&
+                        actor.Policy == ControlPolicy.Ambient && (actor.Ownership == Ownership.Ambient || actor.Ownership == Ownership.ModOwned) &&
+                        (!actor.MissionEntity || actor.Ownership == Ownership.ModOwned)) game.Release(item.Command, actor, item.Action);
                     Acknowledge(item.Command, "canceled", "actor_or_world_changed"); ForgetAction(item); continue;
                 }
                 if (now >= item.Command.ExpiresAt)
@@ -67,6 +71,7 @@ namespace LivingNPC.Core
                 var observation = game.Observe(item.Command, actor!, item.Action);
                 if (observation.Status == EffectStatus.Running) continue;
                 var status = observation.Status == EffectStatus.Completed ? "completed" : observation.Status == EffectStatus.TakenOver ? "canceled" : "failed";
+                if (observation.Status != EffectStatus.TakenOver) game.Release(item.Command, actor!, item.Action);
                 Acknowledge(item.Command, status, observation.Reason, observation.Facts); ForgetAction(item);
             }
             if (FailedClosed) return;
@@ -131,15 +136,22 @@ namespace LivingNPC.Core
                 Acknowledge(command, "completed", "pinned", new Dictionary<string, object> { ["actor_id"] = actor!.ActorId }); return;
             }
             if (command.Kind != "action.execute") { Acknowledge(command, "rejected", "unknown_command"); return; }
-            if (active.ContainsKey(actor!.ActorId)) { Acknowledge(command, "rejected", "actor_task_conflict"); return; }
             var action = (string)command.Payload["action_id"]!;
+            active.TryGetValue(actor!.ActorId, out var previousAction);
+            if (previousAction != null && !(action == "stop_following" && previousAction.Action == "follow_player"))
+            { Acknowledge(command, "rejected", "actor_task_conflict"); return; }
             if (!game.Start(command, actor, action, (JObject)command.Payload["arguments"]!)) { Acknowledge(command, "rejected", "native_task_refused"); return; }
+            if (previousAction != null) { Acknowledge(previousAction.Command, "canceled", "follow_stop_requested"); ForgetAction(previousAction); }
             active.Add(actor.ActorId, new Active { Command = command, Action = action, Instance = actor.RuntimeInstanceId });
             safety.Started(actor.ActorId, action, now);
             Acknowledge(command, "started", "task_dispatched", new Dictionary<string, object> { ["task_dispatched"] = true });
         }
         private void ForgetAction(Active item) { game.Forget(item.Command); active.Remove(item.Command.ActorId!); }
-        private static Dictionary<string, object> Rendered(Subtitle subtitle) => new Dictionary<string, object> { ["text"] = subtitle.Text, ["delivery"] = "subtitle", ["display_rule"] = DisplayText.Rule };
+        private static Dictionary<string, object> Rendered(Subtitle subtitle, DateTimeOffset? observedAt = null)
+        {
+            subtitle.DisplayedAt = subtitle.DisplayedAt ?? observedAt ?? DateTimeOffset.UtcNow;
+            return new Dictionary<string, object> { ["text"] = subtitle.Text, ["delivery"] = "subtitle", ["display_rule"] = DisplayText.Rule, ["displayed_at"] = subtitle.DisplayedAt.Value.ToString("O") };
+        }
         private static bool AudioForScene(Subtitle subtitle, string scene) => (string?)subtitle.Command.Payload["delivery_mode"] == "audio" && (string?)subtitle.Command.Payload["scene_id"] == scene;
         private void ReplacePriorAudio(string scene)
         {
@@ -168,7 +180,7 @@ namespace LivingNPC.Core
                 if (invalid != null) { if (!showing.Delivered) Acknowledge(showing.Command, "canceled", invalid, game.SubtitleRendered ? Rendered(showing) : null); showing = null; game.ClearSubtitle(); }
                 else if (!showing.Delivered && game.SubtitleRendered)
                 {
-                    Acknowledge(showing.Command, "completed", "subtitle_rendered", Rendered(showing));
+                    Acknowledge(showing.Command, "completed", "subtitle_rendered", Rendered(showing, now));
                     showing.Delivered = true;
                 }
                 if (showing != null && showing.Delivered && now >= showing.Until) { showing = null; game.ClearSubtitle(); }
@@ -194,7 +206,7 @@ namespace LivingNPC.Core
             {
                 if (!string.IsNullOrWhiteSpace(sceneId) && (string?)item.Command.Payload["scene_id"] != sceneId) continue;
                 var actor = game.Resolve(item.Command.ActorId!);
-                if (world.Safe && actor != null && actor.Exists && actor.Alive && !actor.Busy && !actor.InCombat && actor.RuntimeInstanceId == item.Instance && actor.Ownership != Ownership.GameScriptOwned)
+                if (world.Safe && actor != null && actor.Exists && actor.Alive && !actor.Busy && (!actor.InCombat || NativeActions.IsCombat(item.Action) || item.Action == "flee_from_threat") && actor.RuntimeInstanceId == item.Instance && actor.Ownership != Ownership.GameScriptOwned)
                     game.Release(item.Command, actor, item.Action);
                 Acknowledge(item.Command, "canceled", "user_cancel"); ForgetAction(item);
             }

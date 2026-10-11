@@ -13,6 +13,7 @@ var crashMode = args.Contains("--crash");
 var whisperMode = args.Contains("--whisper");
 if (crashMode && (speechMode || whisperMode)) throw new InvalidOperationException("The crash probe runs alone.");
 if (!endpoint.IsLoopback) throw new InvalidOperationException("The simulated bridge probe requires loopback.");
+if (args.Contains("--social")) { await SocialProbe.Run(endpoint, args.Contains("--embodied")); return; }
 if (args.Contains("--pin")) { await PinProbe.Run(endpoint); return; }
 var generation = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 var request = new SessionRequest { ProfileId = "csharp-probe-" + Guid.NewGuid().ToString("N"), ProtagonistId = "franklin", RuntimeGeneration = generation, GameDatetime = "2013-09-17T12:00:00", Capabilities = new[] { "face_player", "wait_here" }, Manifest = new Dictionary<string, object> {

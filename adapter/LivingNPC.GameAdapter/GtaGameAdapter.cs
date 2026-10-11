@@ -11,7 +11,7 @@ using Newtonsoft.Json.Linq;
 
 namespace LivingNPC.GameAdapter
 {
-    internal sealed class GtaGameAdapter : IGameAdapter
+    internal sealed partial class GtaGameAdapter : ISocialGameAdapter
     {
         private sealed class Binding
         {
@@ -29,6 +29,11 @@ namespace LivingNPC.GameAdapter
         private sealed class TaskRecord
         {
             public int Duration, Hash;
+            public string ActorId = "", Action = "", TargetId = "";
+            public Vector3 Destination;
+            public double MaxTravel = 15, InitialTargetDistance;
+            public VehicleSeat Seat;
+            public bool Dispatched = true, EffectSeen;
             public ActionMotionTracker Motion = null!;
             public bool ObservedActive;
         }
@@ -57,7 +62,7 @@ namespace LivingNPC.GameAdapter
             string protagonist = player.Model.Hash == Game.GenerateHash("player_zero") ? "michael" : player.Model.Hash == Game.GenerateHash("player_one") ? "franklin" : player.Model.Hash == Game.GenerateHash("player_two") ? "trevor" : "unknown";
             return new WorldState { Online = Function.Call<bool>(Hash.NETWORK_IS_GAME_IN_PROGRESS), MissionActive = Game.IsMissionActive,
                 CutsceneActive = Game.IsCutsceneActive, RandomEventActive = Game.IsRandomEventActive, Paused = Game.IsPaused,
-                Loading = Game.IsLoading, GameDatetime = World.CurrentDate, ProtagonistId = protagonist, Known = protagonist != "unknown" };
+                Loading = Game.IsLoading, GameDatetime = World.CurrentDate, Weather = World.Weather.ToString(), ProtagonistId = protagonist, Known = protagonist != "unknown" };
         }
         // Binds the nearest registered or fully civilian ambient ped. Refused peds are never decorated.
         public ActorState? SelectNearest(long generation, out ActorState? refusal)
@@ -131,9 +136,9 @@ namespace LivingNPC.GameAdapter
                 Drop(binding, removed);
             }
             var player = Game.Player.Character.Position;
-            var releasable = bindings.Values.Where(b => !b.ModOwned && b.ActorId != SelectedActorId)
+            var releasable = bindings.Values.Where(b => !b.ModOwned && b.ActorId != SelectedActorId && !IsSocialActor(b.ActorId) && !tasks.Values.Any(t => t.ActorId == b.ActorId))
                 .Select(b => new KeyValuePair<string, float>(b.ActorId, b.Ped.Position.DistanceTo(player)));
-            foreach (var actorId in BindingRetention.Evict(bindings.Count, releasable)) Drop(bindings[actorId], removed);
+            foreach (var actorId in BindingRetention.Evict(bindings.Count, releasable, 10)) Drop(bindings[actorId], removed);
             return removed.ToArray();
         }
         private void Drop(Binding binding, List<string> removed)
@@ -180,13 +185,17 @@ namespace LivingNPC.GameAdapter
             var facts = Sample(ped, binding); var classified = PedClassifier.Classify(facts);
             return new ActorState { ActorId = actorId, RuntimeInstanceId = binding.Instance, Name = binding.Name, Handle = ped.Handle, Generation = binding.Generation,
                 Exists = true, Alive = !ped.IsDead, MissionEntity = facts?.MissionEntity ?? true, Ownership = classified.Ownership, Policy = classified.Policy,
-                Role = classified.Role, RoleReason = classified.Reason, Facts = facts, Activity = SampleActivity(binding), Kind = binding.Kind,
-                Busy = ped.IsInVehicle() || ped.IsRagdoll || ped.IsFleeing || ped.IsOnFire,
+                Role = classified.Role, RoleReason = classified.Reason, Facts = facts, Activity = SampleActivity(binding, actorId == SelectedActorId || IsSocialActor(actorId)), Kind = binding.Kind,
+                Busy = ped.IsRagdoll || ped.IsOnFire || (ped.IsFleeing && !HasOwnedTask(actorId, "flee_from_threat")),
+                InVehicle = ped.IsInVehicle(), IsDriver = ped.IsInVehicle() && ped.SeatIndex == VehicleSeat.Driver && ped.CurrentVehicle.Model.IsCar,
+                VehicleStopped = ped.IsInVehicle() && ped.CurrentVehicle.Speed < 1f,
+                HasFirearm = Function.Call<bool>(Hash.IS_PED_ARMED, ped.Handle, 4), ModFollowing = HasOwnedTask(actorId, "follow_player"),
                 InCombat = ped.IsInCombat, CanMove = !ped.IsInVehicle() && !ped.IsRagdoll,
-                Distance = pos.DistanceTo(Game.Player.Character.Position), X = pos.X, Y = pos.Y, Z = pos.Z };
+                Distance = pos.DistanceTo(Game.Player.Character.Position), X = pos.X, Y = pos.Y, Z = pos.Z, Heading = (ped.Heading % 360 + 360) % 360,
+                AreaId = Function.Call<string>(Hash.GET_NAME_OF_ZONE, pos.X, pos.Y, pos.Z), InteriorId = Function.Call<int>(Hash.GET_INTERIOR_FROM_ENTITY, ped.Handle).ToString(System.Globalization.CultureInfo.InvariantCulture) };
         }
         // Narrative only. Resolve runs every tick, so samples are reused for 250 ms.
-        private static ActorActivity? SampleActivity(Binding binding)
+        private static ActorActivity? SampleActivity(Binding binding, bool detailed)
         {
             var now = MonotonicMilliseconds();
             if (binding.Activity != null && now - binding.ActivityAt < 250) return binding.Activity;
@@ -197,28 +206,13 @@ namespace LivingNPC.GameAdapter
                 if (Function.Call<bool>(Hash.IS_PED_USING_ANY_SCENARIO, ped.Handle))
                 {
                     scenario = ActorActivity.OtherScenario;
-                    foreach (var (name, label) in ActorActivity.Scenarios)
+                    foreach (var (name, label) in detailed ? ActorActivity.Scenarios : Array.Empty<(string, string)>())
                         if (Function.Call<bool>(Hash.IS_PED_USING_SCENARIO, ped.Handle, name)) { scenario = label; break; }
                 }
                 return binding.Activity = new ActorActivity { Movement = ActorActivity.MovementName(ped.IsSprinting, ped.IsRunning, ped.IsWalking, ped.IsStopped),
                     Scenario = scenario, OnPhone = Function.Call<bool>(Hash.IS_PED_RUNNING_MOBILE_PHONE_TASK, ped.Handle), Swimming = ped.IsSwimming, Injured = ped.IsInjured };
             }
             catch (Exception) { return binding.Activity = null; }
-        }
-        public bool Start(Command command, ActorState actor, string actionId, JObject arguments)
-        {
-            OnScriptThread();
-            if (!bindings.TryGetValue(actor.ActorId, out var binding) || !Valid(binding)) return false;
-            if (!TryPosition(binding.Ped, out var origin)) return false;
-            var motion = new ActionMotionTracker(MonotonicMilliseconds(), origin.X, origin.Y, origin.Z);
-            if (!motion.IsValid) return false;
-            var duration = (int)Math.Ceiling(1000 * ((double?)arguments["duration_seconds"] ?? (actionId == "face_player" ? 1.5 : 3)));
-            if (actionId == "face_player") binding.Ped.Task.TurnTo(Game.Player.Character, duration);
-            else if (actionId == "wait_here") binding.Ped.Task.StandStill(duration);
-            else return false;
-            tasks[command.Id] = new TaskRecord { Motion = motion, Duration = duration,
-                Hash = Game.GenerateHash(actionId == "face_player" ? "SCRIPT_TASK_TURN_PED_TO_FACE_ENTITY" : "SCRIPT_TASK_STAND_STILL") };
-            return true;
         }
         private static double MonotonicMilliseconds() => Stopwatch.GetTimestamp() * (1000.0 / Stopwatch.Frequency);
         private static bool TryPosition(Ped ped, out Vector3 position)
@@ -232,7 +226,7 @@ namespace LivingNPC.GameAdapter
             }
             catch (Exception) { return false; }
         }
-        public EffectObservation Observe(Command command, ActorState actor, string actionId)
+        private EffectObservation ObserveG0(Command command, ActorState actor, string actionId)
         {
             OnScriptThread();
             if (!tasks.TryGetValue(command.Id, out var task) || !bindings.TryGetValue(actor.ActorId, out var binding) || !Valid(binding)) return new EffectObservation { Status = EffectStatus.Failed, Reason = "binding_lost" };
@@ -266,17 +260,7 @@ namespace LivingNPC.GameAdapter
                 return new EffectObservation { Status = EffectStatus.TakenOver, Reason = "task_ended_without_observed_completion" };
             return new EffectObservation { Status = EffectStatus.Running };
         }
-        public void Release(Command command, ActorState actor, string actionId)
-        {
-            OnScriptThread();
-            if (tasks.TryGetValue(command.Id, out var task) && bindings.TryGetValue(actor.ActorId, out var binding) && Valid(binding))
-            {
-                var statusNow = Function.Call<int>(Hash.GET_SCRIPT_TASK_STATUS, binding.Ped.Handle, task.Hash);
-                if (statusNow == 0 || statusNow == 1) binding.Ped.Task.ClearAll();
-            }
-            tasks.Remove(command.Id);
-        }
-        public void Reset() { OnScriptThread(); foreach (var binding in bindings.Values) ReleasePersistence(binding); bindings.Clear(); dropped.Clear(); tasks.Clear(); SelectedActorId = null; Recording = false; ClearSubtitle(); }
+        public void Reset() { OnScriptThread(); foreach (var scene in socialScenes.Keys.ToArray()) EndSocial(scene); overhead.Clear(); nearby.Clear(); nearbyScan.Clear(); foreach (var binding in bindings.Values) ReleasePersistence(binding); bindings.Clear(); dropped.Clear(); tasks.Clear(); vehicles.Clear(); SelectedActorId = null; Recording = false; ClearSubtitle(); }
         // Dialogue renders verbatim. Unsafe text never renders, so it never earns a subtitle receipt.
         public void ShowSubtitle(string speaker, string text) { OnScriptThread(); SubtitleRendered = false; subtitle = DisplayText.IsSafe(speaker) && DisplayText.IsSafe(text) ? speaker + ": " + text : ""; subtitleUntil = DateTimeOffset.UtcNow.AddSeconds(30); }
         public void ClearSubtitle() { OnScriptThread(); subtitle = ""; SubtitleRendered = false; }
@@ -285,6 +269,7 @@ namespace LivingNPC.GameAdapter
         {
             OnScriptThread();
             if (Game.IsPaused) return;
+            RenderSocial();
             if (typed != null) GTA.UI.Screen.ShowSubtitle(TypedInput.Echo(typed) + "_", 100);
             else if (subtitle.Length > 0 && DateTimeOffset.UtcNow < subtitleUntil) { GTA.UI.Screen.ShowSubtitle(subtitle, 100); SubtitleRendered = true; }
             if (Recording) GTA.UI.Screen.ShowHelpTextThisFrame(whispering ? "Living Los Santos: Recording (whispering)" : "Living Los Santos: Recording");

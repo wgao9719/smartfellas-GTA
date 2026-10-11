@@ -104,6 +104,7 @@ class Session:
     speech_cleanup: list = field(default_factory=list)
     speech_playback: dict | None = None
     speech_whisper: bool = False
+    speech_consent: bool = False
     voice_task: asyncio.Task | None = None
     social_task: asyncio.Task | None = None
     social_cleanup: list = field(default_factory=list)
@@ -125,6 +126,7 @@ class Session:
     changed: asyncio.Event = field(default_factory=asyncio.Event)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task | None = None
+    foreground_actor_id: str | None = None
     cancel_seq: int = 0
     epoch: int = 0
     closed: bool = False
@@ -453,10 +455,15 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         for command in expired_pins:
             self.settle_pin(session, command)
 
-    def cancel(self, session, scene_id=None):
+    def cancel(self, session, scene_id=None, *, preserve_social=False):
         session.epoch += 1
         self.cancel_speech(session)
-        self.cancel_social(session)
+        if preserve_social:
+            for state in session.social_scenes.values():
+                if not state["canceled"]:
+                    state["epoch"] = session.epoch
+        else:
+            self.cancel_social(session)
         self.cancel_skills(session)
         if self.skill_scheduler is not None:
             self.skill_scheduler.cancel(session)
@@ -474,6 +481,8 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                 if self.trigger_engine:
                     self.trigger_engine.cancel_scene(session.id, scene)
         for command in session.commands.values():
+            if preserve_social and command.get("_social"):
+                continue
             if command["state"] not in TERMINAL and command["kind"] in {
                 "dialogue.chunk",
                 "action.execute",
@@ -995,8 +1004,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                 raise HTTPException(429, "actor limit reached")
             prior = session.actors.get(actor_id)
             if prior and prior["runtime_instance_id"] != payload["runtime_instance_id"]:
-                self.cancel(session)
-                await self.stop_session_work(session)
+                await self.stop_actor_work(session, actor_id)
                 if prior["actor_kind"] == "ambient_ephemeral":
                     session.actors.pop(actor_id, None)
                     raise HTTPException(409, "new ambient instance requires a new actor identity")
@@ -1074,8 +1082,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             session.actors[actor_id] = payload
             session.actor_seq[actor_id] = event.seq
             if not self.conversation_policy.check(payload, session.world).allowed:
-                self.cancel(session)
-                await self.stop_session_work(session)
+                await self.stop_actor_work(session, actor_id)
         elif event.kind == "actor.removed":
             if event.seq > session.actor_seq.get(actor_id, 0):
                 session.actors.pop(actor_id, None)
@@ -1084,8 +1091,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                 await self.db(
                     "release_instance", session.request.profile_id, session.id, actor_id=actor_id
                 )
-                self.cancel(session)
-                await self.stop_session_work(session)
+                await self.stop_actor_work(session, actor_id)
         elif event.kind == "world.snapshot":
             if event.seq <= session.world_seq:
                 return
@@ -1103,6 +1109,8 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             ):
                 self.cancel(session)
                 await self.stop_session_work(session)
+        elif event.kind == "scene.cancel" and payload["scene_id"] in session.social_scenes:
+            await self.stop_social_scene(session, payload["scene_id"], "bridge_interruption")
         elif event.kind == "scene.cancel":
             session.cancel_seq = max(session.cancel_seq, event.seq)
             self.cancel(session, payload["scene_id"])
@@ -1144,12 +1152,11 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         if (
             self.skill_scheduler_active(session)
             or session.skill_task is not None
-            or session.social_task is not None
-            or any(not state["canceled"] for state in session.social_scenes.values())
         ):
             self.cancel(session)
             await self.stop_session_work(session)
             self.command(session, "scene.cancel", None, {"scene_id": None})
+        await self.interrupt_social_actor(session, actor_id)
         if voice_identity is None and session.speech_state in {
             "opening_mic",
             "recording",
@@ -1170,13 +1177,14 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         autonomous_scenes = {
             c["payload"]["scene_id"]
             for c in session.commands.values()
-            if c.get("_autonomous") and c["state"] not in TERMINAL
+            if c.get("_autonomous") and not c.get("_social") and c["state"] not in TERMINAL
         }
         for scene_id in autonomous_scenes:
             self.cancel(session, scene_id)
             self.command(session, "scene.cancel", None, {"scene_id": scene_id})
         if any(
-            c["kind"] == "dialogue.chunk" and c["state"] not in TERMINAL
+            c["kind"] == "dialogue.chunk" and not c.get("_social")
+            and c["state"] not in TERMINAL
             for c in session.commands.values()
         ):
             raise HTTPException(409, "previous speech has not finished delivery")
@@ -1207,6 +1215,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         session.player_speech.move_to_end(payload["scene_id"])
         while len(session.player_speech) > 64:
             session.player_speech.popitem(last=False)
+        session.foreground_actor_id = actor_id
         session.task = asyncio.create_task(
             self.turn(
                 session,
@@ -1402,6 +1411,8 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                         c["kind"] == "action.execute"
                         and c["actor_id"] == actor_id
                         and c["state"] not in TERMINAL
+                        and not (proposal.action_id == "stop_following"
+                                 and c["payload"]["action_id"] == "follow_player")
                         for c in session.commands.values()
                     ):
                         return
@@ -1473,6 +1484,14 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             return await self.acknowledge_pin_locked(session, command, ack)
         if command.get("_audio_pending") and not internal_audio:
             observed = ack.observed or {}
+            delivered_at = command["_created_at_utc"]
+            if "displayed_at" in observed:
+                try:
+                    delivered_at = datetime.fromisoformat(observed["displayed_at"])
+                    if not command["_created_at_utc"] <= delivered_at <= self.utc_now():
+                        raise ValueError("outside command lifetime")
+                except (TypeError, ValueError):
+                    raise HTTPException(422, "display time must be between queue and ack") from None
             actual = observed.get("text", "")
             if (
                 not isinstance(actual, str)
@@ -1524,6 +1543,14 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                 "simulated",
             }:
                 raise HTTPException(422, "dialogue completion requires delivery evidence")
+            delivered_at = command["_created_at_utc"]
+            if "displayed_at" in observed:
+                try:
+                    delivered_at = datetime.fromisoformat(observed["displayed_at"])
+                    if not command["_created_at_utc"] <= delivered_at <= self.utc_now():
+                        raise ValueError("outside command lifetime")
+                except (TypeError, ValueError):
+                    raise HTTPException(422, "display time must be between queue and ack") from None
             actual = observed.get("text", "")
             if not isinstance(actual, str) or not delivered.startswith(actual):
                 raise HTTPException(422, "delivered text does not match command")
@@ -1572,10 +1599,8 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                         actor_id=command["actor_id"],
                         runtime_instance_id=command["runtime_instance_id"],
                         text=actual,
-                        # Until adapters attest the actual delivery time,
-                        # queue time is the conservative earliest bound.
-                        # Delayed acknowledgments cannot refresh a quote.
-                        sampled_at=command["_created_at_utc"],
+                        # Legacy adapters retain the conservative queue-time bound.
+                        sampled_at=delivered_at,
                     )
                     session.delivered_utterances[receipt.event_id] = receipt
                     while len(session.delivered_utterances) > 64:
@@ -1646,6 +1671,12 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             command["state"] = rendered.status if rendered else "queued"
         command["reason"] = ack.reason
         self.finish_skill_ack(session, command, ack)
+        if command["kind"] == "social.scene" and ack.status in {
+            "failed", "rejected", "expired", "canceled"
+        }:
+            await self.stop_social_scene(
+                session, command["payload"]["scene_id"], "embodiment_failed"
+            )
         if self.skill_scheduler is not None:
             self.skill_scheduler.observe(session, command, ack)
         session.changed.set()

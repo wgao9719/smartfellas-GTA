@@ -38,7 +38,9 @@ class SocialConflict(SocialError):
 
 
 TERMINAL = {"refused", "withdrawn", "completed", "canceled", "expired"}
-PERSISTENT = {"curated_persistent", "spawned_persistent", "anchored_service"}
+PARTICIPANTS = {
+    "curated_persistent", "spawned_persistent", "anchored_service", "ambient_ephemeral"
+}
 
 
 class FakeSocialProvider(FakeProvider):
@@ -199,10 +201,12 @@ class SocialEngine:
                 raise SocialUnavailable("social game time moved backwards")
             positions = []
             for actor_id, binding in start.participant_bindings.items():
-                actor = self.repository.get_actor(start.profile_id, actor_id)
+                actor = self.repository.get_actor(
+                    start.profile_id, actor_id, session_id=start.session_id
+                )
                 state = env.actors.get(actor_id)
-                if actor is None or actor["actor_kind"] not in PERSISTENT or state is None:
-                    raise SocialUnavailable("persistent participant is absent")
+                if actor is None or actor["actor_kind"] not in PARTICIPANTS or state is None:
+                    raise SocialUnavailable("registered participant is absent")
                 age = (now - state.sampled_at).total_seconds()
                 if (
                     state.actor_id != actor_id
@@ -279,8 +283,12 @@ class SocialEngine:
     async def _model(self, scene, actor_id, phase, retelling=None):
         env = self._guard(scene)
         epoch = scene.epoch
+        actor = self.repository.get_actor(
+            scene.start.profile_id, actor_id, session_id=scene.start.session_id
+        )
+        ambient_decision = actor["actor_kind"] == "ambient_ephemeral" and phase != "turn"
         memories = None
-        if self.memory_index is not None:
+        if self.memory_index is not None and not ambient_decision:
             memories = await self.memory_index.retrieve_memories(
                 scene.start.profile_id,
                 scene.start.branch_id,
@@ -290,7 +298,7 @@ class SocialEngine:
                 "conversation acquaintances social",
                 token_budget=384,
                 session_id=scene.start.session_id,
-                budget_class="background",
+                budget_class="chatter",
             )
             env = self._guard(scene)
             if scene.epoch != epoch:
@@ -310,6 +318,12 @@ class SocialEngine:
         )
         # Background recall is not a carrier. Lines placed in this budget-trimmed prompt are.
         social = context["social"]
+        social["turn_index"] = scene.turn_index
+        if ambient_decision:
+            from .ambient_social import decision
+
+            choice = decision(context, env.actors[actor_id].activity, env.game_datetime)
+            return json.dumps({"decision": choice}), ()
         topic = social["topic_continuation"]
         carriers = tuple(dict.fromkeys([
             *(item["event_id"] for item in social["heard"]),
@@ -320,7 +334,7 @@ class SocialEngine:
         async def consume():
             output = ""
             async with aclosing(
-                self.provider.dialogue(context, budget_class="background")
+                self.provider.dialogue(context, budget_class="chatter")
             ) as stream:
                 async for part in stream:
                     self._guard(scene)

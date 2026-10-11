@@ -82,7 +82,7 @@ class OutboundGate:
                 raise OutboundDenied("an outbound request is already active in this task")
             if len(active) >= self.config.max_concurrent_requests:
                 raise OutboundDenied("outbound AI concurrency limit reached")
-            if budget_class not in {"foreground", "background"}:
+            if budget_class not in {"foreground", "background", "chatter"}:
                 raise OutboundDenied("unknown AI budget class")
             # UTF-8 bytes plus a protocol allowance bound common tokenizer inputs.
             # Reserve the entire configured input ceiling, not an optimistic estimate.

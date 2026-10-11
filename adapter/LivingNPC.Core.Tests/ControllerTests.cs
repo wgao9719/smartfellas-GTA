@@ -145,7 +145,9 @@ public class ControllerTests
         Assert.Equal(1, game.Subtitles); Assert.Empty(Drain(controller));
         controller.Tick(Now.AddMilliseconds(100)); Assert.Empty(Drain(controller));
         game.SubtitleRendered = true; controller.Tick(Now.AddMilliseconds(200));
-        Assert.Equal("Sentence 0", Assert.Single(Drain(controller)).Observed!["text"]);
+        var rendered = Assert.Single(Drain(controller));
+        Assert.Equal("Sentence 0", rendered.Observed!["text"]);
+        Assert.Equal(Now.AddMilliseconds(200).ToString("O"), rendered.Observed["displayed_at"]);
         Assert.Equal(1, game.Subtitles);
         game.SubtitleRendered = false; controller.Tick(Now.AddSeconds(3)); Assert.Equal(2, game.Subtitles); Assert.Empty(Drain(controller));
         controller.Cancel("scene-1"); Assert.Equal("canceled", Assert.Single(Drain(controller)).Status);

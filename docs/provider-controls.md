@@ -34,7 +34,7 @@ Select **Revoke cloud consent** to stop remote requests. The runtime cancels act
 
 ## Reservations and estimates
 
-Every HTTP model attempt first reserves a request and its maximum configured estimated cost in SQLite. Action-schema repair requires a separate reservation. Foreground and background requests have separate limits. The default background allowance is zero. Local attempts also consume request allowances, with no hosted monetary charge.
+Every HTTP model attempt first reserves a request and its maximum configured estimated cost in SQLite. Action-schema repair requires a separate reservation. Foreground, background maintenance, and NPC chatter requests have separate daily limits. Background and chatter daily allowances default to zero. Chatter additionally has a durable rolling-minute request cap, defaulting to eight, shared across sessions and providers. Social dialogue and its optional semantic retrieval use chatter; memory consolidation retains background. Configure chatter daily requests, estimated USD, and requests per minute in the dashboard. Local attempts also consume request allowances, with no hosted monetary charge.
 
 The gateway uses configured USD prices per million tokens. It reserves the configured input ceiling plus the output limit. It performs monetary arithmetic with decimal values and stores integer micro-USD. This is an estimate from configured prices, not the provider's invoice.
 

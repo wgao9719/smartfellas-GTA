@@ -22,7 +22,7 @@
       },
       "executor": {
         "id": "face_player",
-        "implementation": "g0_debug_only",
+        "implementation": "development_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
@@ -30,7 +30,7 @@
     },
     {
       "id": "follow_player",
-      "description": "Follow nearby with explicit consent.",
+      "description": "Follow the player briefly; max_follow_meters bounds total travel, not following distance.",
       "risk_tier": "B",
       "cooldown_seconds": 5,
       "arguments": {
@@ -41,13 +41,18 @@
             "type": "number",
             "minimum": 1,
             "maximum": 30
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
           }
         },
         "required": []
       },
       "executor": {
         "id": "follow_player",
-        "implementation": "not_implemented",
+        "implementation": "development_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
@@ -66,7 +71,7 @@
       },
       "executor": {
         "id": "stop_following",
-        "implementation": "not_implemented",
+        "implementation": "development_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
@@ -74,7 +79,7 @@
     },
     {
       "id": "go_to_safe_point",
-      "description": "Walk to a validated nearby safe point.",
+      "description": "Walk to a nearby coordinate after the adapter validates a pedestrian destination.",
       "risk_tier": "B",
       "cooldown_seconds": 5,
       "arguments": {
@@ -106,6 +111,11 @@
               "y",
               "z"
             ]
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
           }
         },
         "required": [
@@ -114,7 +124,7 @@
       },
       "executor": {
         "id": "go_to_safe_point",
-        "implementation": "not_implemented",
+        "implementation": "development_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
@@ -139,7 +149,7 @@
       },
       "executor": {
         "id": "wait_here",
-        "implementation": "g0_debug_only",
+        "implementation": "development_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
@@ -158,13 +168,18 @@
             "type": "number",
             "minimum": 1,
             "maximum": 20
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
           }
         },
         "required": []
       },
       "executor": {
         "id": "wander_nearby",
-        "implementation": "not_implemented",
+        "implementation": "development_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
@@ -183,13 +198,18 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
           }
         },
         "required": []
       },
       "executor": {
         "id": "flee_from_threat",
-        "implementation": "not_implemented",
+        "implementation": "development_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
@@ -197,7 +217,7 @@
     },
     {
       "id": "play_verified_gesture",
-      "description": "Play an explicitly verified gesture.",
+      "description": "Play the authored wave gesture. Only gesture_id wave is supported; mapping is unverified in GTA.",
       "risk_tier": "A",
       "cooldown_seconds": 5,
       "arguments": {
@@ -208,6 +228,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
           }
         },
         "required": [
@@ -216,11 +241,351 @@
       },
       "executor": {
         "id": "play_verified_gesture",
-        "implementation": "not_implemented",
+        "implementation": "development_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
       "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+    },
+    {
+      "id": "run_to_point",
+      "description": "Run to a nearby coordinate validated by the adapter.",
+      "risk_tier": "B",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "point": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              },
+              "y": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              },
+              "z": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "z"
+            ]
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "point"
+        ]
+      },
+      "executor": {
+        "id": "run_to_point",
+        "implementation": "development_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+    },
+    {
+      "id": "look_at",
+      "description": "Look at a visible ped from action_context.targets.",
+      "risk_tier": "A",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "target_id"
+        ]
+      },
+      "executor": {
+        "id": "look_at",
+        "implementation": "development_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+    },
+    {
+      "id": "hands_up",
+      "description": "Raise hands briefly.",
+      "risk_tier": "A",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        },
+        "required": []
+      },
+      "executor": {
+        "id": "hands_up",
+        "implementation": "development_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+    },
+    {
+      "id": "cower",
+      "description": "Cower briefly.",
+      "risk_tier": "A",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        },
+        "required": []
+      },
+      "executor": {
+        "id": "cower",
+        "implementation": "development_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+    },
+    {
+      "id": "enter_vehicle",
+      "description": "Enter a listed nearby car in a free seat. seat is driver or passenger; never displace an occupant.",
+      "risk_tier": "B",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "seat": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "target_id",
+          "seat"
+        ]
+      },
+      "executor": {
+        "id": "enter_vehicle",
+        "implementation": "development_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+    },
+    {
+      "id": "leave_vehicle",
+      "description": "Exit the current vehicle only while it is nearly stationary.",
+      "risk_tier": "B",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        },
+        "required": []
+      },
+      "executor": {
+        "id": "leave_vehicle",
+        "implementation": "development_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+    },
+    {
+      "id": "drive_to_point",
+      "description": "Drive the current car to a nearby coordinate, only when seated as its driver.",
+      "risk_tier": "B",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "point": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              },
+              "y": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              },
+              "z": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "z"
+            ]
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "point"
+        ]
+      },
+      "executor": {
+        "id": "drive_to_point",
+        "implementation": "development_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+    },
+    {
+      "id": "cruise_vehicle",
+      "description": "Cruise slowly in the current car for a short bounded interval, only as its driver.",
+      "risk_tier": "B",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        },
+        "required": []
+      },
+      "executor": {
+        "id": "cruise_vehicle",
+        "implementation": "development_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+    },
+    {
+      "id": "fight_target",
+      "description": "Fight a visible ped from action_context.targets briefly; does not promise injury or defeat.",
+      "risk_tier": "B",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "target_id"
+        ]
+      },
+      "executor": {
+        "id": "fight_target",
+        "implementation": "development_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+    },
+    {
+      "id": "shoot_at_target",
+      "description": "Fire the currently equipped firearm at a visible ped briefly; never grants a weapon or promises hits.",
+      "risk_tier": "B",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "target_id"
+        ]
+      },
+      "executor": {
+        "id": "shoot_at_target",
+        "implementation": "development_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
     }
   ]
 }

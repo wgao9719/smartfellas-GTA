@@ -74,6 +74,7 @@ class SpeechRuntime:
         session.speech_identity = None
         session.speech_state = "idle"
         session.speech_whisper = False
+        session.speech_consent = False
         task = session.voice_task
         if task is not None and not task.done():
             task.cancel()
@@ -154,13 +155,21 @@ class SpeechRuntime:
         ):
             raise HTTPException(409, "push-to-talk target binding is unavailable")
         if event.kind == "voice.ptt_started":
-            self.cancel(session)
-            await self.stop_session_social(session)
-            self.command(session, "scene.cancel", None, {"scene_id": None})
+            await self.interrupt_social_actor(session, event.actor_id)
+            foreground_scenes = {
+                c["payload"].get("scene_id") for c in session.commands.values()
+                if not c.get("_social") and c["kind"] in {"dialogue.chunk", "action.execute"}
+                and c["state"] not in {"completed", "failed", "expired", "rejected", "canceled"}
+            }
+            self.cancel(session, preserve_social=True)
+            for scene_id in foreground_scenes:
+                if scene_id:
+                    self.command(session, "scene.cancel", None, {"scene_id": scene_id})
             identity = self.speech_identity(session, event.actor_id, event.payload["scene_id"])
             session.speech_identity = identity
             # Volume is part of the capture lock. A stop cannot change it.
             session.speech_whisper = event.payload["whisper"]
+            session.speech_consent = event.payload["consent"]
             if session.speech_whisper and self.whisper_too_far(
                 session, event.actor_id, identity.scene_id, identity
             ):
@@ -175,6 +184,7 @@ class SpeechRuntime:
                 identity is None
                 or identity != self.speech_identity(session, event.actor_id, scene_id)
                 or event.payload["whisper"] != session.speech_whisper
+                or event.payload["consent"] != session.speech_consent
             ):
                 raise HTTPException(409, "push-to-talk stop does not match its capture")
             if session.speech_state == "refused":
@@ -244,7 +254,7 @@ class SpeechRuntime:
                         "scene_id": identity.scene_id,
                         "input_mode": "voice",
                         "whisper": session.speech_whisper,
-                        "consent": False,
+                        "consent": session.speech_consent,
                     },
                 }
             )
