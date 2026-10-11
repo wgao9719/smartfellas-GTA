@@ -1,5 +1,15 @@
 # Development validation
 
+## Conversation re-verification fixes on Windows - 2026-10-11
+
+The [re-verification fix and measurement record](conversation-reverify-fixes.md)
+covers the follow-up speaker-attribution failure, two-sentence job leads, and
+missing diagnostic fields from `artifacts/rig/ingame-reverify.md`. It records the
+failing regressions, real Qwen2.5-7B service-path runs, corpus/holdout error rates,
+latency and complete final validation. Work stays on `win/validation`; the running
+QA and model services are untouched. No deployment or native re-verification is
+claimed.
+
 ## In-game QA memory and job-lead fixes on Windows - 2026-10-11
 
 Both failures in `artifacts/rig/ingame-qa.md` reproduced before their production

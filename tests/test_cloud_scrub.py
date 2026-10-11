@@ -141,6 +141,28 @@ async def test_cloud_dialogue_does_not_send_personal_data(outbound):
     assert "alex@example.test" not in json.dumps(json.loads(requests[0].content))
 
 
+async def test_cloud_scrubs_named_player_and_assistant_history_at_transport(outbound):
+    provider, _, requests = outbound
+    context = {
+        "actor": {"display_name": "Avery"}, "protagonist_id": "franklin",
+        "input": "My email is " + SENSITIVE["email"],
+        "recent_conversation": [
+            {"role": "player", "text": "The player said: Contact " + SENSITIVE["phone"]},
+            {"role": "npc", "text": "I said: You mentioned " + SENSITIVE["windows-profile"]},
+        ],
+    }
+    original = deepcopy(context)
+    assert [part async for part in provider.dialogue(context)] == []
+    assert_scrubbed(requests, [SENSITIVE["email"], SENSITIVE["phone"], USERNAME])
+    messages = json.loads(requests[0].content)["messages"]
+    assert messages[2] == {"role": "user", "content": "Franklin (the player): Contact [REDACTED]"}
+    assert messages[3] == {"role": "assistant", "content": "You mentioned [REDACTED]"}
+    assert messages[4] == {
+        "role": "user", "content": "Franklin (the player): My email is [REDACTED]",
+    }
+    assert context == original
+
+
 @pytest.mark.parametrize("sensitive", list(SENSITIVE.values()), ids=list(SENSITIVE))
 @pytest.mark.parametrize("path", ["dialogue", "action", "embedding", "skill"])
 async def test_cloud_payloads_scrub_sensitive_data_at_transport(outbound, caplog, path, sensitive):

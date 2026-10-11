@@ -8,7 +8,7 @@ from test_bridge import open_ready, utterance
 from test_context import context_inputs
 
 from service.lls.__main__ import fixture_event, fixture_session
-from service.lls.context import build_context
+from service.lls.context import build_context, dialogue_context_bytes
 from service.lls.protocol import Ack
 from service.lls.providers import FakeProvider
 from service.lls.storage import Repository
@@ -243,6 +243,7 @@ def test_recent_conversation_budget_deduplication_and_provenance(history_repo):
     values.update(recent_conversation=history, memories=history, byte_budget=3500)
     context, trace = build_context(**values)
     assert len(json.dumps(context, ensure_ascii=False).encode("utf-8")) <= 3500
+    assert dialogue_context_bytes(context) <= 3500
     assert context["context_truncated"]
     assert context["memories"] == []
     assert context["recent_conversation"]
@@ -266,6 +267,7 @@ def test_minimum_byte_budget_preserves_introduction_before_multiple_npc_chunks(h
     values.update(recent_conversation=history, input_text="What's my name?", byte_budget=2048)
     context, trace = build_context(**values)
     assert len(json.dumps(context, ensure_ascii=False).encode("utf-8")) <= 2048
+    assert dialogue_context_bytes(context) <= 2048
     assert context["context_truncated"]
     assert context["recent_conversation"][0]["role"] == "player"
     assert INTRODUCTION in context["recent_conversation"][0]["text"]

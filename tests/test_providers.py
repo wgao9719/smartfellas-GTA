@@ -1,10 +1,13 @@
 import asyncio
 import json
+from copy import deepcopy
 
 import httpx
 import pytest
 from pydantic import ValidationError
+from test_context import context_inputs
 
+from service.lls.context import build_context
 from service.lls.gateway_config import GatewayConfig, ModelPrice
 from service.lls.outbound import OutboundGate
 from service.lls.providers import OpenAIProvider, ProviderResponseError
@@ -262,6 +265,73 @@ async def test_dialogue_prompt_excludes_action_metadata_and_requires_spoken_word
     assert "Turn toward the player." not in json.dumps(request)
     assert "face_player" in context["eligible_actions"]
     assert request["stream"] is True
+
+
+async def test_dialogue_serializes_same_actor_history_as_named_chat_turns(provider_factory):
+    requests = []
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, stream=Stream([frame("You are Franklin."), b"data: [DONE]\n"]))
+
+    values = context_inputs()
+    values.update(byte_budget=8000, input_text="What's my name?")
+    record = {
+        "provenance": "heard", "confidence": 1, "game_datetime": values["game_datetime"],
+        "exchange_id": "intro", "source_event_ids": ["intro"],
+    }
+    introduction = "Hi, I'm Franklin. I fix cars for a living."
+    values["recent_conversation"] = [
+        {**record, "memory_id": "m1", "role": "player", "text": "The player said: " + introduction},
+        {**record, "memory_id": "m2", "role": "npc", "text": "I said: Hi there.",
+         "source_event_ids": ["reply-1"], "provenance": "directly_observed"},
+        {**record, "memory_id": "m3", "role": "npc", "text": "I said: What brings you by?",
+         "source_event_ids": ["reply-2"], "provenance": "directly_observed"},
+    ]
+    values["memories"] = [{
+        **record, "memory_id": "old", "source_event_ids": ["older"],
+        "text": "The player said: I like the beach.",
+    }]
+    context, _ = build_context(**values)
+    original = deepcopy(context)
+    provider = provider_factory(local(), transport=httpx.MockTransport(handle))
+    assert "".join([part async for part in provider.dialogue(context)]) == "You are Franklin."
+    messages = requests[0]["messages"]
+    assert [item["role"] for item in messages] == ["system", "user", "user", "assistant", "user"]
+    assert messages[0]["content"].startswith('You are "Avery", the NPC')
+    assert "The player is the protagonist named Franklin." in messages[0]["content"]
+    assert messages[2]["content"] == "Franklin (the player): " + introduction
+    assert messages[3]["content"] == "Hi there. What brings you by?"
+    assert messages[4]["content"] == "Franklin (the player): What's my name?"
+    supplied = json.loads(messages[1]["content"])
+    assert "input" not in supplied
+    assert all("text" not in item for item in supplied["recent_conversation"])
+    assert supplied["recent_conversation"][0]["source_event_ids"] == ["intro"]
+    assert supplied["recent_conversation"][0]["provenance"] == "heard"
+    assert supplied["memories"][0]["text"] == "Franklin told you: I like the beach."
+    assert introduction not in messages[1]["content"]
+    assert "The player said:" not in json.dumps(messages)
+    assert "I said:" not in json.dumps(messages)
+    assert context == original
+
+
+async def test_dialogue_budget_includes_history_before_any_provider_request(provider_factory):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, stream=Stream([b"data: [DONE]\n"]))
+
+    provider = provider_factory(
+        local(context_byte_budget=2048), transport=httpx.MockTransport(handle),
+    )
+    context = {
+        "actor": {"display_name": "Avery"}, "protagonist_id": "franklin", "input": "Hi.",
+        "recent_conversation": [{"role": "player", "text": "The player said: " + "\u754c" * 800}],
+    }
+    with pytest.raises(ProviderResponseError, match="context exceeds"):
+        _ = [part async for part in provider.dialogue(context)]
+    assert requests == []
 
 
 async def test_two_invalid_action_proposals_produce_no_action(provider_factory):

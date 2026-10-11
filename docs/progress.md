@@ -4,6 +4,12 @@ Date: 2026-10-11. This note records the project state after the second working s
 
 ## Status
 
+The in-game re-verification exposed speaker-attribution errors and contextual
+two-sentence job leads. The [re-verification fix record](conversation-reverify-fixes.md)
+documents named chat-history turns, contextual sentence classification, local
+single-slot timeout handling, diagnostic fields, and measured remaining model
+errors. These service changes have not been deployed or re-verified in GTA.
+
 The first real conversations on adapter `427eebe` exposed action narration in
 speech, an Enter/phone conflict, stale cancellation status, invisible target
 selection, and an ambiguous-timeline notice. The

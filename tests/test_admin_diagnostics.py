@@ -77,6 +77,36 @@ async def test_admin_shows_profile_selection_warning_without_creating_a_session(
     assert overview["sessions"][0]["save_slot"] == session.request.save_slot
 
 
+async def test_admin_diagnostics_shows_conversation_and_grounding_metadata(client):
+    session = await open_profile(client)
+    verdicts = [
+        {
+            "sentence_index": index,
+            "source": source,
+            "allowed": source == "rule",
+            "reason": "accepted" if source == "rule" else "unsupported_claim",
+            "previous_sentence_used": index > 0,
+        }
+        for index, source in enumerate(("rule", "classifier", "fallback"))
+    ]
+    session.trace.append({
+        "turn_id": "fixture-turn",
+        "recent_conversation_memory_ids": ["fixture-player", "fixture-npc"],
+        "grounding": "sentence_refused",
+        "grounding_verdicts": verdicts,
+        "candidate_text": "private rejected sentence",
+        "player_text": "private player question",
+    })
+    response = await client.get(f"/v1/admin/sessions/{session.id}/diagnostics")
+    assert response.status_code == 200
+    trace = response.json()["trace"][0]
+    assert trace["recent_conversation_memory_ids"] == ["fixture-player", "fixture-npc"]
+    assert trace["grounding"] == "sentence_refused"
+    assert trace["grounding_verdicts"] == verdicts
+    assert "private rejected sentence" not in response.text
+    assert "private player question" not in response.text
+
+
 async def test_bridge_identity_cannot_open_administrator_diagnostics(client):
     session = await open_profile(client)
     response = await client.get(

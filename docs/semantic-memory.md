@@ -11,6 +11,13 @@ scoped to the active profile, protagonist, gameplay session, and exact timeline 
 The current player input remains in its separate `input` field. Prior player utterances
 and acknowledged NPC reply chunks appear chronologically in `recent_conversation`,
 with role, exchange ID, memory ID, game time, provenance, confidence, and source event IDs.
+At the dialogue provider boundary, that window becomes real chat turns: player
+messages use the `user` role and name the protagonist (for example,
+`Franklin (the player): ...`), while NPC replies use `assistant`. The system prompt
+states the NPC's identity first, then identifies the player as the named protagonist.
+The recent transcript is removed from the context JSON so its first-person wording
+does not masquerade as the NPC's own memory. Retrieved player statements render as
+`Franklin told you: ...`; stored memory text and source links remain unchanged.
 Equal game timestamps use event insertion order; reply chunks retain their delivery order.
 Generated or canceled speech without delivery evidence is absent. An acknowledged
 delivered prefix can be remembered even when the rest of its reply was canceled.
@@ -22,6 +29,8 @@ Budget pressure removes scored records first, then older complete exchanges; an 
 latest exchange is clipped, and trailing NPC chunks can be removed to preserve the
 latest player utterance. Every such reduction sets `context_truncated`. The final trace
 contains retained IDs and byte counts, never conversation text.
+Administrative session diagnostics expose `recent_conversation_memory_ids` alongside
+the combined `memory_ids`, so QA can distinguish this window from scored retrieval.
 
 Memory edits, deletion, actor reset, profile deletion, memory TTL, and raw-event retention
 apply before each prompt. Raw-event expiry ends the recent window for those events while

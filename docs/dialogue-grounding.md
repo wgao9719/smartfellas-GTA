@@ -9,6 +9,24 @@ These violate the agent-design conversation/storyline boundaries and
 
 ## Speech boundary
 
+The in-game re-verification reported two context-dependent leaks: a busy-docks
+hint followed by a suggestion to look there, and an orphan invitation after an
+earlier offer was filtered. Sentence checks now include the player's question
+and a bounded previous sentence retained for delivery. Rejected sentences never
+become that previous sentence. Under requests for jobs, money, missions or help,
+indirect availability claims and invitations can be leads even when they omit the
+benefit or destination. Personal work history, refusals and ordinary observations
+remain controls. The two verbatim QA failures live only in the separate reporting
+holdout; the regression corpus is unchanged.
+
+Session diagnostics expose `grounding_verdicts` with sentence index, decision
+source (`rule`, `classifier` or `fallback`), allowed/refused status, a fixed reason
+code and whether the classifier used previous-sentence context. They add no sentence or
+question text. The administrator endpoint also exposes the existing refusal marker
+and recent-conversation memory IDs. See the
+[re-verification fix record](conversation-reverify-fixes.md) for real-model rates,
+latency and remaining limits.
+
 `context.py` supplies bounded `speech_constraints`; `providers.py` and the
 versioned dialogue policy explain those constraints. Dialogue remains a plain-text
 stream. The separate action selector still runs once, after the accepted utterance,
@@ -35,7 +53,8 @@ The foreground gate and prompt constraints now use the locked current player
 utterance. Requests for jobs, income, or ambiguous help make hiring claims and
 indirect referrals to people or places restricted, including sentences that omit
 the purpose because an earlier sentence or the player's question supplied it.
-Each streamed sentence is checked independently before subtitle or TTS delivery.
+Streamed sentences are checked in order with bounded conversation context before
+subtitle or TTS delivery.
 Ordinary navigation questions, questions about the NPC's working life, personal
 work history, and refusals remain allowed. Social and authored speech retain the
 same explicit-claim gate without borrowing an unrelated player's request.
@@ -146,14 +165,20 @@ Unselected sentences incur no model request or asynchronous wait. Exact
 receipt-authorized completion lines retain their existing authorization.
 
 The classifier uses the configured provider's action model, or its dialogue model
-when no action model is configured. A short independent prompt receives only the
-sentence and player utterance as untrusted data, requesting `yes` or `no`. It uses
-temperature zero, at most four output tokens, no retries, and an 800 ms deadline.
+when no action model is configured. A short independent prompt receives the
+candidate sentence, the player's question (first 512 characters), and the last
+sentence accepted for delivery (last 512 characters) as untrusted data, requesting
+`yes` or `no`. This window does not wait for an adapter delivery acknowledgment. It uses
+temperature zero, at most four output tokens and no retries. The deadline is
+800 ms for remote providers and three seconds for local providers, capped by
+`model_timeout_seconds`. The local allowance includes queue time behind ongoing
+dialogue generation on a single-slot server; the foreground turn's 30-second cap
+still applies. The outer sentence check and provider request share this bound.
 Only a complete `no` (ignoring case and surrounding whitespace) keeps a candidate.
 `yes`, malformed/truncated output, errors, exhausted budgets and timeouts drop it;
 an entirely removed reply uses the neutral fallback. A result returned after timeout
 cancellation is also rejected. Cancellation joins provider accounting cleanup;
-800 ms is the inference deadline, not a hard real-time guarantee for OS scheduling
+These are inference deadlines, not hard real-time guarantees for OS scheduling
 or durable cleanup.
 
 Foreground checks run sequentially before each sentence's subtitles/TTS, in an
@@ -179,9 +204,14 @@ regression corpus and is read only by `tools/benchmark_grounding_model.py`. Five
 unsafe sentences are verbatim user examples; the two abbreviated already-blocked
 examples are explicitly marked reconstructions. The original ordinary list was
 not supplied, so the fixture labels its 16 new ordinary controls independently.
-All holdout lines use `Know where I can make some quick money?`.
+The original holdout uses `Know where I can make some quick money?`.
+The re-verification additions preserve their exact questions, including the
+jobs/missions/cash question for the orphan invitation.
 
-On TOWER-PENGU, 2026-10-11 at 12:15:30 UTC, the final code ran against the existing
+The following benchmark is historical, before the attribution/contextual-window
+fix and the two new holdout cases. Current results are in the
+[re-verification fix record](conversation-reverify-fixes.md).
+On TOWER-PENGU, 2026-10-11 at 12:15:30 UTC, that revision ran against the existing
 llama.cpp server at `http://127.0.0.1:8091/v1`, model alias `qwen2.5-7b-instruct`:
 
 ```powershell

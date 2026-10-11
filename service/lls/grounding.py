@@ -146,6 +146,13 @@ _REFERRAL = _patterns(
     r"\b(?:check out|check with|check the|ask around|head (?:down|over|to)|"
     r"talk to|speak to|ask the|try the|visit the|go (?:to|around)|look (?:at|around))\b",
     r"\b(?:come back|worth a look|(?:person|one|guy) to talk to)\b",
+    r"\b(?:check (?:it|that|this|them) out|look (?:there|here|somewhere) "
+    r"for|look for something|drop by|follow up with)\b",
+)
+_BUSY_OPPORTUNITY = _patterns(
+    r"\b(?:docks?|piers?|warehouses?|garages?|shops?|stores?|bars?|restaurants?|"
+    r"factories|construction sites?|depots?|racetracks?|stations?)\b.*"
+    r"\b(?:is|are|stays?|gets?)\s+(?:(?:always|usually|really|pretty|very|so)\s+)*busy\b",
 )
 _RHETORICAL_REFERRAL = re.compile(r"\bwhy (?:(?:don't|do not) you|you (?:don't|do not))\s*$")
 _OPPORTUNITY_DENIAL = re.compile(
@@ -229,7 +236,9 @@ def _restricted_claim(text, *, seeking_opportunity=False):
                 if not _DENIAL_PREFIX.search(prefix) or _RHETORICAL_REFERRAL.search(prefix):
                     return True
         if (
-            seeking_opportunity and _OPPORTUNITY.search(clause)
+            seeking_opportunity and (
+                _OPPORTUNITY.search(clause) or _BUSY_OPPORTUNITY.search(clause)
+            )
             and not _OPPORTUNITY_DENIAL.search(clause)
         ):
             return True
@@ -278,6 +287,22 @@ def speech_constraints(*, completion_lines=(), player_text=""):
     return constraints
 
 
+CONVERSATION_WINDOW_CHARS = 512
+
+
+def last_sentence(text):
+    """Only the bounded last sentence already accepted for delivery enters the next check."""
+    sentences = list(re.finditer(r".+?(?:[.!?](?:\s+|$)|$)", text, re.DOTALL))
+    return sentences[-1].group().strip()[-CONVERSATION_WINDOW_CHARS:] if sentences else ""
+
+
+def _spoken_sentences(text):
+    spoken = SpeechMarkupFilter().feed(text)
+    if spoken != text:
+        text = re.sub(r"\s+", " ", spoken)
+    return re.finditer(r".+?(?:[.!?](?:\s+|$)|$)", text, re.DOTALL)
+
+
 def grounded_text(text, *, completion_lines=(), player_text=""):
     """Remove unsafe sentences, preserving safe wording and spacing verbatim.
 
@@ -285,13 +310,10 @@ def grounded_text(text, *, completion_lines=(), player_text=""):
     physical outcomes. A successful action never licenses added narrative.
     This is a bounded vocabulary gate, not a general natural-language proof.
     """
-    spoken = SpeechMarkupFilter().feed(text)
-    if spoken != text:
-        text = re.sub(r"\s+", " ", spoken)
     allowed = {_normalized(line) for line in completion_lines}
     seeking_opportunity = _seeking_opportunity(player_text)
     kept = []
-    for match in re.finditer(r".+?(?:[.!?](?:\s+|$)|$)", text, re.DOTALL):
+    for match in _spoken_sentences(text):
         sentence = match.group()
         normalized = _normalized(sentence)
         if not action_narration(normalized) and (
@@ -339,33 +361,69 @@ def grounding_candidate(sentence, *, player_text=""):
 
 async def grounded_text_checked(
     text, *, classifier=None, completion_lines=(), player_text="", budget_class="foreground",
+    previous_sentence="", verdicts=None,
 ):
     """Check surviving candidate sentences in order; only a strict 'no' permits speech."""
-    text = grounded_text(text, completion_lines=completion_lines, player_text=player_text)
-    if classifier is None or not text:
-        return text
     allowed = {_normalized(line) for line in completion_lines}
+    seeking_opportunity = _seeking_opportunity(player_text)
+    previous_sentence = last_sentence(previous_sentence)
+    classifier_owner = getattr(classifier, "__self__", classifier)
+    timeout = getattr(classifier_owner, "grounding_timeout_seconds", CLASSIFIER_TIMEOUT_SECONDS)
     kept = []
-    for match in re.finditer(r".+?(?:[.!?](?:\s+|$)|$)", text, re.DOTALL):
+    for match in _spoken_sentences(text):
         sentence = match.group()
-        if _normalized(sentence) not in allowed and grounding_candidate(
+        normalized = _normalized(sentence)
+        result = {
+            "sentence_index": len(verdicts) if verdicts is not None else 0,
+            "source": "rule", "allowed": False, "reason": "restricted_claim",
+            "previous_sentence_used": False,
+        }
+        if verdicts is not None:
+            verdicts.append(result)
+        if action_narration(normalized):
+            result["reason"] = "action_narration"
+            continue
+        if normalized not in allowed and _restricted_claim(
+            normalized, seeking_opportunity=seeking_opportunity,
+        ):
+            continue
+        result["reason"] = "acknowledged_completion" if normalized in allowed else "no_candidate"
+        if normalized not in allowed and classifier is not None and grounding_candidate(
             sentence, player_text=player_text,
         ):
+            result.update(
+                source="fallback", reason="classifier_error",
+                previous_sentence_used=bool(previous_sentence),
+            )
             try:
                 # A child task owns its reservation while the dialogue request is streaming.
-                async with asyncio.timeout(CLASSIFIER_TIMEOUT_SECONDS) as deadline:
+                async with asyncio.timeout(timeout) as deadline:
                     verdict = await asyncio.create_task(classifier(
                         sentence, player_text=player_text, budget_class=budget_class,
+                        previous_sentence=previous_sentence,
                     ))
                 if asyncio.current_task().cancelling():
                     raise asyncio.CancelledError
                 if deadline.expired():
+                    result["reason"] = "classifier_timeout"
                     continue
+            except TimeoutError:
+                result["reason"] = "classifier_timeout"
+                continue
             except Exception:
                 continue
-            if not isinstance(verdict, str) or verdict.strip().casefold() != "no":
+            answer = verdict.strip().casefold() if isinstance(verdict, str) else ""
+            if answer not in {"yes", "no"}:
+                result["reason"] = "invalid_verdict"
                 continue
+            result.update(source="classifier", reason=f"classifier_{answer}")
+            if answer != "no":
+                continue
+        elif normalized not in allowed and classifier is None:
+            result["reason"] = "no_classifier"
+        result["allowed"] = True
         kept.append(sentence)
+        previous_sentence = last_sentence(sentence)
     return "".join(kept)
 
 

@@ -22,7 +22,12 @@ from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
 from .bridge_limits import MAX_BODY_BYTES
 from .context import build_context
 from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
-from .grounding import NEUTRAL_FALLBACK, acknowledged_completion_lines, grounded_text_checked
+from .grounding import (
+    NEUTRAL_FALLBACK,
+    acknowledged_completion_lines,
+    grounded_text_checked,
+    last_sentence,
+)
 from .memory_index import MemoryIndex
 from .narration import SpeechMarkupFilter
 from .neighborhood_bridge import NeighborhoodBridge
@@ -1428,6 +1433,8 @@ class Runtime(
             index = 0
             delivery_seconds = 0.0
             sentence_refused = False
+            grounding_verdicts = []
+            session.trace.append({"turn_id": turn_id, "grounding_verdicts": grounding_verdicts})
             async with (
                 asyncio.timeout(30),
                 aclosing(
@@ -1446,6 +1453,7 @@ class Runtime(
                         chunk, player_text=event.payload["text"],
                         completion_lines=acknowledged_completion_lines(session, actor_id),
                         classifier=self.grounding_classifier(),
+                        previous_sentence=last_sentence(text), verdicts=grounding_verdicts,
                     )
                     if session.closed or session.epoch != epoch:
                         return
@@ -1482,6 +1490,10 @@ class Runtime(
                     break
             if not text.strip():
                 text = NEUTRAL_FALLBACK
+                grounding_verdicts.append({
+                    "sentence_index": len(grounding_verdicts), "source": "fallback",
+                    "allowed": True, "reason": "neutral_fallback", "previous_sentence_used": False,
+                })
                 await self.deliver_dialogue_chunk(
                     session,
                     actor_id,

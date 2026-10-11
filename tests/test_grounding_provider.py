@@ -69,7 +69,7 @@ async def test_local_classifier_has_short_deterministic_prompt_and_charges_budge
     assert payload["temperature"] == 0
     assert not payload.get("stream", False)
     assert json.loads(payload["messages"][1]["content"]) == {
-        "sentence": sentence, "player_text": "Need cash?"
+        "sentence": sentence, "player_text": "Need cash?", "previous_sentence": "",
     }
     prompt = payload["messages"][0]["content"]
     assert "exactly yes or no" in prompt
@@ -98,6 +98,123 @@ async def test_classifier_denial_never_dispatches_http(monkeypatch, provider_fac
     assert provider.gate.usage_summary()["foreground"]["requests"] == 0
 
 
+async def test_classifier_bounds_question_and_last_delivered_sentence(provider_factory):
+    requests = []
+    provider = provider_factory(settings(), lambda request: requests.append(request) or response())
+    previous = "Earlier sentence. " + "x" * 600 + "."
+    await provider.classify_grounding(
+        "Any ideas?", player_text="Need work? " * 100, previous_sentence=previous,
+    )
+    context = json.loads(json.loads(requests[0].content)["messages"][1]["content"])
+    assert len(context["player_text"]) == 512
+    assert context["previous_sentence"] == "x" * 511 + "."
+    assert context["sentence"] == "Any ideas?"
+
+
+async def test_classifier_distinguishes_recalled_player_occupation_from_new_offers(
+    provider_factory,
+):
+    requests = []
+    provider = provider_factory(settings(), lambda request: requests.append(request) or response())
+    sentence = "You told me you were a gardener."
+    assert await provider.classify_grounding(
+        sentence, player_text="Do you remember my job?",
+    ) == "no"
+    payload = json.loads(requests[0].content)
+    prompt = payload["messages"][0]["content"]
+    assert "either speaker's existing identity or occupation" in prompt
+    assert "Names alone do not imply a story revelation" in prompt
+    assert "New work or income opportunities remain YES" in prompt
+    assert json.loads(payload["messages"][1]["content"])["sentence"] == sentence
+
+
+async def test_local_classifier_waits_for_single_slot_dialogue_generation(provider_factory):
+    requests = []
+    generation = None
+    slot_free = asyncio.Event()
+
+    async def finish_generation():
+        await asyncio.sleep(0.9)
+        slot_free.set()
+
+    async def handle(request):
+        nonlocal generation
+        requests.append(request)
+        if json.loads(request.content).get("stream"):
+            generation = asyncio.create_task(finish_generation())
+            return httpx.Response(200, content=(
+                'data: {"choices":[{"delta":{"content":"I work long days."}}]}\n'
+                'data: {"choices":[],"usage":{"prompt_tokens":200,"completion_tokens":5}}\n'
+                "data: [DONE]\n"
+            ))
+        await slot_free.wait()
+        return response("no")
+
+    provider = provider_factory(settings(), handle)
+    try:
+        async with aclosing(provider.dialogue({"input": "How is your evening?"})) as stream:
+            async for chunk in stream:
+                assert await grounded_text_checked(
+                    chunk, classifier=provider.classify_grounding,
+                ) == chunk
+    finally:
+        if generation is not None:
+            await generation
+    assert len(requests) == 2
+    usage = provider.gate.usage_summary()["foreground"]
+    assert usage["requests"] == 2
+    assert usage["pending_reservations"] == 0
+    assert usage["uncertain_requests"] == 0
+
+
+@pytest.mark.parametrize("local,model_timeout,expected", [
+    (True, 30, 3.0), (True, 1, 1.0), (False, 30, 0.8),
+])
+def test_classifier_deadline_accounts_for_local_queue_only(
+    provider_factory, local, model_timeout, expected,
+):
+    config = settings(local=local)
+    config.model_timeout_seconds = model_timeout
+    provider = provider_factory(config, lambda _: response())
+    assert provider.grounding_timeout_seconds == expected
+
+
+@pytest.mark.parametrize("caller_cancels", [False, True])
+async def test_local_classifier_cancellation_closes_request_and_reservation(
+    provider_factory, caller_cancels,
+):
+    entered = asyncio.Event()
+    canceled = asyncio.Event()
+
+    async def handle(request):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            canceled.set()
+
+    config = settings()
+    config.model_timeout_seconds = 1
+    provider = provider_factory(config, handle)
+    verdicts = []
+    task = asyncio.create_task(grounded_text_checked(
+        "I work long days.", classifier=provider.classify_grounding, verdicts=verdicts,
+    ))
+    await asyncio.wait_for(entered.wait(), 0.5)
+    if caller_cancels:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 0.5)
+    else:
+        assert await asyncio.wait_for(task, 1.5) == ""
+        assert verdicts[0]["reason"] == "classifier_timeout"
+    assert canceled.is_set()
+    usage = provider.gate.usage_summary()["foreground"]
+    assert usage["requests"] == 1
+    assert usage["pending_reservations"] == 0
+    assert usage["uncertain_requests"] == 1
+
+
 async def test_cloud_classifier_scrubs_both_sentence_and_player_input(
     monkeypatch, provider_factory
 ):
@@ -109,12 +226,14 @@ async def test_cloud_classifier_scrubs_both_sentence_and_player_input(
         lambda request: requests.append(request) or response("yes"),
     )
     assert await provider.classify_grounding(
-        "Ask person@example.com for work.", player_text=f"I need cash. {key}"
+        "Ask person@example.com for work.", player_text=f"I need cash. {key}",
+        previous_sentence="My friend is prior@example.com.",
     ) == "yes"
     assert len(requests) == 1
     assert requests[0].headers["authorization"] == f"Bearer {key}"
     payload = requests[0].content.decode()
     assert "person@example.com" not in payload
+    assert "prior@example.com" not in payload
     assert key not in payload
     assert "[REDACTED]" in payload
     usage = provider.gate.usage_summary()["foreground"]

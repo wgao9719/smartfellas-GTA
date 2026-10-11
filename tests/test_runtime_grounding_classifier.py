@@ -20,7 +20,9 @@ class ClassifiedReply(FakeProvider):
         for offset in range(0, len(self.reply), 7):
             yield self.reply[offset:offset + 7]
 
-    async def classify_grounding(self, sentence, *, player_text="", budget_class="foreground"):
+    async def classify_grounding(
+        self, sentence, *, player_text="", budget_class="foreground", previous_sentence="",
+    ):
         self.calls.append((sentence.strip(), player_text, budget_class))
         if isinstance(self.answer, Exception):
             raise self.answer
@@ -88,7 +90,9 @@ class PausedClassifier(ClassifiedReply):
         self.canceled = asyncio.Event()
         self.suppress_cancel = suppress_cancel
 
-    async def classify_grounding(self, sentence, *, player_text="", budget_class="foreground"):
+    async def classify_grounding(
+        self, sentence, *, player_text="", budget_class="foreground", previous_sentence="",
+    ):
         self.calls.append((sentence.strip(), player_text, budget_class))
         self.entered.set()
         try:

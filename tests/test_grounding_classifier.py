@@ -19,7 +19,9 @@ async def test_only_unambiguous_no_keeps_candidate(answer, kept):
     line = "The price of coffee keeps going up."
     result = await grounding.grounded_text_checked(line, classifier=classify)
     assert result == (line if kept else "")
-    assert calls == [(line, {"player_text": "", "budget_class": "foreground"})]
+    assert calls == [(line, {
+        "player_text": "", "budget_class": "foreground", "previous_sentence": "",
+    })]
 
 
 @pytest.mark.parametrize("line", [
@@ -46,7 +48,9 @@ async def test_player_request_selects_even_topic_free_sentence(player_text):
     assert await grounding.grounded_text_checked(
         line, classifier=classify, player_text=player_text, budget_class="background",
     ) == line
-    assert calls == [{"player_text": player_text, "budget_class": "background"}]
+    assert calls == [{
+        "player_text": player_text, "budget_class": "background", "previous_sentence": "",
+    }]
 
 
 @pytest.mark.parametrize("line", [

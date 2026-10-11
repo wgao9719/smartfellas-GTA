@@ -52,15 +52,17 @@ def rate(numerator, denominator):
 class ObservedClassifier:
     def __init__(self, provider):
         self.provider = provider
+        self.grounding_timeout_seconds = provider.grounding_timeout_seconds
         self.calls = []
 
-    async def __call__(self, sentence, *, player_text, budget_class):
-        call = {"sentence": sentence}
+    async def __call__(self, sentence, *, player_text, budget_class, previous_sentence=""):
+        call = {"sentence": sentence, "previous_sentence": previous_sentence}
         self.calls.append(call)
         start = time.perf_counter_ns()
         try:
             answer = await self.provider.classify_grounding(
                 sentence, player_text=player_text, budget_class=budget_class,
+                previous_sentence=previous_sentence,
             )
             normalized = answer.strip().lower() if isinstance(answer, str) else None
             call["outcome"] = normalized if normalized in {"yes", "no"} else "malformed"
@@ -96,6 +98,8 @@ def cases_for(corpus, holdout):
             request = fixture["player_utterance"] if (
                 label == "holdout" or line in contextual
             ) else ""
+            if isinstance(entry, dict):
+                request = entry.get("player_utterance", request)
             yield {
                 "set": label, "kind": "adversarial", "index": index, "text": line,
                 "player_text": request, "context": "job_request" if request else "neutral",
@@ -129,6 +133,10 @@ def summarize(records):
         outcome: outcomes[outcome]
         for outcome in ("yes", "no", "malformed", "timeout", "provider_error")
     }
+    summary["verdicts"] = dict(Counter(
+        f"{verdict['source']}:{verdict['reason']}:{'allowed' if verdict['allowed'] else 'blocked'}"
+        for row in records for verdict in row["verdicts"]
+    ))
     summary["ordinary_context_false_positive_rate"] = {
         context: rate(
             sum(row["checked"] != row["text"] for row in ordinary if row["context"] == context),
@@ -171,11 +179,14 @@ async def measure(args):
     report = {
         "started_utc": datetime.now(timezone.utc).isoformat(),
         "base_url": args.base_url, "model": args.model, "passes": 1,
+        "classifier_timeout_seconds": None,
         "method": (
             "Sequential, no warmup. Corpus ordinary lines run in neutral and job contexts; "
             "each line counts once and is a false positive if either context changes it. "
             "Corpus adversarial lines use their prescribed contexts. Every holdout line uses "
-            "the user's money request. Any nonempty adversarial output is a miss. "
+            "the user's money request unless an entry specifies its exact QA question. "
+            "Multisentence entries use the gate's previous delivered sentence window. "
+            "Any nonempty adversarial output is a miss. "
             "Added latency is checked wall time minus a paired deterministic call. "
             "Classifier timing includes client setup, gateway accounting and cancellation "
             "cleanup; output deadlines do not guarantee exact wall time under OS load. "
@@ -196,15 +207,18 @@ async def measure(args):
             gate = OutboundGate(settings, repository)
             provider = OpenAIProvider(settings, gate=gate)
             classifier = ObservedClassifier(provider)
+            report["classifier_timeout_seconds"] = classifier.grounding_timeout_seconds
             try:
                 for case in cases_for(fixtures["corpus"], fixtures["holdout"]):
                     start = time.perf_counter_ns()
                     deterministic = grounded_text(case["text"], player_text=case["player_text"])
                     deterministic_ms = (time.perf_counter_ns() - start) / 1_000_000
                     call_start = len(classifier.calls)
+                    verdicts = []
                     start = time.perf_counter_ns()
                     checked = await grounded_text_checked(
                         case["text"], player_text=case["player_text"], classifier=classifier,
+                        verdicts=verdicts,
                     )
                     checked_ms = (time.perf_counter_ns() - start) / 1_000_000
                     report["records"].append({
@@ -212,6 +226,7 @@ async def measure(args):
                         "deterministic_ms": deterministic_ms, "checked_ms": checked_ms,
                         "added_ms": checked_ms - deterministic_ms,
                         "classifier_calls": classifier.calls[call_start:],
+                        "verdicts": verdicts,
                     })
                 report["budget_usage"] = gate.usage_summary()
             finally:
@@ -222,6 +237,9 @@ async def measure(args):
     }
     report["summary"]["holdout_verbatim_unsafe"] = summarize([
         row for row in report["records"] if row["source"] == "verbatim_user_holdout"
+    ])
+    report["summary"]["holdout_qa2_unsafe"] = summarize([
+        row for row in report["records"] if row["source"] == "qa2_verbatim_user_holdout"
     ])
     report["finished_utc"] = datetime.now(timezone.utc).isoformat()
     return report
