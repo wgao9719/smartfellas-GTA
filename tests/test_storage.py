@@ -4,6 +4,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -81,7 +82,7 @@ def test_reopen_persists_confirmed_writes_wal_fts_and_backup(tmp_path):
         repo.backup(tmp_path / "backup.sqlite3")
     for location in [path, tmp_path / "backup.sqlite3"]:
         with Repository(location) as reopened:
-            assert reopened.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+            assert reopened.connection.execute("PRAGMA user_version").fetchone()[0] == 5
             assert recall(reopened, branch)[0]["memory_id"] == saved["memory_id"]
             assert reopened.get_actor("save-a", "avery")["display_name"] == "Avery"
             assert reopened.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -286,8 +287,72 @@ def test_delete_scrubs_fts_vectors_summaries_sources_and_export(repo):
     )
     exported = repo.export_profile("save-a")
     assert not exported["memories"]
+    assert "bicycle" not in json.dumps(exported)
     audit = repo.connection.execute("SELECT * FROM scrub_audit").fetchall()
     assert "bicycle" not in json.dumps([tuple(row) for row in audit])
+
+
+def test_conversation_erasure_scrubs_raw_and_actor_derivations_only(repo):
+    branch = repo.open_timeline("save-a", T0)
+    for identifier in ("raw", "reply", "independent"):
+        event(repo, branch, identifier, observers=["avery", "bea"])
+    own = memory(repo, branch, "reply", text="I paraphrased the secret bicycle.")
+    other = memory(repo, branch, "reply", actor="bea", text="I independently heard bicycle.")
+    repo.link_memory_derivations("save-a", "avery", [("raw", "reply")])
+    assert repo.erase_conversation("save-a", "avery", "raw")
+    assert repo.get_memory("save-a", own["memory_id"]) is None
+    assert repo.get_memory("save-a", other["memory_id"]) == other
+    exported = repo.export_profile("save-a")
+    for source in exported["events"]:
+        if source["event_id"] in {"raw", "reply"}:
+            assert "bicycle" not in json.dumps(source)
+    assert "bicycle" in json.dumps(next(
+        source for source in exported["events"] if source["event_id"] == "independent"
+    ))
+    assert not repo.erase_conversation("save-a", "ghost", "independent")
+    assert not repo.erase_conversation("other-profile", "avery", "independent")
+
+
+def test_memory_erasure_cannot_restore_raw_content_on_replay(repo):
+    branch = repo.open_timeline("save-a", T0)
+    raw = event(repo, branch)
+    saved = memory(repo, branch)
+    repo.delete_memory("save-a", saved["memory_id"])
+    assert not repo.record_event("save-a", branch, raw)
+    assert "bicycle" not in json.dumps(repo.export_profile("save-a"))
+    assert repo.delete_event("save-a", raw["event_id"])
+    assert repo.record_event("save-a", branch, raw)
+    assert "bicycle" not in json.dumps(repo.export_profile("save-a"))
+    with pytest.raises(ValueError, match="erased or expired"):
+        memory(repo, branch)
+
+
+def test_schema_v4_retention_migration_preserves_data_and_uses_collection_time(tmp_path):
+    path = tmp_path / "v4.sqlite3"
+    with Repository(path) as repository:
+        repository.register_actor("save-a", {"actor_id": "avery"})
+        branch = repository.open_timeline("save-a", T0)
+        event(repository, branch)
+        memory(repository, branch)
+        exported = repository.export_profile("save-a")
+        repository.connection.executescript(
+            "DROP TABLE event_retention; PRAGMA user_version=4;"
+        )
+    with Repository(path) as migrated, Repository(tmp_path / "fresh.sqlite3") as fresh:
+        assert migrated.connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert schema(migrated) == schema(fresh)
+        assert migrated.export_profile("save-a") == exported
+        recorded = migrated.connection.execute(
+            "SELECT recorded_at FROM event_retention"
+        ).fetchone()[0]
+        assert datetime.now(timezone.utc) - datetime.fromisoformat(recorded) < timedelta(minutes=1)
+        assert migrated.connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert migrated.expire_raw_events(recorded) == 0
+    with Repository(path) as reopened:
+        assert reopened.connection.execute(
+            "SELECT recorded_at FROM event_retention"
+        ).fetchone()[0] == recorded
+        assert reopened.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
 def test_source_deletion_removes_all_derived_state(repo):
@@ -383,7 +448,7 @@ def schema(repo):
     )
 
 
-def test_schema_v3_migrates_to_v4(tmp_path):
+def test_schema_v3_migrates_to_current(tmp_path):
     with Repository(tmp_path / "fresh.sqlite3") as fresh:
         expected = schema(fresh)
     path = tmp_path / "v3.sqlite3"
@@ -406,10 +471,11 @@ def test_schema_v3_migrates_to_v4(tmp_path):
         repo.connection.executescript(
             "DROP INDEX scrub_lookup; DROP INDEX memory_social_window; "
             "DROP INDEX memory_source_event; DROP TABLE memory_derivations; "
+            "DROP TABLE event_retention; "
             "PRAGMA user_version=3;"
         )
     with Repository(path) as repo:
-        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 5
         # Fresh databases pass through the same migration and gain identical objects.
         assert schema(repo) == expected
         assert recall(repo, branch)[0]["memory_id"] == saved["memory_id"]
@@ -455,7 +521,12 @@ def test_derivations_actor_scoped_audited_reset(repo):
     remaining = {row["memory_id"] for row in repo.list_memories("save-a")}
     assert remaining == set(ids.values()) - forgotten
     audit = [tuple(row)[2:4] for row in repo.connection.execute("SELECT * FROM scrub_audit")]
-    assert sorted(audit) == sorted(("delete_memory", memory_id) for memory_id in forgotten)
+    assert sorted(row for row in audit if row[0] == "delete_memory") == sorted(
+        ("delete_memory", memory_id) for memory_id in forgotten
+    )
+    assert {identifier for operation, identifier in audit if operation == "scrub_event"} == {
+        "line-1", "line-2", "line-3",
+    }
     assert "bicycle" not in json.dumps(audit)
     assert repo.memory_dependents("save-a", ids["bea", "line-1"]) == derived["bea"]
     repo.reset_actor("save-a", "avery")

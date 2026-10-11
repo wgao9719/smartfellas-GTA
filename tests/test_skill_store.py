@@ -336,7 +336,7 @@ async def test_terminal_callback_rejects_binding_change_after_interpreter_cleanu
     )
 
 
-async def test_bridge_ack_delete_reimport_during_execution_fails_audit_check(state):
+async def test_bridge_ack_delete_reimport_during_execution_rejects_erased_proof(state):
     registered = candidate(state)
     live = bridge(state)
 
@@ -348,7 +348,7 @@ async def test_bridge_ack_delete_reimport_during_execution_fails_audit_check(sta
             concurrent.record_event(state.identity.profile_id, state.identity.branch_id, event)
         return result
 
-    with pytest.raises(ValueError, match="audit changed"):
+    with pytest.raises(ValueError, match="trial bridge source does not match"):
         await trial(state, registered, execute=execute, completion_evidence=live.completion)
     assert all(
         record["kind"] == "candidate"
@@ -539,7 +539,7 @@ def test_private_need_context_is_bounded_and_detects_delete_reimport(state):
     observation(state.repo, state.identity)
     after = state.store.need_context(state.identity, NOW, ["need"])
     assert after["audit_revision"] > before["audit_revision"]
-    assert after["source_events"] == before["source_events"]
+    assert after["source_events"] == [{**before["source_events"][0], "text": ""}]
 
 
 def test_registration_rechecks_source_audit_inside_write_transaction(state):
@@ -851,6 +851,6 @@ def test_v2_migration_preserves_canonical_content_and_adds_empty_registry(tmp_pa
             "DROP TABLE skill_versions; PRAGMA user_version=2;"
         )
     with Repository(path) as repo:
-        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 5
         assert repo.export_profile("profile")["events"][0]["event_id"] == "need"
         assert repo.export_profile("profile")["skill_versions"] == []

@@ -27,6 +27,7 @@ The following commit fixes those failures. Its own Windows run must confirm them
 - Speech probes and a speech coordinator with push-to-talk, subtitles, and delivery receipts.
 - Development perception, social scenes, social scheduler, social adaptation, 48-character neighborhood simulation, and skill learning with automatic practice.
 - Local dashboard for inspection, memory edits, export, backups, and diagnostics.
+- Character-scoped export, source conversation erasure, and configurable seven-day raw-history retention. Schema v5 preserves durable memories and relationships; [policy and migration limits](privacy-retention.md) distinguish retained experiences from raw transcripts.
 - CI workflow for macOS and Windows in `.github/workflows/ci.yml`.
 
 ### Added in the second session
@@ -60,7 +61,7 @@ The handoff's six open issues are closed. The first handoff note described one o
 - **Social memory.**
   - One owner with thousands of rewound-branch anchors can still fail the whole read closed.
   - The partial index depends on the "I chose to " and " told me: " memory text shapes.
-  - Paraphrase through general recall is not tracked, and canonical events keep deleted words.
+  - General-recall sources are now tracked for new replies and source words are scrubbed. Historical untracked dependencies require character reset or profile deletion.
 - **Erasure.** Content-free skill experience and episode rows survive forgetting a pinned actor, as they already survived `reset_actor`.
 - **Listening socket.** `SO_EXCLUSIVEADDRUSE` was not adopted, because it would break restart recovery.
 

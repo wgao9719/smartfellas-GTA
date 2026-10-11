@@ -103,6 +103,32 @@ test('only the newest export response can populate the export panel', async () =
   assert.equal(page.get('export-panel').hidden, false);
 });
 
+test('a character export cannot restore the previous character after selection changes', async () => {
+  const page = dashboard();
+  const exporting = page.get('export-actor').emit('click');
+  assert.ok(page.requests[0].url.endsWith('/profiles/pilot/actors/npc/export'));
+  page.run('loadMemories=async()=>{}');
+  await page.run("selectActor({id:'other',actor_kind:'curated_persistent'})");
+  page.requests[0].respond({private_text: 'ERASED_PRIVATE_MARKER'});
+  await exporting;
+  assert.equal(page.get('export-content').value, '');
+  assert.equal(page.get('export-panel').hidden, true);
+});
+
+test('the selected character export is displayed and cleared by mutations', async () => {
+  const page = dashboard();
+  const exporting = page.get('export-actor').emit('click');
+  page.requests[0].respond({actor_id: 'npc', memories: [{text: 'private character memory'}]});
+  await exporting;
+  assert.match(page.get('export-content').value, /private character memory/);
+  assert.equal(page.get('export-panel').hidden, false);
+  const mutation = page.run("api('/profiles/pilot/actors/npc/reset','POST',{})");
+  page.requests[1].respond({status: 'reset'});
+  await mutation;
+  assert.equal(page.get('export-content').value, '');
+  assert.equal(page.get('export-panel').hidden, true);
+});
+
 test('actor reset clears rendered text and rejects old diagnostics and memory reads', async () => {
   const page = dashboard();
   const oldMemories = page.run('loadMemories()');

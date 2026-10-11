@@ -145,9 +145,27 @@ class Repository:
 
     def _migrate(self) -> None:
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version > 4:
+        if version > 5:
             raise RuntimeError("database schema is newer than this service")
+        if version == 5:
+            return
         if version == 4:
+            # Old schemas have game time only. Start their wall-clock retention window
+            # at migration rather than treating a fictional game date as collection time.
+            self.connection.executescript("""
+            BEGIN IMMEDIATE;
+            CREATE TABLE IF NOT EXISTS event_retention (
+              profile_id TEXT NOT NULL, event_id TEXT NOT NULL,
+              recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000+00:00','now')),
+              PRIMARY KEY(profile_id,event_id),
+              FOREIGN KEY(profile_id,event_id) REFERENCES events ON DELETE CASCADE
+            );
+            INSERT OR IGNORE INTO event_retention(profile_id,event_id)
+              SELECT profile_id,event_id FROM events;
+            CREATE INDEX IF NOT EXISTS event_retention_age ON event_retention(recorded_at);
+            PRAGMA user_version=5;
+            COMMIT;
+            """)
             return
         if version == 3:
             # Social windows index only decision- and hearing-shaped memories, so action
@@ -192,6 +210,7 @@ class Repository:
             PRAGMA user_version=4;
             COMMIT;
             """)
+            self._migrate()
             return
         if version == 2:
             self.connection.executescript("""
@@ -821,13 +840,27 @@ class Repository:
             (profile_id, event_id),
         ).fetchone()
         if old:
+            if json.loads(old["data"]).get("content_redacted"):
+                if old["branch_id"] != branch_id:
+                    raise ValueError("event ID collision: canonical events are immutable")
+                # A retry cannot restore erased or expired raw content.
+                return False
             if old["data"] != _json(data) or old["branch_id"] != branch_id:
                 raise ValueError("event ID collision: canonical events are immutable")
             return False
         self._touch(profile_id, branch_id, stamp)
+        if self.connection.execute(
+            "SELECT 1 FROM scrub_audit WHERE profile_id=? AND object_id=? "
+            "AND operation IN ('scrub_event','expire_raw_event','delete_event') LIMIT 1",
+            (profile_id, event_id),
+        ).fetchone():
+            data = self._event_envelope(data)
         self.connection.execute(
             "INSERT INTO events VALUES(?,?,?,?,?,?)",
             (profile_id, event_id, branch_id, stamp, protagonist, _json(data)),
+        )
+        self.connection.execute(
+            "INSERT INTO event_retention VALUES(?,?,?)", (profile_id, event_id, _date(_now()))
         )
         return True
 
@@ -927,6 +960,8 @@ class Repository:
             sources = self._sources(
                 profile_id, branch_id, stamp, source_event_ids, provenance, protagonist
             )
+            if any(source.get("content_redacted") for source in sources):
+                raise ValueError("source event content was erased or expired")
             self._require_observer(actor_id, sources, provenance)
             confidence = min(confidence, *(source["confidence"] for source in sources))
             lineage = self._lineage(profile_id, branch_id, stamp)
@@ -1133,6 +1168,142 @@ class Repository:
             (profile_id, operation, object_id, _now()),
         )
 
+    @staticmethod
+    def _event_envelope(data: dict) -> dict:
+        # Keep only the provenance envelope needed to validate retained durable facts.
+        # Freeform text can occur anywhere in a payload, not only in its text field.
+        envelope = {
+            key: data[key] for key in (
+                "event_id", "game_datetime", "protagonist_id", "event_type", "type",
+                "provenance", "confidence",
+            ) if key in data
+        }
+        payload_keys = {"visibility_scope", "scope_id"}
+        if data.get("event_type", "").startswith("social."):
+            payload_keys.update({
+                "scene_id", "utterance_id", "delivery_receipt_id", "teller_id", "sampled_at",
+                "reported_event_id", "retelling_lineage", "session_id", "development_attestation",
+                "heard_delivery_event_id", "decision", "decision_owner", "decision_phase",
+                "decision_valid", "decision_scope", "initiator_id", "participant_ids",
+            })
+        envelope.update(
+            observer_ids=data.get("observer_ids", data.get("payload", {}).get("observer_ids", [])),
+            payload={
+                key: value for key, value in data.get("payload", {}).items()
+                if key in payload_keys
+            },
+            content_redacted=True,
+        )
+        return envelope
+
+    def _redact_event(self, profile_id: str, event_id: str, operation: str) -> bool:
+        row = self.connection.execute(
+            "SELECT data FROM events WHERE profile_id=? AND event_id=?", (profile_id, event_id)
+        ).fetchone()
+        if row is None:
+            return False
+        data = json.loads(row[0])
+        if data.get("content_redacted"):
+            return False
+        self.connection.execute(
+            "UPDATE events SET data=? WHERE profile_id=? AND event_id=?",
+            (_json(self._event_envelope(data)), profile_id, event_id),
+        )
+        self._audit(profile_id, operation, event_id)
+        return True
+
+    def expire_raw_events(self, cutoff: str) -> int:
+        """Expire collected raw history, preserving durable projections and source IDs.
+
+        Neighborhood events are durable simulation state, not raw turn history.
+        Their deletion requires a separate policy or an explicit user operation.
+        """
+        with self._lock, self.connection:
+            rows = self.connection.execute(
+                "SELECT e.profile_id,e.event_id FROM event_retention r JOIN events e "
+                "ON e.profile_id=r.profile_id AND e.event_id=r.event_id WHERE r.recorded_at<? "
+                "AND coalesce(json_extract(e.data,'$.content_redacted'),0)=0 "
+                "AND coalesce(json_extract(e.data,'$.event_type'),'') NOT LIKE 'neighborhood.%'",
+                (_date(cutoff),),
+            ).fetchall()
+            return sum(self._redact_event(row[0], row[1], "expire_raw_event") for row in rows)
+
+    def _actor_event_closure(
+        self, profile_id: str, actor_id: str, event_ids: list[str]
+    ) -> list[str]:
+        closure = set(event_ids)
+        pending = list(closure)
+        while pending:
+            for row in self.connection.execute(
+                "SELECT derived_event_id FROM memory_derivations "
+                "WHERE profile_id=? AND actor_id=? AND source_event_id=?",
+                (profile_id, actor_id, pending.pop()),
+            ).fetchall():
+                if row[0] not in closure:
+                    closure.add(row[0])
+                    pending.append(row[0])
+        return sorted(closure)
+
+    def _scrub_actor_events(self, profile_id: str, actor_id: str, event_ids: list[str]) -> None:
+        for event_id in self._actor_event_closure(profile_id, actor_id, event_ids):
+            self._redact_event(profile_id, event_id, "scrub_event")
+            marker = _json([actor_id, event_id])
+            for operation in ("forget_actor_source", "forget_social_source", "forget_skill_source"):
+                if self.connection.execute(
+                    "SELECT 1 FROM scrub_audit WHERE profile_id=? AND operation=? AND object_id=?",
+                    (profile_id, operation, marker),
+                ).fetchone() is None:
+                    self._audit(profile_id, operation, marker)
+            self.connection.execute(
+                "DELETE FROM knowledge_cards WHERE profile_id=? AND owner_id=? AND card_id IN "
+                "(SELECT card_id FROM knowledge_sources WHERE profile_id=? AND event_id=?)",
+                (profile_id, actor_id, profile_id, event_id),
+            )
+            self.connection.execute(
+                "DELETE FROM skill_records WHERE profile_id=? AND actor_id=? AND record_id IN "
+                "(SELECT record_id FROM skill_record_sources WHERE profile_id=? AND event_id=?)",
+                (profile_id, actor_id, profile_id, event_id),
+            )
+
+    def erase_conversation(self, profile_id: str, actor_id: str, event_id: str) -> bool:
+        """Erase an actor's source utterance and derived lines, including unprojected text."""
+        with self._lock, self.connection:
+            row = self.connection.execute(
+                "SELECT data FROM events WHERE profile_id=? AND event_id=?", (profile_id, event_id)
+            ).fetchone()
+            if row is None or self.get_actor(profile_id, actor_id) is None:
+                return False
+            data = json.loads(row[0])
+            observers = data.get("observer_ids", data.get("payload", {}).get("observer_ids", []))
+            payload = data.get("payload", {})
+            if actor_id not in observers or (
+                payload.get("visibility_scope") == "actor" and payload.get("scope_id") != actor_id
+            ):
+                return False
+            sources = self._actor_event_closure(profile_id, actor_id, [event_id])
+            for source in sources:
+                for memory in self.connection.execute(
+                    "SELECT m.memory_id FROM memories m JOIN memory_sources s "
+                    "ON s.memory_id=m.memory_id WHERE m.profile_id=? AND m.actor_id=? "
+                    "AND s.event_id=?", (profile_id, actor_id, source),
+                ).fetchall():
+                    self._delete_memory(profile_id, memory[0])
+                for update in self.connection.execute(
+                    "SELECT protagonist_id FROM relationship_updates "
+                    "WHERE profile_id=? AND actor_id=? AND event_id=?",
+                    (profile_id, actor_id, source),
+                ).fetchall():
+                    self._audit(profile_id, "forget_relationship_source", _json([
+                        actor_id, update[0], source,
+                    ]))
+                self.connection.execute(
+                    "DELETE FROM relationship_updates WHERE profile_id=? AND actor_id=? "
+                    "AND event_id=?", (profile_id, actor_id, source),
+                )
+            self._scrub_actor_events(profile_id, actor_id, sources)
+            self._audit(profile_id, "erase_conversation", _json([actor_id, event_id]))
+            return True
+
     def link_memory_derivations(
         self, profile_id: str, actor_id: str, links: list[tuple[str, str]]
     ) -> None:
@@ -1164,19 +1335,24 @@ class Repository:
         """
         closure, pending, seen = [memory_id], [memory_id], {memory_id}
         while pending:
-            for (found,) in self.connection.execute(
-                "SELECT summary_id FROM summary_sources WHERE memory_id=:memory "
-                "UNION SELECT later.memory_id FROM memories own "
-                "CROSS JOIN memory_sources cited ON cited.memory_id=own.memory_id "
-                "CROSS JOIN memory_derivations link ON link.profile_id=own.profile_id "
-                "AND link.actor_id=own.actor_id AND link.source_event_id=cited.event_id "
-                "CROSS JOIN memory_sources derived ON derived.event_id=link.derived_event_id "
-                "AND derived.profile_id=link.profile_id "
-                "CROSS JOIN memories later ON later.memory_id=derived.memory_id "
-                "AND later.profile_id=link.profile_id AND later.actor_id=link.actor_id "
-                "WHERE own.profile_id=:profile AND own.memory_id=:memory",
-                {"profile": profile_id, "memory": pending.pop()},
-            ).fetchall():
+            identifier = pending.pop()
+            memory = self.get_memory(profile_id, identifier)
+            if memory is None:
+                continue
+            rows = self.connection.execute(
+                "SELECT summary_id FROM summary_sources WHERE memory_id=?", (identifier,)
+            ).fetchall()
+            # An intermediate event may not have a memory yet (or ever). Walk event
+            # dependencies independently so that it cannot break the erasure chain.
+            for event_id in self._actor_event_closure(
+                profile_id, memory["actor_id"], memory["source_event_ids"]
+            ):
+                rows.extend(self.connection.execute(
+                    "SELECT m.memory_id FROM memory_sources s JOIN memories m "
+                    "ON m.memory_id=s.memory_id WHERE s.profile_id=? AND s.event_id=? "
+                    "AND m.actor_id=?", (profile_id, event_id, memory["actor_id"]),
+                ).fetchall())
+            for (found,) in rows:
                 if found not in seen:
                     seen.add(found)
                     closure.append(found)
@@ -1187,6 +1363,10 @@ class Repository:
         if self.get_memory(profile_id, memory_id) is None:
             return False
         for identifier in self._memory_closure(profile_id, memory_id):
+            memory = self.get_memory(profile_id, identifier)
+            if memory is None:
+                continue
+            self._scrub_actor_events(profile_id, memory["actor_id"], memory["source_event_ids"])
             if self.connection.execute(
                 "DELETE FROM memories WHERE profile_id=? AND memory_id=?", (profile_id, identifier)
             ).rowcount:
@@ -1286,6 +1466,8 @@ class Repository:
             if forgotten:
                 return False
             data = json.loads(event_row["data"])
+            if data.get("content_redacted"):
+                return False
             self._sources(
                 profile_id,
                 branch_id,
@@ -1478,6 +1660,8 @@ class Repository:
             sources = self._sources(
                 profile_id, branch_id, stamp, source_event_ids, provenance, protagonist
             )
+            if any(source.get("content_redacted") for source in sources):
+                raise ValueError("source event content was erased or expired")
             if owner_id:
                 self._require_observer(owner_id, sources, provenance)
             if scope != "actor" and any(
@@ -1591,7 +1775,7 @@ class Repository:
     def reset_actor(self, profile_id: str, actor_id: str) -> None:
         """Forget this actor's derived state across all branches in one profile.
 
-        Preserve shared canonical events for other actors. Retain only profile,
+        Preserve other actors' projections and content-free canonical proof. Retain
         actor, protagonist, and source identifiers as replay suppression metadata.
         Reset markers contain no dialogue or event payload and survive reopening.
         """
@@ -1604,11 +1788,14 @@ class Repository:
                 "THEN json_extract(e.data,'$.observer_ids') "
                 "WHEN json_type(e.data,'$.payload.observer_ids')='array' "
                 "THEN json_extract(e.data,'$.payload.observer_ids') ELSE '[]' END) observers "
-                "WHERE e.profile_id=? AND observers.value=?",
-                (profile_id, actor_id),
+                "WHERE e.profile_id=? AND observers.value=? AND "
+                "(coalesce(json_extract(e.data,'$.payload.visibility_scope'),'')!='actor' "
+                "OR json_extract(e.data,'$.payload.scope_id')=?)",
+                (profile_id, actor_id, actor_id),
             ).fetchall():
                 self._audit(profile_id, "forget_skill_source", _json([actor_id, row[0]]))
                 self._audit(profile_id, "forget_social_source", _json([actor_id, row[0]]))
+                self._scrub_actor_events(profile_id, actor_id, [row[0]])
             for row in self.connection.execute(
                 "SELECT DISTINCT s.event_id FROM skill_record_sources s "
                 "JOIN skill_records r ON r.profile_id=s.profile_id AND r.record_id=s.record_id "
@@ -1738,6 +1925,12 @@ class Repository:
                     )
                 ],
             }
+
+    def export_actor(self, profile_id: str, actor_id: str) -> dict:
+        from .character_export import export_actor
+
+        with self._lock:
+            return export_actor(self, profile_id, actor_id)
 
     def list_profiles(self) -> list[dict]:
         """Administrative metadata only; this does not assemble NPC context."""

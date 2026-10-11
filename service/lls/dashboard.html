@@ -154,6 +154,7 @@
         <button id="next" disabled>More memories</button></div>
       <details><summary>Reset this character</summary>
         <p class="warning">WARNING: Resetting a character deletes its memories, knowledge, and relationship history across all branches.</p>
+        <button id="export-actor" disabled>Show character export</button>
         <button id="reset-actor" class="danger" disabled>Reset character data</button>
       </details>
       <details><summary>Forget pinned character</summary>
@@ -183,10 +184,10 @@
     </section>
   </div>
   <section id="export-panel" hidden aria-labelledby="export-title">
-    <h2 id="export-title">Profile export</h2>
+    <h2 id="export-title">Data export</h2>
     <p class="muted small">This export includes private conversations. It remains in this page until you close the panel.</p>
     <button id="close-export">Clear and close export</button>
-    <textarea id="export-content" readonly aria-label="Profile JSON export"></textarea>
+    <textarea id="export-content" readonly aria-label="JSON data export"></textarea>
   </section>
   <details><summary>Active session information</summary><pre id="sessions"></pre></details>
 </main>
@@ -424,7 +425,7 @@
     el('actor-list').replaceChildren();
     el('persona').textContent='';el('memory-title').textContent='Select a character';
     el('actor-description').textContent='Choose a character to inspect its profile and memories.';
-    el('reset-actor').disabled=true;el('forget-actor').disabled=true;el('previous').disabled=true;el('next').disabled=true;
+    el('export-actor').disabled=true;el('reset-actor').disabled=true;el('forget-actor').disabled=true;el('previous').disabled=true;el('next').disabled=true;
     for(const id of ['export-profile','erase-profile'])el(id).disabled=!state.profile;
     if(!state.profile){el('branches').textContent='No saved histories yet.';return;}
     const generation=state.generation;
@@ -456,11 +457,11 @@
     if(state.actors.length)await selectActor(state.actors[0]);
   }
   async function selectActor(actor) {
-    state.actor=actor;state.offset=0;state.generation++;
+    state.actor=actor;state.offset=0;state.generation++;clearExport();
     el('memory-title').textContent=actor.display_name||actor.id;
     el('actor-description').textContent=(actor.pinned_from_session?'Pinned pedestrian. ':'')+
       (actor.short_bio||actor.persona?.biography||actor.actor_kind);
-    el('persona').textContent=JSON.stringify(actor,null,2);el('reset-actor').disabled=false;
+    el('persona').textContent=JSON.stringify(actor,null,2);el('export-actor').disabled=false;el('reset-actor').disabled=false;
     el('forget-actor').disabled=!actor.pinned_from_session;
     for(const choice of el('actor-list').children)
       choice.setAttribute('aria-pressed',String(choice.dataset.actor===actor.id));
@@ -523,6 +524,14 @@
     if(!await confirmTarget('Forget pinned character','WARNING: This permanently deletes this pinned pedestrian and its memories, knowledge, and relationship history.',actor))return;
     await api('/profiles/'+encodeURIComponent(profile)+'/actors/'+encodeURIComponent(actor),'DELETE',{confirm_actor_id:actor});
     await loadProfile();status('Pinned character forgotten.');
+  }));
+  el('export-actor').addEventListener('click',()=>run(async()=>{
+    if(!state.actor)return;clearExport();
+    const profile=state.profile,actor=state.actor.id,generation=exportGeneration;
+    const data=await api(profilePath()+'/actors/'+encodeURIComponent(actor)+'/export');
+    if(profile!==state.profile||actor!==state.actor?.id||generation!==exportGeneration)return;
+    el('export-content').value=JSON.stringify(data,null,2);el('export-panel').hidden=false;
+    el('export-panel').scrollIntoView({behavior:'smooth'});status('Character export is visible locally.');
   }));
   el('export-profile').addEventListener('click',()=>run(async()=>{
     clearExport();

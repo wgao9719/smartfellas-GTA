@@ -39,6 +39,7 @@ class Settings(StrictModel):
     allow_sources: list[str] = Field(default_factory=list)
     bootstrap_token: str = Field(default="", repr=False)
     database_path: str = "data/runtime/lls.sqlite3"
+    raw_event_retention_days: int = Field(default=7, ge=1, le=365)
     provider: Literal["disabled", "fake", "openai", "local_openai"] = "disabled"
     cloud_opt_in: bool = False
     openai_base_url: str = "https://api.openai.com/v1"
@@ -165,6 +166,7 @@ class Settings(StrictModel):
             neighborhood_pack_path=cls.env_path("LLS_NEIGHBORHOOD_PACK") or "",
             allow_sources=[x for x in os.environ.get("LLS_ALLOW_SOURCES", "").split(",") if x],
             database_path=database,
+            raw_event_retention_days=int(os.environ.get("LLS_RAW_EVENT_RETENTION_DAYS", "7")),
             provider=os.environ.get("LLS_PROVIDER", "disabled"),
             cloud_opt_in=os.environ.get("LLS_CLOUD_OPT_IN", "0") == "1",
             dialogue_model=os.environ.get("LLM_DIALOGUE_MODEL", ""),
