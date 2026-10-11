@@ -89,13 +89,15 @@ class Manifest(StrictModel):
 
 class SessionOpen(StrictModel):
     schema_version: Literal[1] = 1
-    profile_id: Identifier
+    profile_id: Identifier | None = None
+    save_slot: Identifier | None = None
+    profile_confirmed: bool = False
     parent_branch_id: Identifier | None = None
     protagonist_id: Protagonist
     game_datetime: datetime
     runtime_generation: int = Field(ge=0)
     manifest: Manifest
-    capabilities: list[ActionId] = Field(default_factory=list, max_length=16)
+    capabilities: list[Identifier] = Field(default_factory=list, max_length=16)
 
 
 class Position(StrictModel):
@@ -143,6 +145,8 @@ class ActorSnapshot(StrictModel):
     interior_id: Identifier | None = None
     can_move: bool = True
     in_combat: bool = False
+    mod_following: bool = False
+    observed_threat: bool = False
     # Optional for schema v1 compatibility; missing facts classify as unknown and protected.
     role_class: RoleClass = "unknown"
     role_reason: str = Field(default="unclassified", pattern=r"^[a-z0-9_]{1,64}$")
@@ -280,12 +284,14 @@ class SessionClose(StrictModel):
 
 
 class ActionArguments(StrictModel):
-    max_follow_meters: float | None = Field(default=None, ge=1, le=30)
+    max_follow_meters: float | None = Field(default=None, ge=1, le=15)
     duration_seconds: float | None = Field(default=None, ge=0.1, le=30)
     radius: float | None = Field(default=None, ge=1, le=20)
     point: Position | None = None
     gesture_id: Identifier | None = None
     threat_actor_id: Identifier | None = None
+    threat_position: Position | None = None
+    distance_meters: float | None = Field(default=None, ge=2, le=15)
 
 
 class ActionProposal(StrictModel):
@@ -305,6 +311,7 @@ class SessionResponse(StrictModel):
     policy_version: str
     schema_version: Literal[1] = 1
     capabilities: list[ActionId]
+    capability_flags: list[Identifier] = Field(default_factory=list, max_length=64)
     branch_id: Identifier
 
 
@@ -340,6 +347,7 @@ class PinCommand(StrictModel):
 
 
 class Command(StrictModel):
+    schema_version: Literal[1]
     id: Identifier
     seq: int = Field(ge=1)
     kind: Literal["dialogue.chunk", "action.execute", "scene.cancel", "status", "actor.pin"]

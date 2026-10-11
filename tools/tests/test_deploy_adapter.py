@@ -152,7 +152,7 @@ REAL_RUN = subprocess.run
 
 def openssh(monkeypatch, home, *, failing=None, remote=None, corrupt=None):
     """Emulate SFTP batches in an SSH home directory. Optionally run the remote command."""
-    calls, batches = [], []
+    calls, batches, corrupted = [], [], []
 
     def run(command, **kwargs):
         calls.append(command)
@@ -161,6 +161,8 @@ def openssh(monkeypatch, home, *, failing=None, remote=None, corrupt=None):
                 raise subprocess.CalledProcessError(255, command)
             return subprocess.CompletedProcess(command, 255)
         if command[0] == "ssh":
+            if corrupt:
+                assert corrupted == [corrupt], "Requested upload corruption was not applied"
             if remote is None:
                 return subprocess.CompletedProcess(command, 0)
             return REAL_RUN(remote(" ".join(command[2:])), cwd=home, check=kwargs.get("check"))
@@ -174,6 +176,7 @@ def openssh(monkeypatch, home, *, failing=None, remote=None, corrupt=None):
                 shutil.copyfile(paths[0], home / paths[1])
                 if corrupt and paths[1].endswith("/" + corrupt):
                     (home / paths[1]).write_bytes(b"corrupted in transit")
+                    corrupted.append(corrupt)
             elif verb == "-rm" and (home / paths[0]).exists():
                 (home / paths[0]).unlink()
             elif verb == "-rmdir" and (home / paths[0]).exists():
@@ -188,6 +191,13 @@ def openssh(monkeypatch, home, *, failing=None, remote=None, corrupt=None):
 def uploaded(home, calls):
     upload = calls[1][-1].split("/")[0]
     return upload, json.loads((home / upload / "deploy.json").read_text(encoding="ascii"))
+
+
+def test_fake_openssh_rejects_unapplied_corruption(tmp_path, monkeypatch):
+    _, staged, _ = bundle(tmp_path)
+    openssh(monkeypatch, tmp_path / "home", corrupt="LivingNPC.pdb")
+    with pytest.raises(AssertionError, match="Requested upload corruption was not applied"):
+        DEPLOY.deploy_ssh(staged, "player@100.64.1.2", LONG_SCRIPTS)
 
 
 def test_ssh_deploy_uses_exact_file_mapping_without_overwriting_ini(tmp_path, monkeypatch):
@@ -279,24 +289,42 @@ def test_windows_default_shells_run_deploy_script_and_remove_upload(tmp_path, mo
 
 
 @pytest.mark.skipif(os.name != "nt", reason="runs the deployment script with Windows PowerShell")
-def test_windows_deploy_script_rejects_corrupt_upload_and_rolls_back_locked_dll(
-    tmp_path, monkeypatch
-):
+@pytest.mark.parametrize("shell", ["cmd", "powershell"])
+@pytest.mark.parametrize("corrupt", [*DEPLOY.FILES, "adapter-build.json"])
+def test_windows_deploy_script_rejects_corrupt_upload(tmp_path, monkeypatch, capfd, shell, corrupt):
     _, staged, scripts = bundle(tmp_path)
     for name in DEPLOY.FILES:
         (scripts / DEPLOY.installed_path(name)).parent.mkdir(exist_ok=True)
         (scripts / DEPLOY.installed_path(name)).write_bytes(b"old:" + name.encode())
-    shell = powershell_remote("cmd")
-    openssh(monkeypatch, tmp_path / "home", remote=shell, corrupt="LivingNPC.pdb")
-    with pytest.raises(subprocess.CalledProcessError):
+    openssh(monkeypatch, tmp_path / "home", remote=powershell_remote(shell), corrupt=corrupt)
+    with pytest.raises(subprocess.CalledProcessError) as error:
         DEPLOY.deploy_ssh(staged, "player@100.64.1.2", str(scripts))
+    assert error.value.returncode == 1
+    output = capfd.readouterr()
+    assert "Checksum mismatch: " + corrupt in output.err
+    assert "Deployed adapter" not in output.out
+    for name in DEPLOY.FILES:
+        assert (scripts / DEPLOY.installed_path(name)).read_bytes() == b"old:" + name.encode()
+    assert not (scripts / "adapter-build.json").exists() and not list(scripts.rglob("*.incoming"))
     assert not (scripts.parent / "LivingNPC-backup").exists()
     assert not list((tmp_path / "home").iterdir())
-    openssh(monkeypatch, tmp_path / "home", remote=shell)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="runs the deployment script with Windows PowerShell")
+@pytest.mark.parametrize("shell", ["cmd", "powershell"])
+def test_windows_deploy_script_rolls_back_locked_dll(tmp_path, monkeypatch, shell):
+    _, staged, scripts = bundle(tmp_path)
+    for name in DEPLOY.FILES:
+        (scripts / DEPLOY.installed_path(name)).parent.mkdir(exist_ok=True)
+        (scripts / DEPLOY.installed_path(name)).write_bytes(b"old:" + name.encode())
+    openssh(monkeypatch, tmp_path / "home", remote=powershell_remote(shell))
     # Python opens files without FILE_SHARE_DELETE, like a loader holding the DLL.
     with (scripts / "LivingNPC.Core.dll").open("rb"):
         with pytest.raises(subprocess.CalledProcessError):
             DEPLOY.deploy_ssh(staged, "player@100.64.1.2", str(scripts))
+    (backup,) = (scripts.parent / "LivingNPC-backup").iterdir()
+    for name in ("LivingNPC.GameAdapter.dll", "LivingNPC.GameAdapter.pdb", "LivingNPC.Core.dll"):
+        assert (backup / name).read_bytes() == b"old:" + name.encode()
     for name in DEPLOY.FILES:
         assert (scripts / DEPLOY.installed_path(name)).read_bytes() == b"old:" + name.encode()
     assert not (scripts / "adapter-build.json").exists() and not list(scripts.rglob("*.incoming"))

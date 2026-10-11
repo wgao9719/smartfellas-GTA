@@ -15,7 +15,7 @@ if (crashMode && (speechMode || whisperMode)) throw new InvalidOperationExceptio
 if (!endpoint.IsLoopback) throw new InvalidOperationException("The simulated bridge probe requires loopback.");
 if (args.Contains("--pin")) { await PinProbe.Run(endpoint); return; }
 var generation = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-var request = new SessionRequest { ProfileId = "csharp-probe-" + Guid.NewGuid().ToString("N"), ProtagonistId = "franklin", RuntimeGeneration = generation, GameDatetime = "2013-09-17T12:00:00", Capabilities = new[] { "face_player", "wait_here" }, Manifest = new Dictionary<string, object> {
+var request = new SessionRequest { ProfileId = "csharp-probe-" + Guid.NewGuid().ToString("N"), SaveSlot = "simulated-slot", ProfileConfirmed = true, ProtagonistId = "franklin", RuntimeGeneration = generation, GameDatetime = "2013-09-17T12:00:00", Capabilities = new[] { "face_player", "wait_here" }, Manifest = new Dictionary<string, object> {
     ["game_edition"] = "legacy", ["story_mode"] = true, ["gta_build"] = "simulated", ["scripthookv_build"] = "simulated", ["shvdn_build"] = "simulated", ["adapter_version"] = "bridge-probe", ["game_os_version"] = "simulated", ["service_os"] = "macos", ["service_host_mode"] = "local", ["compat_layer"] = "none", ["arch"] = "arm64", ["capability_flags"] = new[] { "fake_game" } } };
 using var bridge = new BridgeWorker(endpoint, request, Environment.GetEnvironmentVariable("LLS_BRIDGE_TOKEN") ?? "");
 var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
@@ -164,7 +164,7 @@ static class PinProbe
     public static async Task Run(Uri endpoint)
     {
         var generation = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var request = new SessionRequest { ProfileId = "csharp-pin-probe-" + Guid.NewGuid().ToString("N"), ProtagonistId = "franklin", RuntimeGeneration = generation, GameDatetime = "2013-09-17T12:00:00", Capabilities = new[] { "face_player", "wait_here" }, Manifest = new Dictionary<string, object> {
+        var request = new SessionRequest { ProfileId = "csharp-pin-probe-" + Guid.NewGuid().ToString("N"), SaveSlot = "simulated-slot", ProfileConfirmed = true, ProtagonistId = "franklin", RuntimeGeneration = generation, GameDatetime = "2013-09-17T12:00:00", Capabilities = new[] { "face_player", "wait_here" }, Manifest = new Dictionary<string, object> {
             ["game_edition"] = "legacy", ["story_mode"] = true, ["gta_build"] = "simulated", ["scripthookv_build"] = "simulated", ["shvdn_build"] = "simulated", ["adapter_version"] = "bridge-probe", ["game_os_version"] = "simulated", ["service_os"] = "macos", ["service_host_mode"] = "local", ["compat_layer"] = "none", ["arch"] = "arm64",
             ["capability_flags"] = new[] { "fake_game", "role_classifier_v1", "role_table_" + PedRoleTable.Default.Version, "actor_pin" } } };
         using var bridge = new BridgeWorker(endpoint, request, Environment.GetEnvironmentVariable("LLS_BRIDGE_TOKEN") ?? "");

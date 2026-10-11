@@ -1,0 +1,113 @@
+{
+  "model_replies": [
+    {
+      "text": "Turn toward the player. Hi, I was just out for a stroll. How about you?",
+      "spoken": "Hi, I was just out for a stroll. How about you?"
+    },
+    {
+      "text": "Turn toward the player. Good to see you again.",
+      "spoken": "Good to see you again."
+    },
+    {
+      "text": "[Turns toward the player. Waits briefly.] Hi there.",
+      "spoken": "Hi there."
+    },
+    {
+      "text": "*Turns toward the player. Follows nearby.* Hi there.",
+      "spoken": "Hi there."
+    },
+    {
+      "text": "Hi. (Turns toward the player.) How about you?",
+      "spoken": "Hi. How about you?"
+    },
+    {
+      "text": "Hi, *smiles and nods* I was just out for a stroll.",
+      "spoken": "Hi, I was just out for a stroll."
+    },
+    {
+      "text": "Hi there. [Turns toward the player. Waits briefly",
+      "spoken": "Hi there."
+    },
+    {
+      "text": "Hi there. **Turns toward the player. Waits briefly.** How about you?",
+      "spoken": "Hi there. How about you?"
+    },
+    {
+      "text": "Hi. *smiles **warmly** then nods* Hello.",
+      "spoken": "Hi. Hello."
+    },
+    {
+      "text": "Hi. *smiles**nods* Hello.",
+      "spoken": "Hi. Hello."
+    }
+  ],
+  "directions": [
+    "Turn to face the player.",
+    "Turn to the player.",
+    "Turn your body toward the player.",
+    "Turn and face the player.",
+    "Turning to face the player.",
+    "NPC turns to face you.",
+    "The character pivots to face the player.",
+    "Look at the player.",
+    "Orient yourself toward the player.",
+    "Turns his head toward the player.",
+    "Faces toward the player.",
+    "He turns toward the player.",
+    "The NPC faces the player.",
+    "Rotate toward the player.",
+    "Face the player.",
+    "Turns to face Franklin.",
+    "Follow the player nearby with their permission.",
+    "Follow along behind the player.",
+    "Accompany the player with their consent.",
+    "Starts following the player.",
+    "Stay close behind the player with consent.",
+    "Stop the mod's following task.",
+    "Cancel the mod-owned follow task.",
+    "Walk to the approved safe location nearby.",
+    "Walk to the designated point.",
+    "Move to a nearby safe point.",
+    "Wait in this area for a moment.",
+    "Wait for a moment.",
+    "Wait a short while.",
+    "Wait at this location.",
+    "Wait a moment.",
+    "Wait for a few seconds.",
+    "Stand still for a moment.",
+    "Remain here briefly.",
+    "Stay put for a short time.",
+    "Wander around the approved area.",
+    "Walk around within the permitted area.",
+    "Move away from the observed threat.",
+    "Flee the nearby threat.",
+    "Perform an approved gesture.",
+    "Play the verified gesture.",
+    "Action: face_player.",
+    "Execute follow_player now.",
+    "Please turn toward me.",
+    "Follow me.",
+    "Wait here.",
+    "[smiles]",
+    "[smiles. Leaves the direction unfinished",
+    "*smiles. Leaves the direction unfinished",
+    "*nods and turns*",
+    "(turns toward the player)"
+  ],
+  "ordinary": [
+    "I was just out for a stroll.",
+    "I can turn toward you.",
+    "I'll follow you if that's okay.",
+    "I can wait here for a while.",
+    "I used to wait here for the bus.",
+    "Follow your dreams.",
+    "Wait, what brings you downtown?",
+    "I turn toward the window when the sun comes up.",
+    "The player at the casino won a game.",
+    "I like to walk around this area.",
+    "I can wait a short while.",
+    "I used to wait at this location for the bus.",
+    "I walk to the designated point every morning.",
+    "I turn to the player at the next table when it's their move."
+  ]
+}

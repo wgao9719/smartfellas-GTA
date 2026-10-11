@@ -58,4 +58,36 @@ public sealed class DiagnosticsTests
         }
         finally { File.Delete(path); }
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TaskReleaseAlwaysForgetsAndLogsOnlyAnOperationalFailureCode(bool throws)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "lls-release-log-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string path; var attempts = 0; var forgotten = 0;
+            using (var log = new AdapterLog(directory, 1024))
+            {
+                path = log.FilePath;
+                TaskReleaseGuard.Run(() =>
+                {
+                    attempts++;
+                    if (throws) throw new InvalidOperationException("private native exception detail");
+                }, () => forgotten++, log);
+            }
+            Assert.Equal(1, attempts);
+            Assert.Equal(1, forgotten);
+            var lines = File.ReadAllLines(path);
+            if (throws)
+            {
+                Assert.Single(lines);
+                Assert.EndsWith("task_release_failed ", lines[0]);
+                Assert.DoesNotContain("private native exception detail", lines[0]);
+            }
+            else Assert.Empty(lines);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
 }

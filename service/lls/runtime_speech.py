@@ -154,9 +154,31 @@ class SpeechRuntime:
         ):
             raise HTTPException(409, "push-to-talk target binding is unavailable")
         if event.kind == "voice.ptt_started":
-            self.cancel(session)
-            await self.stop_session_social(session)
-            self.command(session, "scene.cancel", None, {"scene_id": None})
+            # A follow can receive a spoken stop after its preceding reply finished.
+            terminal = {"completed", "rejected", "expired", "failed", "canceled"}
+            pending = [c for c in session.commands.values()
+                       if c["state"] not in terminal
+                       and c["kind"] in {"action.execute", "dialogue.chunk"}]
+            continue_follow = (
+                len(pending) == 1 and pending[0]["kind"] == "action.execute"
+                and pending[0]["payload"]["action_id"] == "follow_player"
+                and pending[0]["state"] == "started"
+                and pending[0]["actor_id"] == event.actor_id
+                and pending[0]["runtime_instance_id"] == actor["runtime_instance_id"]
+                and pending[0]["payload"]["scene_id"] == event.payload["scene_id"]
+                and actor.get("mod_following", False)
+                and (session.task is None or session.task.done())
+                and session.speech_state not in {
+                    "opening_mic", "recording", "stopping_mic", "transcribing"
+                }
+                and session.skill_task is None and session.social_task is None
+            )
+            if continue_follow:
+                self.cancel_speech(session)
+            else:
+                self.cancel(session)
+                await self.stop_session_social(session)
+                self.command(session, "scene.cancel", None, {"scene_id": None})
             identity = self.speech_identity(session, event.actor_id, event.payload["scene_id"])
             session.speech_identity = identity
             # Volume is part of the capture lock. A stop cannot change it.

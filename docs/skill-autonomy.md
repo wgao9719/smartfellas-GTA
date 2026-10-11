@@ -62,6 +62,7 @@ The interpreter checks its guards and every primitive's current permissions.
 If no retained skill matches, the scheduler generates a private candidate through the existing learner.
 The compiler validates its operations and dependencies.
 The actual interpreter then runs a recorded preflight with explicitly simulated zero-distance receipts.
+The scheduler and manual trial route use the same runtime preflight.
 This preflight checks declarative structure, current guards, and policy. It does not prove native feasibility.
 
 A false candidate guard can support one revision within the same episode.
@@ -70,6 +71,10 @@ An unsuccessful preflight cannot authorize physical execution or adoption.
 Engine failure, source invalidation, and policy withdrawal do not cause automatic model retries.
 
 A successful preflight proceeds through the existing bridge trial.
+The scheduler supplies its persisted preflight identifier internally so the bridge does not repeat the simulation.
+The bridge requires a visible passing simulation for that candidate whose fingerprint still matches its source, transitive dependencies, and action registry.
+That authorization is checked before dispatch and before each primitive.
+Changed implementations require new immutable versions and another successful preflight.
 The adapter must acknowledge every dispatched primitive with the required observations.
 Only a completed trial with `verification="bridge_acknowledged"` permits adoption.
 Canonical event and memory persistence precede receipt publication.

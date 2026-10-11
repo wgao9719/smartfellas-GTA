@@ -1,5 +1,6 @@
 """Deterministic authorization. Capabilities cannot be supplied by model text."""
 
+import re
 import time
 from dataclasses import dataclass
 from math import dist
@@ -9,6 +10,24 @@ from .action_registry import ACTION_IDS
 from .protocol import ActionProposal
 
 POLICY_VERSION = "1"
+VERIFIED_GESTURES = frozenset({"wave", "shrug", "point"})
+
+
+def requested_action(text):
+    """Narrow direct requests supply consent only for the named bounded action."""
+    text = text.strip().lower().rstrip(".!?")
+    text = re.sub(r"^(?:please |(?:can|could|would) you )", "", text)
+    text = re.sub(r"^(?:please )|(?: please)$", "", text)
+    return {
+        "follow me": "follow_player", "come with me": "follow_player",
+        "stop following": "stop_following", "stop following me": "stop_following",
+        "wait here": "wait_here", "look at me": "face_player", "face me": "face_player",
+        "go somewhere safe": "go_to_safe_point", "go to a safe spot": "go_to_safe_point",
+        "wander nearby": "wander_nearby", "walk around nearby": "wander_nearby",
+        "get out of here": "flee_from_threat", "move away from me": "flee_from_threat",
+        "wave": "play_verified_gesture", "shrug": "play_verified_gesture",
+        "point": "play_verified_gesture",
+    }.get(text)
 
 
 @dataclass(frozen=True)
@@ -21,16 +40,19 @@ class ActionPolicy:
     def __init__(self, *, clock=time.monotonic):
         self.clock = clock
 
-    def eligible(self, actor, world, capabilities, consent=False):
+    def eligible(self, actor, world, capabilities, consent=False, requested=None):
         eligible = []
         for action in capabilities:
             if action not in ACTION_IDS:
                 continue
-            # Targeted movement and animations require additional engine proofs.
-            if action in {"go_to_safe_point", "play_verified_gesture"}:
-                continue
-            proposal = ActionProposal(action_id=action)
-            if self.check(proposal, actor, world, capabilities, consent).allowed:
+            proposal = ActionProposal(
+                action_id=action,
+                arguments={"gesture_id": "wave"} if action == "play_verified_gesture" else {},
+            )
+            decision = self.check(
+                proposal, actor, world, capabilities, consent or action == requested
+            )
+            if decision.allowed:
                 eligible.append(action)
         return eligible
 
@@ -60,18 +82,29 @@ class ActionPolicy:
             return Decision(False, "actor_cannot_move")
         if proposal.action_id == "stop_following" and not actor.get("mod_following", False):
             return Decision(False, "no_mod_follow_task")
-        if proposal.action_id == "flee_from_threat" and not actor.get("observed_threat", False):
+        if (proposal.action_id == "flee_from_threat" and not consent
+                and not actor.get("observed_threat", False)):
             return Decision(False, "no_observed_threat")
-        if proposal.action_id == "play_verified_gesture":
+        if proposal.action_id == "flee_from_threat":
+            threat = proposal.arguments.threat_position
+            if threat and proposal.arguments.threat_actor_id:
+                return Decision(False, "ambiguous_threat")
+            if threat and dist(tuple(actor["position"][k] for k in ("x", "y", "z")),
+                               (threat.x, threat.y, threat.z)) > 15:
+                return Decision(False, "threat_outside_local_area")
+        if (
+            proposal.action_id == "play_verified_gesture"
+            and proposal.arguments.gesture_id not in VERIFIED_GESTURES
+        ):
             return Decision(False, "gesture_mapping_unverified")
         if proposal.action_id == "go_to_safe_point":
             point = proposal.arguments.point
             if (
-                not point
-                or dist(tuple(actor["position"].values()), (point.x, point.y, point.z)) > 15
+                point
+                and dist(tuple(actor["position"][k] for k in ("x", "y", "z")),
+                         (point.x, point.y, point.z)) > 15
             ):
                 return Decision(False, "point_outside_local_area")
-            return Decision(False, "navigation_unverified")
         return Decision(True, "authorized")
 
 

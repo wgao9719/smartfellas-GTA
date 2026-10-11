@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from service.lls.__main__ import (
@@ -15,6 +16,7 @@ from service.lls.__main__ import (
     fixture_session,
 )
 from service.lls.app import create_app
+from service.lls.bridge_limits import LIMITS_PATH, MAX_BODY_BYTES, MAX_COMMANDS
 from service.lls.display import is_display_safe
 from service.lls.protocol import ActionProposal, Event, VoiceControl
 from service.lls.providers import FakeProvider
@@ -35,6 +37,17 @@ async def client(tmp_path):
         ) as client:
             client.app = app
             yield client
+
+
+async def test_session_open_requires_explicit_save_profile_selection(client):
+    body = fixture_session()
+    body.pop("save_slot", None)
+    body.pop("profile_confirmed", None)
+    response = await client.post("/v1/bridge/sessions", json=body)
+    assert response.status_code == 409
+    assert "save" in response.json()["detail"].lower()
+    assert client.app.state.runtime.sessions == {}
+    assert client.app.state.repository.list_profiles() == []
 
 
 async def open_ready(client, *, capabilities=None, capability_flags=None, actor_overrides=None):
@@ -97,6 +110,115 @@ async def utterance(client, sid, text="Please look at me.", seq=3):
         "/v1/bridge/events:batch", json={"session_id": sid, "events": [event]}
     )
     return response, event
+
+
+def test_bridge_limits_match_shared_adapter_contract():
+    limits = json.loads(LIMITS_PATH.read_text(encoding="utf-8"))
+    assert limits == {"max_body_bytes": MAX_BODY_BYTES, "max_commands": MAX_COMMANDS}
+    assert MAX_BODY_BYTES == 256 * 1024
+    assert MAX_COMMANDS == 64
+
+
+@pytest.mark.parametrize(
+    "text", ["short", "a" * 4000, "\u754c" * 4000], ids=["count", "bytes", "utf8"]
+)
+async def test_command_backlog_drains_in_bounded_ordered_pages(client, text):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    queued = [
+        runtime.command(
+            session, "dialogue.chunk", "npc-1",
+            {"text": text, "speaker": "Neighbor", "scene_id": "backlog",
+             "turn_id": "backlog", "chunk_index": index, "final": index == 79},
+        )
+        for index in range(80)
+    ]
+    cursor, received, pages = 0, [], []
+    while len(received) < len(queued):
+        response = await client.get(
+            "/v1/bridge/commands", params={"after": cursor, "wait_seconds": 0}
+        )
+        assert response.status_code == 200, response.text
+        page = response.json()
+        assert len(response.content) <= MAX_BODY_BYTES
+        assert 0 < len(page["commands"]) <= MAX_COMMANDS
+        assert page["cursor"] == page["commands"][-1]["seq"] > cursor
+        # Retrying a page must not remove commands or advance a hidden cursor.
+        retry = await client.get(
+            "/v1/bridge/commands", params={"after": cursor, "wait_seconds": 0}
+        )
+        assert retry.content == response.content
+        received.extend(page["commands"])
+        pages.append(page)
+        cursor = page["cursor"]
+    assert len(pages) > 1
+    assert [command["id"] for command in received] == [command["id"] for command in queued]
+    assert [command["seq"] for command in received] == list(range(1, 81))
+    assert all(command["payload"]["text"] == text for command in received)
+    assert all(command["state"] == "queued" for command in queued)
+    drained = await client.get(
+        "/v1/bridge/commands", params={"after": cursor, "wait_seconds": 0}
+    )
+    assert drained.json() == {"commands": [], "cursor": cursor}
+
+
+async def test_oversized_single_command_is_rejected_before_enqueue(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    with pytest.raises(HTTPException) as error:
+        runtime.command(session, "status", None, {"state": "ready", "message": "x" * (256 * 1024)})
+    assert error.value.status_code == 413
+    assert error.value.detail == "single command exceeds bridge body limit"
+    assert not session.commands
+    assert session.command_seq == 0
+    command = runtime.command(session, "status", None, {"state": "ready", "message": "Ready"})
+    response = await client.get("/v1/bridge/commands?wait_seconds=0")
+    assert [item["id"] for item in response.json()["commands"]] == [command["id"]]
+    assert response.json()["cursor"] == 1
+
+
+async def test_command_page_counts_envelope_and_cursor_at_exact_byte_limit(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    timestamp = now()
+    runtime.utc_now = lambda: timestamp
+    session.command_seq = 9998
+    first = runtime.command(session, "status", None, {"state": "ready", "message": "x"})
+    measured = await client.get("/v1/bridge/commands?wait_seconds=0")
+    # Seq and cursor both grow a digit on the next command. JSON quotes also cost bytes.
+    first["state"] = "completed"
+    text = '"' + "x" * (MAX_BODY_BYTES - len(measured.content) - 3)
+    fitting = runtime.command(session, "status", None, {"state": "ready", "message": text})
+    last = runtime.command(session, "status", None, {"state": "ready", "message": "last"})
+    response = await client.get("/v1/bridge/commands?wait_seconds=0")
+    assert len(response.content) == MAX_BODY_BYTES
+    assert [c["id"] for c in response.json()["commands"]] == [fitting["id"]]
+    assert response.json()["cursor"] == 10000
+    next_page = await client.get("/v1/bridge/commands?after=10000&wait_seconds=0")
+    assert [c["id"] for c in next_page.json()["commands"]] == [last["id"]]
+    with pytest.raises(HTTPException) as error:
+        runtime.command(session, "status", None, {"state": "ready", "message": text + "x"})
+    assert error.value.status_code == 413
+
+
+async def test_command_poll_reports_oversized_queued_command_without_skipping_it(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    first = runtime.command(session, "status", None, {"state": "ready", "message": "first"})
+    oversized = runtime.command(session, "status", None, {"state": "ready", "message": "bad"})
+    last = runtime.command(session, "status", None, {"state": "ready", "message": "last"})
+    # Defensive handling of an invalid in-memory producer mutation after enqueue.
+    oversized["payload"]["message"] = "x" * MAX_BODY_BYTES
+    first_page = await client.get("/v1/bridge/commands?wait_seconds=0")
+    assert first_page.json()["cursor"] == first["seq"]
+    response = await client.get("/v1/bridge/commands?after=1&wait_seconds=0")
+    assert response.status_code == 413
+    assert response.json()["detail"] == "single command exceeds bridge body limit"
+    assert oversized["state"] == last["state"] == "queued"
 
 
 class ContextProvider(FakeProvider):
@@ -846,6 +968,204 @@ class MarkupProvider(FakeProvider):
     async def dialogue(self, context):
         for part in self.parts:
             yield part
+
+
+@pytest.mark.parametrize("direction", [
+    "Turn toward the player.",
+    "[Turns toward the player. Waits briefly.]",
+    "*Turns toward the player. Follows nearby.*",
+    "**Turns toward the player. Follows nearby.**",
+    "*Turns **warmly** toward the player. Nods.*",
+    "(Turns toward the player. Waits briefly.)",
+])
+async def test_action_narration_is_removed_while_dialogue_is_still_streaming(client, direction):
+    class PausedReply(FakeProvider):
+        def __init__(self):
+            self.waiting = asyncio.Event()
+            self.resume = asyncio.Event()
+            self.action_reply = None
+
+        async def dialogue(self, context):
+            reply = direction + " Hi, I was just out for a stroll. "
+            for offset in range(0, len(reply), 3):
+                yield reply[offset:offset + 3]
+            self.waiting.set()
+            await self.resume.wait()
+            yield "How about you?"
+
+        async def action(self, context, utterance, eligible):
+            self.action_reply = utterance
+            return None
+
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    runtime.provider = provider = PausedReply()
+    session = runtime.sessions[sid]
+    await utterance(client, sid, "Hi there. What brings you downtown tonight?")
+    try:
+        await asyncio.wait_for(provider.waiting.wait(), 1)
+        assert not session.task.done()
+        chunks = [c for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+        assert "".join(c["payload"]["text"] for c in chunks).strip() == (
+            "Hi, I was just out for a stroll."
+        )
+        assert provider.action_reply is None
+    finally:
+        provider.resume.set()
+        await session.task
+    assert provider.action_reply.strip() == "Hi, I was just out for a stroll. How about you?"
+    for command in session.commands.values():
+        if command["kind"] == "dialogue.chunk":
+            await delivery_ack(client, session, command)
+    assert all(direction not in u.text for u in session.delivered_utterances.values())
+
+
+@pytest.mark.parametrize("claim", [
+    "Lester has a new mission for you.",
+    "Your next objective is to steal that car.",
+    "I've got a job for you: rob the bank.",
+    "Michael secretly betrayed Trevor.",
+    "The truth is that Brad is dead.",
+    "Your reward is 500 dollars and the shop now gives you a permanent discount.",
+    "Your haircut costs twenty dollars.",
+    "The repair is free for you.",
+    "I have repaired your car.",
+    "You have unlocked the garage.",
+    "Lester is now your loyal ally.",
+    "Amanda has left Michael for good.",
+    "I've reached the requested spot.",
+    "I've turned to face you.",
+    "Done, I finished the task.",
+])
+async def test_ungrounded_sentence_never_reaches_delivery_or_memory(client, claim):
+    sid, _ = await open_ready(client, capabilities=[])
+    runtime = client.app.state.runtime
+    runtime.provider = MarkupProvider("Nice weather today. ", claim, " I already ate.")
+    session = runtime.sessions[sid]
+    response, _ = await utterance(client, sid, "Tell me something.")
+    assert response.status_code == 200
+    await session.task
+    chunks = [c for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+    spoken = "".join(c["payload"]["text"] for c in chunks)
+    assert claim not in spoken
+    assert spoken.strip() == "Nice weather today. I already ate."
+    for command in chunks:
+        await delivery_ack(client, session, command)
+    assert all(claim not in u.text for u in session.delivered_utterances.values())
+
+
+@pytest.mark.parametrize("line", ["I work at the docks", "Nice weather today", "I already ate"])
+async def test_grounding_preserves_ordinary_small_talk(client, line):
+    sid, _ = await open_ready(client, capabilities=[])
+    runtime = client.app.state.runtime
+    runtime.provider = MarkupProvider(line)
+    await utterance(client, sid)
+    session = runtime.sessions[sid]
+    await session.task
+    assert "".join(
+        c["payload"]["text"] for c in session.commands.values() if c["kind"] == "dialogue.chunk"
+    ) == line
+
+
+async def test_ungrounded_turn_uses_neutral_fallback_and_only_then_selects_action(client):
+    class ClaimProvider(MarkupProvider):
+        async def action(self, context, utterance, eligible):
+            self.spoken = utterance
+            return ActionProposal(action_id="face_player")
+
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    provider = ClaimProvider("I've turned to face you.")
+    runtime.provider = provider
+    await utterance(client, sid)
+    session = runtime.sessions[sid]
+    await session.task
+    assert provider.spoken == "I'm not sure what to say right now."
+    actions = [c for c in session.commands.values() if c["kind"] == "action.execute"]
+    assert len(actions) == 1 and actions[0]["state"] == "queued"
+
+
+async def test_grounding_waits_for_whole_long_sentence_across_provider_tokens(client):
+    sid, _ = await open_ready(client, capabilities=[])
+    runtime = client.app.state.runtime
+    # The previous 400-character delivery split could expose a claim's subject
+    # before the rest of the sentence revealed its unsupported reward.
+    line = "For you " + "after all that talk " * 23 + "the reward is 500 dollars."
+    runtime.provider = MarkupProvider(*(line[i:i + 17] for i in range(0, len(line), 17)))
+    await utterance(client, sid)
+    session = runtime.sessions[sid]
+    await session.task
+    assert "".join(
+        c["payload"]["text"] for c in session.commands.values() if c["kind"] == "dialogue.chunk"
+    ) == "I'm not sure what to say right now."
+
+
+async def test_grounding_keeps_long_safe_sentence_within_delivery_bounds(client):
+    sid, _ = await open_ready(client, capabilities=[])
+    runtime = client.app.state.runtime
+    line = "I work at the docks " * 30 + "most days."
+    runtime.provider = MarkupProvider(line)
+    await utterance(client, sid)
+    session = runtime.sessions[sid]
+    await session.task
+    chunks = [c["payload"] for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+    assert "".join(c["text"] for c in chunks) == line
+    assert all(len(c["text"]) <= 500 for c in chunks)
+    assert chunks[-1]["final"]
+
+
+@pytest.mark.parametrize("status", [None, "started", "failed", "completed"])
+async def test_grounding_completion_needs_corresponding_completed_ack(client, status):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    await utterance(client, sid)
+    await session.task
+    action = next(c for c in session.commands.values() if c["kind"] == "action.execute")
+    for command in list(session.commands.values()):
+        if command["kind"] == "dialogue.chunk":
+            await delivery_ack(client, session, command)
+    states = ["started", "completed"] if status == "completed" else [status] if status else []
+    for state in states:
+        response = await client.post(
+            f"/v1/bridge/commands/{action['id']}/ack",
+            json={"session_id": sid, "runtime_generation": 1, "status": state},
+        )
+        assert response.status_code == 200, response.text
+    before = set(session.commands)
+    claim = "I've turned to face you."
+    runtime.provider = MarkupProvider(claim + " I've reached the requested spot.")
+    response, _ = await utterance(client, sid, "What happened?", seq=4)
+    assert response.status_code == 200, response.text
+    await session.task
+    spoken = "".join(
+        c["payload"]["text"] for cid, c in session.commands.items()
+        if cid not in before and c["kind"] == "dialogue.chunk"
+    ).strip()
+    assert spoken == (claim if status == "completed" else "I'm not sure what to say right now.")
+
+
+async def test_action_stage_refreshes_eligibility_after_speech(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+
+    class ChangedDuringDialogue(FakeProvider):
+        called = False
+
+        async def dialogue(self, context):
+            assert "face_player" in context["eligible_actions"]
+            session.actors["npc-1"]["allowed_actions"] = []
+            yield "Nice weather today."
+
+        async def action(self, context, utterance, eligible):
+            self.called = True
+            return None
+
+    runtime.provider = provider = ChangedDuringDialogue()
+    await utterance(client, sid)
+    await session.task
+    assert not provider.called
 
 
 def delivered_event(client, command):

@@ -24,6 +24,7 @@ def test_registry_matches_protocol_and_never_activates_native_capabilities():
         executor = action_metadata(name)["executor"]
         assert executor["validation"] == "unverified"
         assert executor["verified_game_builds"] == []
+        assert action_metadata(name)["preconditions"]
 
 
 @pytest.mark.parametrize(
@@ -31,13 +32,13 @@ def test_registry_matches_protocol_and_never_activates_native_capabilities():
     [
         ("face_player", {"duration_seconds": 0.1}),
         ("wait_here", {"duration_seconds": 30}),
-        ("follow_player", {"max_follow_meters": 30}),
+        ("follow_player", {"max_follow_meters": 15}),
         ("stop_following", {}),
         ("go_to_safe_point", {"point": {"x": 0, "y": 1, "z": -2}}),
         ("wander_nearby", {"radius": 20}),
         ("flee_from_threat", {"threat_actor_id": "actor-1"}),
         ("play_verified_gesture", {"gesture_id": "wave"}),
-        ("play_verified_gesture", {"gesture_id": "😀" * 128}),
+        ("flee_from_threat", {"threat_actor_id": "😀" * 128}),
     ],
 )
 def test_finite_argument_contract(action, arguments):
@@ -56,7 +57,7 @@ def test_finite_argument_contract(action, arguments):
         ("face_player", {"duration_seconds": 10**500}),
         ("face_player", {"native_hash": 123}),
         ("stop_following", {"duration_seconds": 1}),
-        ("go_to_safe_point", {}),
+        ("play_verified_gesture", {}),
         ("go_to_safe_point", {"point": {"x": 0, "y": 1}}),
         ("go_to_safe_point", {"point": {"x": 999999, "y": 1, "z": 0}}),
         ("play_verified_gesture", {"gesture_id": ""}),

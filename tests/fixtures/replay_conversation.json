@@ -4,6 +4,8 @@
   "start_utc": "2026-01-01T00:00:00+00:00",
   "session": {
     "profile_id": "fake-demo",
+    "save_slot": "fake-slot",
+    "profile_confirmed": true,
     "protagonist_id": "franklin",
     "runtime_generation": 1,
     "game_datetime": "2013-09-17T12:00:00",

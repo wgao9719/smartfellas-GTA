@@ -3,6 +3,7 @@
 import json
 import os
 import queue
+import re
 import shutil
 import socket
 import sqlite3
@@ -13,11 +14,67 @@ import time
 from contextlib import closing
 from pathlib import Path
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from live_cleanup import temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def verify_started(connection, checkpoint):
+    row = connection.execute(
+        "SELECT data FROM events WHERE profile_id=? AND event_id=?",
+        (checkpoint["profile_id"], checkpoint["command_id"] + ":started"),
+    ).fetchone()
+    assert row is not None, "Started ACK was not durable before process death"
+    started = json.loads(row[0])
+    assert started["event_type"] == "action.started"
+    assert started["payload"]["observed"]["task_dispatched"] is True
+    memory = connection.execute(
+        "SELECT m.text,m.session_id,a.actor_kind,a.session_id FROM memories m "
+        "JOIN actors a USING(profile_id,actor_id) WHERE m.profile_id=? AND m.memory_id=?",
+        (checkpoint["profile_id"], checkpoint["command_id"] + ":started:memory"),
+    ).fetchone()
+    assert memory and "This does not confirm completion." in memory[0]
+    assert memory[1:] == (
+        checkpoint["session_id"], "ambient_ephemeral", checkpoint["session_id"],
+    ), memory
+    return started
+
+
+def verify_recovery(connection, checkpoint, started):
+    receipts = connection.execute(
+        "SELECT data FROM events WHERE profile_id=? AND event_id LIKE ?",
+        (checkpoint["profile_id"], checkpoint["command_id"] + ":%"),
+    ).fetchall()
+    assert [json.loads(row[0]) for row in receipts] == [started], receipts
+    memory = connection.execute(
+        "SELECT text FROM memories WHERE profile_id=? AND memory_id=?",
+        (checkpoint["profile_id"], checkpoint["command_id"] + ":started:memory"),
+    ).fetchone()
+    assert memory is None, "Session-only action memory survived recovery"
+    for table in ("actors", "memories", "actor_instances", "session_cleanup_pending"):
+        retained = connection.execute(
+            f"SELECT 1 FROM {table} WHERE profile_id=? AND session_id=? LIMIT 1",
+            (checkpoint["profile_id"], checkpoint["session_id"]),
+        ).fetchone()
+        assert retained is None, f"Session cleanup left rows in {table}"
+    ended = connection.execute(
+        "SELECT ended_at FROM game_sessions WHERE profile_id=? AND session_id=?",
+        (checkpoint["profile_id"], checkpoint["session_id"]),
+    ).fetchone()
+    assert ended and ended[0], "Recovered session was not closed"
+
+
+def profile_export(endpoint, profile):
+    with urlopen(endpoint + "/dashboard", timeout=5) as response:
+        page = response.read().decode("utf-8")
+    credentials = json.loads(re.search(r"const credentials = (\{[^\n]+\});", page)[1])
+    request = Request(endpoint + "/v1/admin/profiles/" + profile + "/export", headers={
+        "Authorization": "Bearer " + credentials["token"], "Origin": endpoint,
+    })
+    with urlopen(request, timeout=5) as response:
+        return json.load(response)
 
 
 def main():
@@ -135,12 +192,7 @@ def main():
                 assert checkpoint["phase"] == "started", checkpoint
                 # Close explicitly: Windows cannot delete an open database with the temp folder.
                 with closing(sqlite3.connect(database)) as connection:
-                    row = connection.execute(
-                        "SELECT data FROM events WHERE profile_id=? AND event_id=?",
-                        (checkpoint["profile_id"], checkpoint["command_id"] + ":started"),
-                    ).fetchone()
-                    assert row is not None, "Started ACK was not durable before process death"
-                    assert json.loads(row[0])["payload"]["observed"]["task_dispatched"] is True
+                    started = verify_started(connection, checkpoint)
                 # Popen owns this exact process. No process search or broad kill occurs.
                 service.kill()
                 service.wait(timeout=3)
@@ -151,21 +203,23 @@ def main():
                 assert result["status"] == "passed", result
                 assert probe.wait(timeout=5) == 0, probe.stderr.read()
                 with closing(sqlite3.connect(database)) as connection:
-                    receipts = connection.execute(
-                        "SELECT event_id FROM events WHERE profile_id=? AND event_id LIKE ?",
-                        (checkpoint["profile_id"], checkpoint["command_id"] + ":%"),
-                    ).fetchall()
-                    assert receipts == [(checkpoint["command_id"] + ":started",)], receipts
-                    memory = connection.execute(
-                        "SELECT text FROM memories WHERE profile_id=? AND memory_id=?",
-                        (checkpoint["profile_id"], checkpoint["command_id"] + ":started:memory"),
-                    ).fetchone()
-                    assert memory and "This does not confirm completion." in memory[0]
+                    verify_recovery(connection, checkpoint, started)
+                exported = profile_export(endpoint, checkpoint["profile_id"])
+                assert [
+                    event for event in exported["events"]
+                    if event["event_id"].startswith(checkpoint["command_id"] + ":")
+                ] == [started]
+                assert not any(
+                    memory["session_id"] == checkpoint["session_id"]
+                    for memory in exported["memories"]
+                )
                 print(
                     json.dumps(
                         {
                             **result,
                             "started_ack_persisted_before_kill": True,
+                            "started_receipt_visible_in_profile_export": True,
+                            "ambient_history_purged_after_restart": True,
                             "canonical_completion_after_restart": False,
                             "service_process_killed": True,
                         },

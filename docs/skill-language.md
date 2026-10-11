@@ -72,6 +72,11 @@ Canonical source events support each candidate and outcome.
 Source deletion removes dependent records. Actor reset suppresses forgotten sources after reopen and reimport.
 The final trial transaction rechecks binding, sources, dependencies, and deletion history.
 
+A persisted trial fingerprint covers the candidate source, transitive dependency sources, and action registry.
+Manual and automatic bridge trials require a passing recorded simulation for the same candidate with matching current fingerprints.
+The manual route runs that preflight before dispatch and returns a failed simulated outcome for revision without issuing commands.
+Changing immutable code or dependencies requires new versions and revalidation; an earlier passing simulation cannot authorize changed code.
+
 `SkillLearner` sends bounded actor-visible source excerpts and private trial history through the background provider gateway.
 It compiles and registers a candidate. It does not execute or adopt that candidate.
 Requested skill identity, version, and action class constrain the generated result.
@@ -86,6 +91,7 @@ uv run --frozen python tools/trial_skill.py --demo
 
 It demonstrates refusal followed by a successful revision with simulated primitive receipts.
 It does not generate candidates through a model or persist a repertoire.
+It does not dispatch bridge commands or grant bridge trial authorization.
 
 Run the persistent learning demonstration:
 

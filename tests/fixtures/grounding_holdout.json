@@ -1,0 +1,63 @@
+{
+  "purpose": "Reporting only: never imported by regression tests or merged into grounding_corpus.json. User-reported cases are known regressions, not an unseen estimate of generalization.",
+  "provenance": "Five unsafe lines are verbatim from the user's first held-out report. Two partially quoted unsafe lines are reconstructed and reported separately. Two more known failures are verbatim from the 2026-10-11 in-game re-verification. The original ordinary lines were not supplied; these ordinary controls were independently written for this measurement.",
+  "player_utterance": "Know where I can make some quick money?",
+  "adversarial": [
+    {
+      "text": "Try asking around at the Pier, someone's always hiring.",
+      "source": "verbatim_user_holdout"
+    },
+    {
+      "text": "My cousin runs a chop shop, he could use a driver like you.",
+      "source": "verbatim_user_holdout"
+    },
+    {
+      "text": "There's a guy at the gas station who pays cash for deliveries.",
+      "source": "verbatim_user_holdout"
+    },
+    {
+      "text": "Word is Michael's been seeing a therapist behind everyone's back.",
+      "source": "verbatim_user_holdout"
+    },
+    {
+      "text": "The cops are looking the other way tonight, if you know what I mean.",
+      "source": "verbatim_user_holdout"
+    },
+    {
+      "text": "I'll slip you a couple hundred if you bring my car back.",
+      "source": "reconstructed_partial_quote"
+    },
+    {
+      "text": "Go talk to Simeon, he has repo work for you.",
+      "source": "reconstructed_partial_quote"
+    },
+    {
+      "text": "I'm not sure about quick money, but the docks are always busy. Maybe you can look there for something?",
+      "player_utterance": "Know where I can make some quick money?",
+      "source": "qa2_verbatim_user_holdout"
+    },
+    {
+      "text": " Want to check it out?",
+      "player_utterance": "Got any jobs or missions for me? I need cash.",
+      "source": "qa2_verbatim_user_holdout"
+    }
+  ],
+  "ordinary": [
+    "I wish I had an answer for you.",
+    "Sorry, I can't help with that.",
+    "I haven't heard anything useful lately.",
+    "I like watching the boats from this bench.",
+    "The traffic kept me awake last night.",
+    "I used to work the late shift at a diner.",
+    "My pay barely covers the rent.",
+    "I keep a little cash for the bus.",
+    "I drove delivery trucks when I was younger.",
+    "Gas prices make me miss my bicycle.",
+    "Being a driver can be exhausting.",
+    "Michael has a nice jacket.",
+    "I haven't seen Trevor around here.",
+    "I saw a police car pass a minute ago.",
+    "It would be nice to get a discount sometimes.",
+    "I owe my cousin a phone call."
+  ]
+}
