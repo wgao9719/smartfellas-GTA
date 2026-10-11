@@ -851,6 +851,6 @@ def test_v2_migration_preserves_canonical_content_and_adds_empty_registry(tmp_pa
             "DROP TABLE skill_versions; PRAGMA user_version=2;"
         )
     with Repository(path) as repo:
-        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 5
         assert repo.export_profile("profile")["events"][0]["event_id"] == "need"
         assert repo.export_profile("profile")["skill_versions"] == []

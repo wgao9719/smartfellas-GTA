@@ -105,12 +105,15 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
 
     @asynccontextmanager
     async def lifespan(app):
-        maintenance = asyncio.create_task(runtime.maintain())
+        maintenance = None
         try:
+            await runtime.expire_sessions()
+            maintenance = asyncio.create_task(runtime.maintain())
             yield
         finally:
-            maintenance.cancel()
-            await asyncio.gather(maintenance, return_exceptions=True)
+            if maintenance is not None:
+                maintenance.cancel()
+                await asyncio.gather(maintenance, return_exceptions=True)
             try:
                 await runtime.shutdown()
             finally:

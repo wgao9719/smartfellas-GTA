@@ -264,6 +264,7 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
                 "game_datetime": session.game_datetime,
                 "closed": session.closed,
                 "actor_count": len(session.actors),
+                "cleanup_pending": session.cleanup_pending,
             }
             for session in runtime.sessions.values()
         ]
@@ -271,6 +272,7 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             {
                 "profiles": await runtime.db("list_profiles"),
                 "sessions": sessions,
+                "session_cleanup": runtime.cleanup_diagnostics(),
                 "provider": runtime.provider.name,
                 "speech": "unverified",
                 "game_verified": False,
@@ -345,6 +347,10 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
                 "game_datetime": session.game_datetime,
                 "closed": session.closed,
                 "provider": runtime.provider.name,
+                "cleanup_pending": session.cleanup_pending,
+                "cleanup_error_type": runtime.cleanup_pending.get(
+                    (session.request.profile_id, session.id)
+                ),
                 "manifest": session.request.manifest.model_dump(),
                 "world": {k: v for k, v in session.world.items() if not k.startswith("_")},
                 "actors": [

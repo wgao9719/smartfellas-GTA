@@ -531,6 +531,41 @@ async def test_close_joins_playback_and_erases_retained_receipts(speech_scene):
         assert session.closed and session.speech_identity is None
 
 
+async def test_close_preserves_rendered_subtitle_memory_for_pinned_actor(speech_scene):
+    async with speech_scene() as values:
+        client, runtime, session, microphone, transcriber, synthesizer, playback, provider = values
+        runtime.repo.pin_actor(
+            "fake-demo", "npc-1", session.id, display_name="Neighbor",
+            pinned_at_game_datetime=session.game_datetime, branch_id=session.branch_id,
+        )
+        playback.release.clear()
+        await say(client, session)
+        await asyncio.wait_for(playback.started.wait(), 1)
+        command = next(c for c in session.commands.values() if c["kind"] == "dialogue.chunk")
+        ack = {
+            "session_id": session.id,
+            "runtime_generation": 1,
+            "status": "canceled",
+            "observed": {"delivery": "subtitle", "text": "Hello"},
+        }
+        assert (
+            await client.post(f"/v1/bridge/commands/{command['id']}/ack", json=ack)
+        ).status_code == 200
+        assert "_subtitle_ack" in command
+        response = await client.post(
+            f"/v1/bridge/sessions/{session.id}/close", json={"runtime_generation": 1}
+        )
+        assert response.status_code == 200
+        assert session.closed and not session.cleanup_pending
+        assert playback.cleaned and runtime.speech.receipts == ()
+        spoken = [m for m in memories(runtime, session) if m["text"].startswith("I said:")]
+        assert [m["text"] for m in spoken] == ["I said: Hello"]
+        assert spoken[0]["session_id"] is None
+        assert (
+            await client.post(f"/v1/bridge/commands/{command['id']}/ack", json=ack)
+        ).status_code == 410
+
+
 async def test_cancel_waits_for_opening_microphone_cleanup(speech_scene):
     async with speech_scene() as (client, runtime, session, microphone, *rest):
         microphone.release.clear()

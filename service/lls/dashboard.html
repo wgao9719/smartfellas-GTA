@@ -125,6 +125,8 @@
   </section>
   <section aria-labelledby="diagnostics-title">
     <h2 id="diagnostics-title">Live session</h2>
+    <p id="cleanup-status" role="status"></p>
+    <pre id="cleanup-details" hidden></pre>
     <div class="toolbar">
       <label for="diagnostic-session">Session<select id="diagnostic-session"><option value="">No sessions</option></select></label>
       <button id="refresh-diagnostics">Refresh session</button>
@@ -370,6 +372,10 @@
     if(generation!==refreshGeneration)return;
     el('provider').textContent='Provider: '+data.provider;
     el('sessions').textContent=JSON.stringify(data.sessions,null,2);
+    el('cleanup-status').textContent=data.session_cleanup.message;
+    el('cleanup-status').className=data.session_cleanup.status==='pending'?'warning':'muted small';
+    el('cleanup-details').hidden=data.session_cleanup.status!=='pending';
+    el('cleanup-details').textContent=JSON.stringify(data.session_cleanup,null,2);
     const selectedSession=el('diagnostic-session').value;
     el('diagnostic-session').replaceChildren();
     for(const session of data.sessions){const option=document.createElement('option');
@@ -398,7 +404,7 @@
     if(!session)return;
     const data=await api('/sessions/'+encodeURIComponent(session)+'/diagnostics');
     if(generation!==diagnosticsGeneration)return;
-    el('diagnostic-summary').textContent=(data.closed?'Closed':'Active')+' · '+data.protagonist_id+
+    el('diagnostic-summary').textContent=(data.cleanup_pending?'Cleanup pending':data.closed?'Closed':'Active')+' · '+data.protagonist_id+
       ' · '+data.game_datetime+' · '+data.actors.length+' nearby characters · Provider: '+data.provider;
     const values={actors:{actors:data.actors,world:data.world},commands:data.commands,trace:data.trace,
       perception:{perception:data.perception,triggers:data.triggers,social:data.social,social_scheduler:data.social_scheduler},
