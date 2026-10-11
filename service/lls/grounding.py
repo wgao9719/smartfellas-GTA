@@ -16,56 +16,159 @@ COMPLETION_LINES = {
     "play_verified_gesture": "I've made the requested gesture.",
 }
 
-# No native mission/economy/story evidence interface exists. These domains
-# therefore have no generated assertion allowlist, including quoted claims.
-_RESTRICTED = re.compile(
-    r"\b(?:missions?|quests?|objectives?|heists?|rewards?|payments?|payouts?|discounts?|"
-    r"prices?|costs?|charges?|cash|dollars?|bucks|paid|paying|unlocks?|unlocked|unlocking|"
-    r"betray\w*|secrets?|secretly|revelations?|plot|factions?|allegiance)\b|[$£€]|"
-    r"\b(?:job|work|task|assignment)s?\s+(?:for you|is to|will be|involves)\b|"
-    r"\b(?:give|giving|got|have|offer|offering|new|next|assigned|accepted)\b.*"
-    r"\b(?:job|assignment)\b|"
-    r"\b(?:pay|owe|earn|earned|receive|received)\b.*\b(?:you|me|money|\d+)\b|"
-    r"\b(?:shop|store|repair|haircut|service|ride|weapon|car|outfit)s?\b.*"
-    r"\b(?:free|on the house|ready|fixed|repaired|purchased|bought)\b|"
-    r"\b(?:free|complimentary)\b.*\b(?:repair|haircut|service|ride|weapon|car)\b|"
-    r"\b(?:buy|sell|selling|haircut|repair|car|outfit|weapon|ride)\b.*"
-    r"\b(?:for|is|only|just)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
-    r"eleven|twelve|fifteen|twenty|thirty|forty|fifty|hundred|thousand)\b|"
-    r"\b(?:on the house|at no charge)\b|"
-    r"\b(?:access|entry)\s+(?:is\s+)?(?:granted|approved)|"
-    r"\b(?:garage|shop|store|weapon|car|service|mission)\b.*"
-    r"\b(?:now available|now accessible|access granted)\b|"
-    r"\b(?:truth is|real reason|all along|fib|iaa)\b|"
-    r"\b(?:lester|michael|franklin|trevor|amanda|lamar|brad|dave|devin|steve|"
-    r"jimmy|tracey|ron|wade|martin|madrazo|chop)\b.*"
-    r"\b(?:ally|allies|enemy|enemies|friend|partner|loyal|trust\w*|loves?|hates?|"
-    r"married|divorc\w*|left|dead|died|killed|father|mother|brother|sister|"
-    r"informant|reconcil\w*|needs? you to|wants? you to|asks? you to)\b|"
-    r"\b(?:now|forever|permanent\w*)\b.*"
-    r"\b(?:ally|allies|enemy|enemies|partner|married|gang|family)\b",
-    re.IGNORECASE,
+def _patterns(*alternatives):
+    return re.compile("|".join(f"(?:{pattern})" for pattern in alternatives), re.IGNORECASE)
+
+
+_PERSON = (
+    r"\b(?:lester|michael|franklin|trevor|amanda|lamar|brad|dave|devin|steve|jimmy|tracey|"
+    r"ron|wade|martin|madrazo|chop)\b"
+)
+_STORY_SUBJECT = rf"{_PERSON}(?:\s+and\s+(?:{_PERSON}|i|my (?:sister|brother|mother|father)))?"
+_JOB = r"(?:missions?|jobs?|work|quests?|objectives?|assignments?|heists?)"
+_MONEY = r"(?:cash|money|rewards?|payments?|payouts?|discounts?|prices?|dollars?|bucks)"
+_SERVICE = r"(?:car|vehicle|bike|weapon|outfit|haircut|repair|ride|service|coffee|meal|drink)"
+_AMOUNT = r"(?:[$£€]?\d+|one|two|three|four|five|ten|twenty|fifty|hundred|thousand)"
+
+# Category words alone are background flavor. These predicates require an
+# assignment, transaction, service result or access claim directed at the player.
+_MISSION = _patterns(
+    rf"\b{_JOB}\b.*\bfor you\b",
+    rf"\byour\s+(?:(?:new|next|current)\s+)?{_JOB}\s+"
+    r"(?:is (?:to|marked|waiting)|will be to|pays)\b",
+    rf"\bassign(?:ing|ed)? you\b.*\b{_JOB}\b",
+    rf"\byou(?:'ve| have)?\s+accepted\b.*\b{_JOB}\b",
+    rf"{_PERSON}\s+(?:needs?|wants?|asks?|asked) you to\s+"
+    r"(?:rob|steal|collect|deliver|rescue|kill|retrieve)\b",
+    rf"\byou\b.*\b(?:collect|deliver|steal|rob)\b.*\b{_PERSON}'s {_JOB}\b",
+)
+_ECONOMY = _patterns(
+    rf"\byour\s+(?:(?:new|next|permanent)\s+)?{_MONEY}\s+"
+    rf"(?:is|will be|has been)\s+(?:now\s+)?(?:{_AMOUNT}|paid|ready|available|permanent)\b",
+    rf"\b(?:pay|paid|owe) you\b.*(?:\b{_MONEY}\b|{_AMOUNT})",
+    rf"\byou(?:'ll| will| have)?\s+(?:now\s+)?(?:get|earn(?:ed)?|receive[ds]?)\b.*"
+    rf"(?:\b{_MONEY}\b|\bfree\s+{_SERVICE}\b)",
+    rf"\b(?:give|gives|giving|offering|offer) you\b.*"
+    rf"(?:\b{_MONEY}\b|\bfree\s+{_SERVICE}\b)",
+    rf"\b(?:give|gives|giving|offering|offer) you\s+{_AMOUNT}\s+"
+    rf"for (?:the|that|this)\s+{_JOB}\b",
+    rf"\b(?:{_MONEY}|half price|free|complimentary)\b.*\bfor you\b",
+    rf"\bfor you\b.*\b{_MONEY}\b",
+    r"\b(?:cash|money|payment|reward)\b.*\byour (?:account|wallet|bank)\b",
+    r"\b(?:knock|take)\b.*\boff\b.*\bfor you\b",
+    rf"\byour\s+(?:next\s+)?{_SERVICE}\b.*"
+    rf"\b(?:costs?|is|will be)\s+(?:only\s+)?(?:{_AMOUNT}|on the house|complimentary|free)\b",
+    rf"\b(?:you can buy|sell you)\b.*\bfor\s+(?:a\s+)?{_AMOUNT}\b",
+    rf"\bcharge you\s+(?:only\s+)?{_AMOUNT}\b",
+    rf"\byours for\s+{_AMOUNT}\b",
+    rf"\byour\s+{_SERVICE}\b.*\b(?:at no charge|on the house|for free)\b",
+)
+_SERVICE_OUTCOME = _patterns(
+    rf"\b(?:repaired|fixed|serviced|delivered|purchased|bought|sold)\s+your\s+"
+    rf"(?:new\s+)?{_SERVICE}\b",
+    rf"\byour\s+{_SERVICE}\s+(?:is|has been)\s+(?:finally\s+)?"
+    r"(?:fixed|repaired|ready|delivered|purchased)\b",
+    r"\bfinished your (?:repair|purchase|transaction)\b",
+    rf"\b(?:purchased|bought|sold|delivered|moved|repaired|fixed)\b.*\b{_SERVICE}\b.*"
+    r"\bfor you\b",
+)
+_UNLOCK = _patterns(
+    r"\byou(?:'ve| have)?\s+(?:now\s+)?unlocked\b",
+    r"\byour\s+(?:garage|shop|store|weapon|workshop|club|access|entry)\b.*"
+    r"\b(?:unlocked|available|accessible|approved|granted)\b",
+    r"\b(?:unlocked|available|accessible)\b.*\bfor you\b",
+    r"\byou\s+(?:now have access|can now (?:use|enter|access))\b",
 )
 
-_COMPLETION = re.compile(
-    r"\b(?:completed|accomplished|succeeded)\b|"
-    r"\bfinished\s+(?:(?:the|your|that|this|my|our)\s+)?"
-    r"(?:action|task|job|request|repair|delivery|waiting)\b|"
-    r"^(?:done|all done|all set|consider it done|mission accomplished)(?:[.! ,;:]|$)|"
-    r"\b(?:task|job|request|it)\s+(?:is\s+)?done\b|"
-    r"\b(?:did it|taken care of it|turned to face|started following|started wandering|"
-    r"started moving away|started fleeing|started waiting)\b|"
-    r"\b(?:i|we|you|he|she|they|it|car|vehicle|door)\b.*"
-    r"\b(?:turned|faced|waited|followed|stopped|reached|arrived|moved|parked|"
-    r"drove|driven|brought|delivered|repaired|fixed|bought|sold|opened|closed|"
-    r"transferred|stole|stolen|killed|rescued|saved|escaped|cleared|"
-    r"made the requested gesture)\b|"
-    r"\b(?:i'm|i am|we're|we are)\s+(?:(?:already|now)\s+)?"
-    r"(?:following|facing|waiting|at the (?:spot|destination))\b|"
-    r"\b(?:has|have|is|are|was|were|been)\s+(?:already\s+)?"
-    r"(?:repaired|fixed|delivered|paid|moved|parked|opened|closed|rescued|cleared)\b",
+# Match the named subject's predicate, not a name anywhere in a sentence about
+# somebody else's life (e.g. 'Amanda, my sister is getting married').
+_STORY = _patterns(
+    rf"{_STORY_SUBJECT}\s+"
+    r"(?:(?:is|are|was|has|have|had|got|getting|been|a|the|now|secretly|secret|permanently)\s+)*"
+    r"(?:dead|died|killed|betrayed|married|divorced|reconciled|informant|daughter|son)\b",
+    rf"{_STORY_SUBJECT}\s+(?:(?:is|has|have|had)\s+)?"
+    r"(?:secretly (?:working|works|an|controls)|switched (?:his|her) allegiance|"
+    r"formed an alliance|(?:permanently\s+)?cut ties|no longer loyal)\b",
+    rf"{_PERSON}\s+(?:has\s+)?left\s+{_PERSON}\b.*\bfor good\b",
+    rf"{_STORY_SUBJECT}\s+(?:are|is)\s+(?:now\s+)?"
+    r"(?:(?:your|my)\s+)?(?:(?:new|trusted|loyal|business)\s+)?"
+    r"(?:allies|ally|enemies|partners?)\b.*\bnow\b",
+    rf"{_STORY_SUBJECT}\s+(?:are|is)\s+now\s+(?:your\s+)?"
+    r"(?:(?:trusted|loyal|business)\s+)?(?:allies|ally|enemies|partners?)\b",
+)
+
+_COMPLETION = _patterns(
+    r"\b(?:turned|turning)\s+(?:around\s+)?(?:to face|toward|towards|to)\s+you\b",
+    r"\b(?:turned|turning) around\s+(?:like|as) you asked\b",
+    r"\b(?:faced|facing|followed|following)\s+(?:behind\s+)?you\b",
+    r"\b(?:waited|waiting) here\b(?!\s+for\s+(?:a|the|my)\b)",
+    r"\b(?:reached|arrived at|gone to)\s+(?:the|that|your)\s+"
+    r"(?:(?:requested|marked|designated)\s+)?(?:spot|destination|point)\b",
+    r"\bat\s+(?:the|that|your)\s+(?:requested|marked|designated)\s+"
+    r"(?:spot|destination|point)\b",
+    r"\bat\s+(?:the|that|your)\s+(?:spot|destination|point)\s+"
+    r"(?:you (?:asked|indicated|sent)|now|as requested)\b",
+    r"\b(?:started wandering nearby|wandering nearby (?:now|like you asked|as requested))\b",
+    r"\b(?:moving away|fled|fleeing)\s+(?:from the threat|now as requested)\b",
+    r"\b(?:made|performed) the requested gesture\b",
+    r"\b(?:waved|nodded|gestured)\b.*\b(?:like you asked|as requested)\b",
+)
+_DONE = re.compile(
+    r"(?:done|all done|all set|consider it done|mission accomplished|"
+    r"(?:i(?:'ve| have)?\s+)?(?:did it|taken care of it|finished the task)|"
+    r"the task is done)[.!?]*$",
     re.IGNORECASE,
 )
+_HISTORY = re.compile(
+    r"\b(?:yesterday|last (?:night|week|month|year|summer|winter)|"
+    r"(?:years?|months?|days?) ago|when (?:i|we) (?:was|were)|used to)\b"
+)
+_INTENTION = re.compile(
+    r"\b(?:(?:i|we)\s+(?:can|could|will|would|might|may)|i'll|we'll)\s+"
+    r"(?:(?:try|be|start|stop|keep)\s+)*$"
+)
+_CLAUSES = re.compile(r"[,;]|\b(?:and|but|because|while|although|since|even though|now that)\b")
+_DENIAL_PREFIX = re.compile(
+    r"\b(?:can't|cannot|won't|will not|don't|do not|haven't|have not|didn't|did not|am not)\s+"
+    r"(?:yet\s+)?$"
+)
+_PRESENT_PREFIX = re.compile(
+    r"\b(?:i'm|i am|we're|we are|i've|i have|we've|we have)\s+"
+    r"(?:(?:now|already|still|no longer|just|finished|stopped)\s+)*$"
+)
+_NON_PHYSICAL_FOLLOW = re.compile(
+    r"\bfollowing you (?:on social media|online|on (?:television|tv|the radio))\b"
+)
+
+
+def _completion_claim(text):
+    for clause in _CLAUSES.split(text):
+        if _DONE.fullmatch(clause.strip()):
+            return True
+        clause = _NON_PHYSICAL_FOLLOW.sub("", clause)
+        for match in _COMPLETION.finditer(clause):
+            prefix = clause[:match.start()]
+            if _DENIAL_PREFIX.search(prefix) or _INTENTION.search(prefix):
+                continue
+            if (
+                _HISTORY.search(clause)
+                and not _PRESENT_PREFIX.search(prefix)
+                and not re.search(r"\b(?:now|just|as requested)\b", clause)
+            ):
+                continue
+            return True
+    return False
+
+
+def _restricted_claim(text):
+    if _STORY.search(text) or _completion_claim(text):
+        return True
+    for clause in _CLAUSES.split(text):
+        for rule in (_MISSION, _ECONOMY, _SERVICE_OUTCOME, _UNLOCK):
+            for match in rule.finditer(clause):
+                if not _DENIAL_PREFIX.search(clause[:match.start()]):
+                    return True
+    return False
 
 
 def _normalized(text):
@@ -74,10 +177,14 @@ def _normalized(text):
 
 def speech_constraints(*, completion_lines=()):
     return {
-        "allowed": ["small talk", "questions", "uncertainty", "refusal", "action intentions"],
+        "allowed": [
+            "small talk", "personal history", "everyday activities", "price opinions",
+            "neutral story-character mentions", "questions", "refusal", "action intentions",
+        ],
         "forbidden_claims": [
-            "missions/jobs/objectives", "payments/rewards/discounts/prices", "unlocks",
-            "canonical relationship changes", "story revelations", "unacknowledged actions",
+            "player missions/jobs/objectives", "player payments/rewards/discounts/prices",
+            "player unlocks or service outcomes", "canonical relationship changes",
+            "story revelations", "unacknowledged actions in this interaction",
         ],
         "acknowledged_completion_lines": list(completion_lines),
     }
@@ -95,9 +202,7 @@ def grounded_text(text, *, completion_lines=()):
     for match in re.finditer(r".+?(?:[.!?](?:\s+|$)|$)", text, re.DOTALL):
         sentence = match.group()
         normalized = _normalized(sentence)
-        if normalized in allowed or not (
-            _RESTRICTED.search(normalized) or _COMPLETION.search(normalized)
-        ):
+        if normalized in allowed or not _restricted_claim(normalized):
             kept.append(sentence)
     return "".join(kept)
 

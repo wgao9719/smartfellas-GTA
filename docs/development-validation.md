@@ -1,5 +1,68 @@
 # Development validation
 
+## Ambient dialogue scope on Windows
+
+2026-10-11 follow-up to `4fefcd5`, in the same `dialogue-grounding` worktree on
+`win/fix-dialogue-grounding`, using its existing `.venv`, Python 3.12.14 and
+uv 0.12.17. The first gate matched arbitrary past-tense verbs, money words and
+canonical names, dropping harmless background flavor. This conflicted with
+`SPECS.md` sections 0.2, 3 and 14.4 and the agent-design ambient-personality rule.
+
+Before production edits, this command reproduced all 12 reported false positives:
+
+```powershell
+& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen pytest -W error tests/test_grounding.py -k reported_ambient_false_positives -q --tb=short
+```
+
+Result: **12 failed, 36 deselected**. The initial corpus rate test also failed:
+98/196 false positives (50.00%) and 21/120 false negatives (17.50%). Twenty
+independent minimal pairs then expanded the corpus to 216 ordinary and 140
+adversarial lines. Evaluating the original `4fefcd5` function from `git show`
+against that expanded corpus measured 114/216 false positives (52.78%) and 25/140
+false negatives (17.86%). No old source was restored or modified for that comparison.
+
+Additional review regressions reproduced four nearby false positives (money
+worries, a payment plan, and figurative point/spot wording) and two false negatives
+(a free car repair and payment for a job): 6 failed, 65 passed before their fixes.
+Those cases now pass alongside the corpus, mixed-clause boundaries, and an
+intention following a social-media mention.
+
+The [narrowed gate](dialogue-grounding.md#measured-vocabulary-scope) measures
+**0/216 false positives (0.00%) and 0/140 false negatives (0.00%)**. Every ordinary
+line must pass unchanged and every adversarial line must be removed; the aggregate
+regression separately enforces the requested ≤2% false-positive / 0% false-negative
+thresholds. These rates describe a checked-in regression corpus, not a general
+semantic guarantee.
+
+Five existing fixture occurrences were corrected to express prohibited claims:
+
+- `test_bridge.py::test_ungrounded_sentence_never_reaches_delivery_or_memory`:
+  “That haircut costs twenty dollars” became “Your haircut costs twenty dollars”;
+  “I already moved the car to the docks” became “I've reached the requested spot.”
+- `test_bridge.py::test_grounding_completion_needs_corresponding_completed_ack`:
+  the same generic moved-car line became the requested-spot completion.
+- `test_runtime_social.py::test_social_grounding_removes_only_unbacked_claim_sentences`:
+  “The haircut costs fifty dollars” became “Your haircut costs fifty dollars.”
+- `test_grounding.py::test_grounding_refuses_claim_paraphrases`:
+  “That haircut is twenty” became “Your haircut is twenty.”
+
+All original bare haircut prices and the unrequested car-movement line now appear
+in the ordinary corpus. No receipt, dispatch, actor-safety or fallback assertion
+was weakened. Plain-text streaming, sentence delivery, receipt-backed completion,
+and dispatch reauthorization remain in place. No adapter changes or GTA checks.
+
+Final checks against the follow-up source changes:
+
+| Command | Observed result |
+|---|---|
+| `& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen pytest -W error tests/test_grounding_corpus.py tests/test_grounding.py -q -s --tb=short` | 428 passed; printed false positives 0/216 (0.00%), false negatives 0/140 (0.00%). |
+| `& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen ruff check service tests tools` | All checks passed. |
+| `& 'C:\Users\Brian\.lls-tools\uv\uv.exe' run --frozen pytest -W error` | 1,850 passed, 1 skipped, 0 failed in 186.77 seconds. The skip is the opt-in real whisper.cpp binary test. |
+
+The full suite used `LLS_DOTNET` pointing to the documented local .NET 10 SDK
+and `RestoreSources=https://api.nuget.org/v3/index.json`. No native capability,
+real model, audio hardware, or GTA behavior was verified by this follow-up.
+
 ## Dialogue grounding on Windows
 
 2026-10-11, TOWER-PENGU, Windows PowerShell 5.1, Python 3.12.14, uv 0.12.17.

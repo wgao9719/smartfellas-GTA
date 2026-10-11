@@ -196,7 +196,7 @@ async def test_social_markup_turn_delivers_the_quote_shown_as_subtitle(social_sc
     "Your next objective is to steal the car.",
     "Michael is secretly working for the FIB.",
     "I repaired your car.",
-    "The haircut costs fifty dollars.",
+    "Your haircut costs fifty dollars.",
     "You earned a cash reward and a permanent shop discount.",
     "I unlocked the shop for you.",
     "Trevor is now your trusted ally.",

@@ -855,13 +855,13 @@ class MarkupProvider(FakeProvider):
     "Michael secretly betrayed Trevor.",
     "The truth is that Brad is dead.",
     "Your reward is 500 dollars and the shop now gives you a permanent discount.",
-    "That haircut costs twenty dollars.",
+    "Your haircut costs twenty dollars.",
     "The repair is free for you.",
     "I have repaired your car.",
     "You have unlocked the garage.",
     "Lester is now your loyal ally.",
     "Amanda has left Michael for good.",
-    "I already moved the car to the docks.",
+    "I've reached the requested spot.",
     "I've turned to face you.",
     "Done, I finished the task.",
 ])
@@ -962,7 +962,7 @@ async def test_grounding_completion_needs_corresponding_completed_ack(client, st
         assert response.status_code == 200, response.text
     before = set(session.commands)
     claim = "I've turned to face you."
-    runtime.provider = MarkupProvider(claim + " I already moved the car to the docks.")
+    runtime.provider = MarkupProvider(claim + " I've reached the requested spot.")
     response, _ = await utterance(client, sid, "What happened?", seq=4)
     assert response.status_code == 200, response.text
     await session.task

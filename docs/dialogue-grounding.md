@@ -16,12 +16,21 @@ with refreshed eligibility, and sees only the text retained for delivery. No mod
 validation was added.
 
 `grounding.py` applies deterministic English sentence rules after display
-sanitization and before subtitles or TTS. The restricted vocabulary covers mission
-and objective assignments, payments/rewards/discounts/prices, unlocks, canonical
-relationship changes, plot revelations, service outcomes, and physical completion
-claims. Player input, memories, quoted speech, and proposed or started actions
-cannot authorize those claims. Unsafe sentences are removed independently; safe
-sentences retain their wording. If none remain, the line is:
+sanitization and before subtitles or TTS. Category words alone do not make a
+sentence unsafe. Mission/job/objective assignments and economic offers must be
+directed at the player; unlocks and service outcomes must concern player access or
+service delivery. Story rules require a canonical character's relationship-change
+or revelation predicate, not a name mentioned in passing. Completion rules cover
+registry actions toward the player, here, or at a requested spot in this interaction.
+Personal history, everyday activities, opinions about prices, and neutral greetings
+to protagonists pass. Clause-local history, intentions, and denials do not authorize
+an unsafe assertion in another clause.
+
+These boundaries preserve the ambient background flavor in
+`SPECS_agentdesign.md` and the freeform dialogue, personality and believability
+goals in `SPECS.md` sections 0.2, 3, and 14.4. Player text, quotations, and proposed
+or started actions cannot authorize player/story changes. Unsafe sentences are
+removed independently; safe sentences retain their wording. If none remain:
 
 > I'm not sure what to say right now.
 
@@ -33,20 +42,37 @@ filtered words; a changed retelling loses exact-quote metadata, and a wholly
 replaced fallback has no retained source carrier.
 
 Only a correlated completed adapter receipt can permit one fixed completion line
-for that action, such as “I've turned to face you.” It must match the current
+for an action in this interaction, such as “I've turned to face you.” It must match the current
 session, generation, actor incarnation, protagonist, and timeline branch.
 Service cancellations/expiry, started receipts, failed actions, unrelated actors,
 and narrative memories confer no permission. Completion of one action never
 authorizes an unrelated success or an appended reward. Evicted command evidence
 is conservatively unavailable for completion speech.
 
-These are conservative vocabulary rules, not a general semantic verifier.
-Unsupported paraphrases or other languages can escape vocabulary matching, and
-some harmless sentences mentioning restricted domains can be refused. The tests
-establish the listed cases; they do not establish arbitrary-model factuality or
-complete language coverage. Ordinary small talk and action intentions are covered
-by negative regressions, including “I work at the docks”, “Nice weather today”,
-“I already ate”, “I finished breakfast”, and “I'll follow you.”
+## Measured vocabulary scope
+
+The checked-in `tests/fixtures/grounding_corpus.json` contains 216 ordinary lines
+and 140 adversarial lines. It includes the 12 reported false positives, personal
+history, progressive everyday activities, price opinions, neutral named-character
+mentions, directed offers/assignments, canonical revelations, and unacknowledged
+registry actions. Independent minimal pairs exercise historical versus current
+actions, social-media versus physical following, greetings versus revelations,
+and refusals versus offers.
+
+| Gate version on this same corpus | False positives | False negatives |
+|---|---|---|
+| Original `4fefcd5` | 114/216 (52.78%) | 25/140 (17.86%) |
+| Narrowed predicates | 0/216 (0.00%) | 0/140 (0.00%) |
+
+Run `uv run --frozen pytest -W error tests/test_grounding_corpus.py -q -s` to
+print rates. The aggregate test requires no false negatives and at most 2% false
+positives; individual tests additionally require every ordinary line unchanged
+and every adversarial line removed. Receipt-backed completion tests remain separate.
+
+This is a bounded English vocabulary gate, not a general semantic verifier or a
+held-out model benchmark. These measured rates describe this checked-in corpus;
+other paraphrases, ambiguous wording, and languages can still produce errors.
+The tests do not establish arbitrary-model factuality or native game truth.
 
 ## Action dispatch boundary
 

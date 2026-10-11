@@ -5,6 +5,58 @@ import pytest
 from service.lls.grounding import acknowledged_completion_lines, grounded_text
 
 
+@pytest.mark.parametrize("line", [
+    "I moved here from Chicago last year.",
+    "I'm waiting for the bus.",
+    "Gas costs way too much these days.",
+    "Hey Franklin, good to see a friend around here.",
+    "I stopped by the store this morning.",
+    "They closed the beach because of the storm.",
+    "I saved up for months to buy my car.",
+    "My car is finally ready for the weekend.",
+    "I fixed my bike yesterday.",
+    "I opened a little coffee shop downtown.",
+    "That movie was a waste of twenty bucks.",
+    "I followed the game last night, it was close.",
+])
+def test_grounding_preserves_reported_ambient_false_positives(line):
+    assert grounded_text(line) == line
+
+
+@pytest.mark.parametrize("line", [
+    "I can't offer you a discount, but your haircut is free.",
+    "I fixed my bike yesterday and I'm following you now.",
+    "I'll follow you, but I've already started waiting here.",
+    "Michael, my sister likes coffee and Trevor killed Brad.",
+    "Lester has jobs for you.",
+    "You get discounts at the shop now.",
+    "Your reward is five hundred even though I can't follow you.",
+    "I could wait here now that I've turned to face you.",
+    "I'm following you after yesterday's trouble.",
+    "I haven't waited here since I've turned to face you.",
+    "I'll fix your car for free.",
+    "I'll give you 500 for the job.",
+])
+def test_grounding_scopes_assertions_within_mixed_clauses(line):
+    assert grounded_text(line) == ""
+
+
+@pytest.mark.parametrize("line", [
+    "Your job sounds tiring.",
+    "I don't know your mission, sorry.",
+    "Michael said my sister is now your ally.",
+    "I love my job, how is the weather for you?",
+    "I left my job, and I hope things go well for you.",
+    "Your money worries sound rough.",
+    "Your payment plan sounds expensive.",
+    "I'm at the point where I need another coffee.",
+    "I'm at that spot in life where everything feels possible.",
+    "I'll give you five minutes to think about it.",
+])
+def test_grounding_keeps_unrelated_subjects_and_clauses_separate(line):
+    assert grounded_text(line) == line
+
+
 @pytest.mark.parametrize("claim", [
     "I am now following you.",
     "I did it.",
@@ -14,7 +66,7 @@ from service.lls.grounding import acknowledged_completion_lines, grounded_text
     "Michael is the informant.",
     "Trevor and Michael have reconciled.",
     "You can buy this car for 500.",
-    "That haircut is twenty.",
+    "Your haircut is twenty.",
     "Your garage is now available.",
     "Lester needs you to rob the bank.",
     "Smith, turned to face you.",
@@ -29,6 +81,7 @@ def test_grounding_refuses_claim_paraphrases(claim):
     "It started raining.",
     "I'll follow you.",
     "I can try turning toward you.",
+    "I'm following you online so I can try turning toward you.",
     "Nice weather today. I work at the docks. I already ate.",
 ])
 def test_grounding_preserves_small_talk_and_intentions(line):
