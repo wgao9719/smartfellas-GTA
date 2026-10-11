@@ -30,6 +30,7 @@ namespace LivingNPC.GameAdapter
             public bool ObservedActive;
         }
         private const string Decorator = "lls_runtime_binding_v1";
+        private readonly AdapterLog log;
         private readonly int thread = Thread.CurrentThread.ManagedThreadId;
         private readonly Dictionary<string, Binding> bindings = new Dictionary<string, Binding>();
         private readonly Dictionary<string, TaskRecord> tasks = new Dictionary<string, TaskRecord>();
@@ -42,8 +43,9 @@ namespace LivingNPC.GameAdapter
         public bool Recording { get; private set; }
         public bool SubtitleRendered { get; private set; }
         public void Forget(Command command) { OnScriptThread(); tasks.Remove(command.Id); }
-        public GtaGameAdapter()
+        public GtaGameAdapter(AdapterLog log)
         {
+            this.log = log;
             if (!Function.Call<bool>(Hash.DECOR_IS_REGISTERED_AS_TYPE, Decorator, 3)) Function.Call(Hash.DECOR_REGISTER, Decorator, 3);
         }
         private void OnScriptThread() { if (Thread.CurrentThread.ManagedThreadId != thread) throw new InvalidOperationException("Game API outside script thread"); }
@@ -237,7 +239,7 @@ namespace LivingNPC.GameAdapter
         public void Release(Command command, ActorState actor, string actionId)
         {
             OnScriptThread();
-            try
+            TaskReleaseGuard.Run(() =>
             {
                 if (!tasks.TryGetValue(command.Id, out var task) || !bindings.TryGetValue(actor.ActorId, out var binding) || command.ActorId != actor.ActorId ||
                     binding.Instance != actor.RuntimeInstanceId || binding.Instance != command.RuntimeInstanceId ||
@@ -248,9 +250,7 @@ namespace LivingNPC.GameAdapter
                 if (classified.Policy == ControlPolicy.Protected || (classified.Ownership != Ownership.Ambient && classified.Ownership != Ownership.ModOwned)) return;
                 var statusNow = Function.Call<int>(Hash.GET_SCRIPT_TASK_STATUS, binding.Ped.Handle, task.Hash);
                 if (statusNow == 0 || statusNow == 1) binding.Ped.Task.ClearAll();
-            }
-            catch (Exception) { }
-            finally { tasks.Remove(command.Id); }
+            }, () => tasks.Remove(command.Id), log);
         }
         public void Reset() { OnScriptThread(); foreach (var binding in bindings.Values) ReleasePersistence(binding); bindings.Clear(); dropped.Clear(); tasks.Clear(); SelectedActorId = null; Recording = false; ClearSubtitle(); }
         // Dialogue renders verbatim. Unsafe text never renders, so it never earns a subtitle receipt.

@@ -18,9 +18,10 @@ public sealed class FakeGame : IGameAdapter
     public string Status = "";
     public EffectObservation Observation = new() { Status = EffectStatus.Running };
     public Action? OnObserve;
+    public bool AcceptStart = true;
     public WorldState ReadWorld() => World;
     public ActorState? Resolve(string actorId) => actorId == Actor.ActorId ? Actor : null;
-    public bool Start(Command command, ActorState actor, string actionId, JObject arguments) { Starts++; return true; }
+    public bool Start(Command command, ActorState actor, string actionId, JObject arguments) { Starts++; return AcceptStart; }
     public EffectObservation Observe(Command command, ActorState actor, string actionId) { OnObserve?.Invoke(); return Observation; }
     public void Release(Command command, ActorState actor, string actionId) => Releases++;
     public void ShowSubtitle(string speaker, string text) { Subtitles++; LastSpeaker = speaker; LastSubtitle = text; }
@@ -123,8 +124,8 @@ public class ControllerTests
     [Theory]
     [InlineData("protected", false)][InlineData("protected", true)]
     [InlineData("generation", false)][InlineData("generation", true)]
-    [InlineData("far", false)][InlineData("far", true)]
     [InlineData("script_owned", false)][InlineData("script_owned", true)]
+    [InlineData("unknown_owner", false)][InlineData("unknown_owner", true)]
     [InlineData("unsafe_world", false)][InlineData("unsafe_world", true)]
     [InlineData("missing", false)][InlineData("missing", true)]
     [InlineData("dead", false)][InlineData("dead", true)]
@@ -132,7 +133,6 @@ public class ControllerTests
     [InlineData("rebound", false)][InlineData("rebound", true)]
     [InlineData("busy", false)][InlineData("busy", true)]
     [InlineData("combat", false)][InlineData("combat", true)]
-    [InlineData("nan_distance", false)][InlineData("nan_distance", true)]
     public void CancelDoesNotClearTaskAfterActorOrWorldChanges(string unsafeState, bool sceneCommand)
     {
         var game = new FakeGame(); var controller = Controller(game); controller.Commands.TryAdd(Action()); controller.Tick(Now);
@@ -143,8 +143,8 @@ public class ControllerTests
             {
                 case "protected": game.Actor.Policy = ControlPolicy.Protected; break;
                 case "generation": game.Actor.Generation++; break;
-                case "far": game.Actor.Distance = 15.1f; break;
                 case "script_owned": game.Actor.Ownership = Ownership.GameScriptOwned; break;
+                case "unknown_owner": game.Actor.Ownership = Ownership.Unknown; break;
                 case "unsafe_world": game.World.MissionActive = true; break;
                 case "missing": game.Actor.Exists = false; break;
                 case "dead": game.Actor.Alive = false; break;
@@ -152,7 +152,6 @@ public class ControllerTests
                 case "rebound": game.Actor.RuntimeInstanceId = "instance-2"; break;
                 case "busy": game.Actor.Busy = true; break;
                 case "combat": game.Actor.InCombat = true; break;
-                case "nan_distance": game.Actor.Distance = float.NaN; break;
             }
         }
         // Change after Tick's active-action check so scene.cancel exercises Cancel itself.
@@ -188,6 +187,143 @@ public class ControllerTests
         if (!sceneCommand) { controller.Cancel(); return; }
         var cancel = Action("cancel"); cancel.Kind = "scene.cancel"; cancel.Seq = 2;
         controller.Commands.TryAdd(cancel); controller.Tick(Now.AddSeconds(1));
+    }
+    [Theory]
+    [InlineData("tick", Ownership.Ambient)][InlineData("direct", Ownership.Ambient)][InlineData("scene", Ownership.Ambient)]
+    [InlineData("tick", Ownership.ModOwned)][InlineData("direct", Ownership.ModOwned)][InlineData("scene", Ownership.ModOwned)]
+    public void DistanceLossReleasesOwnedTask(string cancellation, Ownership ownership)
+    {
+        var game = new FakeGame(); game.Actor.Ownership = ownership;
+        var controller = Controller(game); controller.Commands.TryAdd(Action()); controller.Tick(Now); Drain(controller);
+        if (cancellation == "scene") game.OnObserve = () => game.Actor.Distance = 20;
+        else game.Actor.Distance = 20;
+        if (cancellation == "tick") controller.Tick(Now.AddSeconds(1));
+        else CancelActiveAction(controller, cancellation == "scene");
+        var acks = Drain(controller);
+        Assert.Contains(acks, a => a.CommandId == "cmd1" && a.Status == "canceled"); Assert.Equal(1, game.Releases);
+        controller.Tick(Now.AddSeconds(2)); controller.Cancel(); Assert.Empty(Drain(controller)); Assert.Equal(1, game.Releases);
+    }
+    [Theory]
+    [InlineData("protected")][InlineData("generation")][InlineData("instance")][InlineData("script_owned")]
+    [InlineData("unknown_owner")][InlineData("unsafe_world")][InlineData("busy")][InlineData("combat")]
+    public void DistanceLossNeverClearsTakenOverTask(string takeover)
+    {
+        var game = new FakeGame(); var controller = Controller(game); controller.Commands.TryAdd(Action()); controller.Tick(Now); Drain(controller);
+        game.Actor.Distance = 20;
+        switch (takeover)
+        {
+            case "protected": game.Actor.Policy = ControlPolicy.Protected; break;
+            case "generation": game.Actor.Generation++; break;
+            case "instance": game.Actor.RuntimeInstanceId = "new-instance"; break;
+            case "script_owned": game.Actor.Ownership = Ownership.GameScriptOwned; break;
+            case "unknown_owner": game.Actor.Ownership = Ownership.Unknown; break;
+            case "unsafe_world": game.World.MissionActive = true; break;
+            case "busy": game.Actor.Busy = true; break;
+            case "combat": game.Actor.InCombat = true; break;
+        }
+        controller.Tick(Now.AddSeconds(1)); Assert.Equal("canceled", Assert.Single(Drain(controller)).Status); Assert.Equal(0, game.Releases);
+    }
+    [Theory][InlineData(false)][InlineData(true)]
+    public void AckBackpressureDoesNotDelaySafetyCancellation(bool takeover)
+    {
+        var game = new FakeGame(); var controller = Controller(game); controller.Commands.TryAdd(Action()); controller.Tick(Now); Drain(controller);
+        for (var n = 0; n < controller.Acks.Capacity; n++) Assert.True(controller.Acks.TryAdd(new Ack()));
+        game.Actor.Distance = 20; if (takeover) game.Actor.Ownership = Ownership.GameScriptOwned;
+        controller.Tick(Now.AddSeconds(1)); Assert.Equal(takeover ? 0 : 1, game.Releases); Assert.True(controller.FailedClosed);
+        Drain(controller); controller.Tick(Now.AddSeconds(2));
+        var ack = Assert.Single(Drain(controller)); Assert.Equal("cmd1", ack.CommandId); Assert.Equal("canceled", ack.Status);
+        controller.Cancel(); Assert.Empty(Drain(controller)); Assert.Equal(takeover ? 0 : 1, game.Releases);
+    }
+    [Fact] public void NativeFailuresLatchAndCancelPendingActions()
+    {
+        var game = new FakeGame { AcceptStart = false }; var controller = Controller(game);
+        for (var n = 0; n < 4; n++) controller.Commands.TryAdd(Action("refused-" + n));
+        controller.Tick(Now); var acks = Drain(controller);
+        Assert.Equal(3, game.Starts); Assert.True(controller.FailedClosed); Assert.Equal("error", game.Status);
+        Assert.Equal(4, acks.Count);
+        Assert.Equal(3, acks.FindAll(a => a.Reason == "native_task_refused").Count);
+        Assert.Contains(acks, a => a.CommandId == "refused-3" && a.Status == "canceled" && a.Reason == "safety_stop");
+        game.AcceptStart = true; controller.Commands.TryAdd(Action("later")); controller.Tick(Now.AddSeconds(1));
+        Assert.Equal("safety_stop", Assert.Single(Drain(controller)).Reason); Assert.Equal(3, game.Starts);
+        controller.Cancel(); Assert.True(controller.FailedClosed);
+        var reset = Controller(game); reset.Commands.TryAdd(Action("reset")); reset.Tick(Now.AddSeconds(2));
+        Assert.Equal("started", Assert.Single(Drain(reset)).Status); Assert.Equal(4, game.Starts);
+    }
+    [Fact] public void ObservedFailuresLatchWithoutDispatchResettingTheCount()
+    {
+        var game = new FakeGame { Observation = new EffectObservation { Status = EffectStatus.Failed, Reason = "movement_sample_unavailable" } };
+        var controller = Controller(game);
+        for (var n = 0; n < 3; n++)
+        {
+            controller.Commands.TryAdd(Action("failed-" + n)); controller.Tick(Now.AddSeconds(n * 2));
+            Assert.Equal("started", Assert.Single(Drain(controller)).Status);
+            controller.Tick(Now.AddSeconds(n * 2 + 1)); Assert.Equal("failed", Assert.Single(Drain(controller)).Status);
+            Assert.Equal(n == 2, controller.FailedClosed);
+        }
+        Assert.Equal(3, game.Releases); Assert.Equal("error", game.Status);
+        controller.Commands.TryAdd(Action("later")); controller.Tick(Now.AddSeconds(6));
+        Assert.Equal("safety_stop", Assert.Single(Drain(controller)).Reason); Assert.Equal(3, game.Starts);
+    }
+    [Fact] public void ObservedCompletionResetsFailureCountAndReplaysDoNotIncrementIt()
+    {
+        var game = new FakeGame { AcceptStart = false }; var controller = Controller(game);
+        controller.Commands.TryAdd(Action("first")); controller.Commands.TryAdd(Action("second")); controller.Tick(Now); Drain(controller);
+        controller.Commands.TryAdd(Action("second")); controller.Tick(Now); Assert.Equal("native_task_refused", Assert.Single(Drain(controller)).Reason);
+        Assert.False(controller.FailedClosed); Assert.Equal(2, game.Starts);
+        game.AcceptStart = true; controller.Commands.TryAdd(Action("success")); controller.Tick(Now); Drain(controller);
+        game.Observation = new EffectObservation { Status = EffectStatus.Completed }; controller.Tick(Now.AddSeconds(1)); Drain(controller);
+        game.AcceptStart = false;
+        controller.Commands.TryAdd(Action("third")); controller.Commands.TryAdd(Action("fourth")); controller.Tick(Now.AddSeconds(2)); Drain(controller);
+        Assert.False(controller.FailedClosed); Assert.Equal(5, game.Starts);
+        controller.Commands.TryAdd(Action("fifth")); controller.Tick(Now.AddSeconds(3)); Drain(controller); Assert.True(controller.FailedClosed);
+        controller.Commands.TryAdd(Action("second")); controller.Tick(Now.AddSeconds(4));
+        Assert.Equal("native_task_refused", Assert.Single(Drain(controller)).Reason); Assert.Equal(6, game.Starts);
+    }
+    [Theory][InlineData(false)][InlineData(true)]
+    public void SchemaMismatchCancelsAllPendingActions(bool takeover)
+    {
+        var game = new FakeGame(); var controller = Controller(game); controller.Commands.TryAdd(Action()); controller.Tick(Now); Drain(controller);
+        // Change ownership after the active scan to exercise the latch's own cleanup.
+        if (takeover) game.OnObserve = () => game.Actor.Ownership = Ownership.GameScriptOwned;
+        var mismatch = Action("schema"); mismatch.SchemaVersion = 2;
+        controller.Commands.TryAdd(mismatch); controller.Commands.TryAdd(Action("pending")); controller.Tick(Now.AddSeconds(1));
+        var acks = Drain(controller);
+        Assert.Equal(3, acks.Count); Assert.Contains(acks, a => a.CommandId == "schema" && a.Status == "rejected" && a.Reason == "schema_mismatch");
+        Assert.Contains(acks, a => a.CommandId == "cmd1" && a.Status == "canceled" && a.Reason == "safety_stop");
+        Assert.Contains(acks, a => a.CommandId == "pending" && a.Status == "canceled" && a.Reason == "safety_stop");
+        Assert.True(controller.FailedClosed); Assert.Equal("error", game.Status); Assert.Equal(takeover ? 0 : 1, game.Releases);
+        game.Actor.Ownership = Ownership.Ambient; controller.Commands.TryAdd(Action("later")); controller.Tick(Now.AddSeconds(2));
+        Assert.Equal("safety_stop", Assert.Single(Drain(controller)).Reason); Assert.Equal(1, game.Starts);
+        CancelActiveAction(controller, true); Assert.Equal("completed", Assert.Single(Drain(controller)).Status);
+        var status = Action("ready"); status.Kind = "status"; status.Payload = JObject.FromObject(new { state = "ready", message = "Ready" });
+        controller.Commands.TryAdd(status); controller.Tick(Now.AddSeconds(3)); Assert.Equal("safety_stop", Assert.Single(Drain(controller)).Reason); Assert.Equal("error", game.Status);
+    }
+    [Fact] public void SchemaMismatchStopsSubtitlesAndPreservesOnlyRenderedReceipts()
+    {
+        var game = new FakeGame(); var controller = Controller(game); var pending = Line("Not shown"); pending.Id = "pending-line"; pending.IdempotencyKey = "pending-line"; pending.Payload["chunk_index"] = 1;
+        controller.Commands.TryAdd(Line("Already shown")); controller.Commands.TryAdd(pending); controller.Tick(Now);
+        var mismatch = Action("schema"); mismatch.SchemaVersion = 2; controller.Commands.TryAdd(mismatch); controller.Tick(Now.AddSeconds(1));
+        var acks = Drain(controller); Assert.Equal(3, acks.Count); Assert.Equal(1, game.Subtitles); Assert.Equal("", game.LastSubtitle);
+        Assert.Contains(acks, a => a.CommandId == "line" && a.Status == "canceled" && (string?)a.Observed?["text"] == "Already shown");
+        Assert.Contains(acks, a => a.CommandId == "pending-line" && a.Status == "canceled" && a.Observed == null);
+        controller.Tick(Now.AddSeconds(4)); Assert.Empty(Drain(controller)); Assert.Equal(1, game.Subtitles);
+    }
+    [Fact] public void SchemaMismatchOnReplayStillStopsController()
+    {
+        var game = new FakeGame(); var controller = Controller(game); controller.Commands.TryAdd(Action()); controller.Tick(Now); Drain(controller);
+        var mismatch = Action("schema-replay"); mismatch.IdempotencyKey = "cmd1"; mismatch.SchemaVersion = 2;
+        controller.Commands.TryAdd(mismatch); controller.Commands.TryAdd(Action("pending")); controller.Tick(Now.AddSeconds(1));
+        var acks = Drain(controller); Assert.True(controller.FailedClosed); Assert.Equal(3, acks.Count);
+        Assert.Contains(acks, a => a.CommandId == "schema-replay" && a.Status == "rejected" && a.Reason == "schema_mismatch");
+        Assert.Contains(acks, a => a.CommandId == "cmd1" && a.Status == "canceled");
+        Assert.Contains(acks, a => a.CommandId == "pending" && a.Reason == "safety_stop"); Assert.Equal(1, game.Releases);
+    }
+    [Theory][InlineData(float.NaN)][InlineData(float.PositiveInfinity)][InlineData(-1f)]
+    public void InvalidDistanceStopsAndReleasesOwnedTask(float distance)
+    {
+        var game = new FakeGame(); var controller = Controller(game); controller.Commands.TryAdd(Action()); controller.Tick(Now); Drain(controller);
+        game.Actor.Distance = distance; controller.Tick(Now.AddSeconds(1));
+        Assert.Equal("canceled", Assert.Single(Drain(controller)).Status); Assert.Equal(1, game.Releases);
     }
     [Fact] public void CancelBlocksLateActionButAllowsNewScene()
     {
