@@ -17,8 +17,8 @@ from uuid import uuid4
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
-from .action_registry import ACTION_IDS
-from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
+from .action_registry import ACTION_IDS, action_metadata
+from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy, requested_action
 from .bridge_limits import MAX_BODY_BYTES
 from .context import build_context
 from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
@@ -1363,6 +1363,7 @@ class Runtime(
                     session.world,
                     session.actors[actor_id].get("allowed_actions", []),
                     event.payload["consent"],
+                    requested=requested_action(event.payload["text"]),
                 )
                 if action_eligible
                 else []
@@ -1526,6 +1527,7 @@ class Runtime(
                 action for action in self.policy.eligible(
                     current_actor, session.world, current_actor.get("allowed_actions", []),
                     event.payload["consent"],
+                    requested=requested_action(event.payload["text"]),
                 ) if action in eligible
             ]
             action_context = {
@@ -1545,26 +1547,34 @@ class Runtime(
             if session.closed or session.epoch != epoch:
                 return
             if proposal:
+                consent = (event.payload["consent"]
+                           or requested_action(event.payload["text"]) == proposal.action_id)
                 decision = self.policy.check(
                     proposal,
                     session.actors.get(actor_id),
                     session.world,
                     session.actors.get(actor_id, {}).get("allowed_actions", []),
-                    event.payload["consent"],
+                    consent,
                 )
                 session.trace.append({"turn_id": turn_id, "policy": decision.reason})
                 if decision.allowed:
                     action_key = (actor_id, proposal.action_id)
-                    if self.clock() - session.last_action.get(action_key, -float("inf")) < 3:
+                    cooldown = action_metadata(proposal.action_id)["cooldown_seconds"]
+                    if self.clock() - session.last_action.get(action_key, -float("inf")) < cooldown:
                         return
                     if any(
                         c["kind"] == "action.execute"
                         and c["actor_id"] == actor_id
                         and c["state"] not in TERMINAL
+                        and not (proposal.action_id == "stop_following"
+                                 and c["payload"]["action_id"] == "follow_player"
+                                 and c["state"] == "started")
                         for c in session.commands.values()
                     ):
                         return
                     session.last_action[action_key] = self.clock()
+                    duration = (proposal.arguments.duration_seconds or
+                                (20 if proposal.action_id == "follow_player" else 10))
                     action_command = self.command(
                         session,
                         "action.execute",
@@ -1574,9 +1584,10 @@ class Runtime(
                             "arguments": proposal.arguments.model_dump(exclude_none=True),
                             "policy_version": POLICY_VERSION,
                             "scene_id": scene_id,
-                            "consent": event.payload["consent"],
+                            "consent": consent,
                             "turn_id": turn_id,
                         },
+                        seconds=max(15, duration + 5),
                     )
                     action_command["_skill_origin"] = "external"
                     action_command["_skill_source_event_id"] = event.event_id

@@ -11,11 +11,11 @@ NEUTRAL_FALLBACK = "I'm not sure what to say right now."
 COMPLETION_LINES = {
     "face_player": "I've turned to face you.",
     "wait_here": "I've finished waiting here.",
-    "follow_player": "I've started following you.",
+    "follow_player": "I've finished following you for a short while.",
     "stop_following": "I've stopped following you.",
     "go_to_safe_point": "I've reached the requested spot.",
-    "wander_nearby": "I've started wandering nearby.",
-    "flee_from_threat": "I've started moving away from the threat.",
+    "wander_nearby": "I've finished walking around nearby.",
+    "flee_from_threat": "I've moved farther away from the threat.",
     "play_verified_gesture": "I've made the requested gesture.",
 }
 

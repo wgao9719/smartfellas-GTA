@@ -60,7 +60,11 @@ class DispatchRuntime:
                 return "skill_authorization_expired"
             capabilities = [a for a in capabilities if a in environment.capabilities]
             consent = consent and environment.consent
-        decision = self.policy.check(proposal, actor, session.world, capabilities, consent)
+        # Once replacement started, absence of the old follow is the desired observation.
+        policy_actor = ({**actor, "mod_following": True}
+                        if payload.action_id == "stop_following" and command["state"] == "started"
+                        else actor)
+        decision = self.policy.check(proposal, policy_actor, session.world, capabilities, consent)
         return None if decision.allowed else decision.reason
 
     def reauthorize_commands(self, session):

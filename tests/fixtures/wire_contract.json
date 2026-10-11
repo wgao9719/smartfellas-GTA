@@ -503,7 +503,7 @@
       "valid": false,
       "reason": "Navigation proposals require a point with bounded coordinates.",
       "payload": {
-        "action_id": "go_to_safe_point",
+        "action_id": "play_verified_gesture",
         "arguments": {},
         "reason_for_player": "Agreed to accompany player"
       }

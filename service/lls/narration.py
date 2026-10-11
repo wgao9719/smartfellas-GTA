@@ -45,7 +45,10 @@ _REGISTRY_NAME = re.compile(
 )
 _REGISTRY_DESCRIPTION = re.compile(
     r"\b(?:"
-    + "|".join(re.escape(description.rstrip(".!?")) for description in ACTION_DESCRIPTIONS.values())
+    + "|".join(
+        re.escape(description.rstrip(".!? )"))
+        for description in ACTION_DESCRIPTIONS.values()
+    )
     + r")\b",
     re.IGNORECASE,
 )
@@ -72,7 +75,8 @@ _DIRECTION = re.compile(
     r"stays?\s+(?:put|here|there)\b|"
     r"(?:wanders?|walks?)\b.*\b(?:approved|permitted|small) area\b|"
     r"(?:leaves?|flees?|moves? away|runs? away)\b.*\bthreat\b|"
-    r"(?:plays?|performs?|makes?)\b.*\b(?:verified|approved) gesture\b"
+    r"(?:plays?|performs?|makes?)\b.*\b(?:harmless|verified|approved) gesture\b|"
+    r"\b(?:play|perform|make)\b.*\bgesture\b"
     r")",
     re.IGNORECASE,
 )

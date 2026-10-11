@@ -130,7 +130,7 @@ Nothing here needs administrator rights. Tools go into `%USERPROFILE%\.lls-tools
 ## What to build next (from the spec)
 
 The spec is in `references/SPECS.md` and `references/SPECS_agentdesign.md`; the audit reports list every gap. In priority order:
-1. **The other everyday actions:** follow me, stop following, walk to a safe spot, wander nearby, back away from danger, and a few safe gestures (spec §5.5, §11). Today only "turn to face you" and "wait here" exist.
+1. **Rig validation of the other everyday actions:** Debug-only executors now cover follow me, stop following, walk to a safe spot, wander nearby, back away from danger, and the allowlisted gestures (spec ?5.5, ?11). They remain UNVERIFIED and Release builds still advertise no native actions; the QA agent must run the capability-sheet trials.
 2. **Bringing kept and named characters back:** a person you kept with F8, or one of the 12 named pilot characters, should reappear and still be the same person (FR-ID-02/05, §8.3).
 3. **Overhearing:** people standing nearby should remember what they overheard, and only what they could actually hear (FR-PER-01..04, test T10).
 4. **Voices:** speak the replies aloud with a different local voice per character (§10.4, FR-DLG-03), then microphone push-to-talk tested in the game (T05).
