@@ -26,7 +26,10 @@ namespace LivingNPC.GameAdapter
         private EventEnvelope? targetSnapshot;
         private DateTimeOffset pendingPttDeadline;
         private string protagonist = "";
-        private bool wasOnline, offlineShown, pttPhysicalDown;
+        private bool wasOnline, offlineShown;
+        // Held talk keys ignore key repeat. Each key keeps its own physical state.
+        private readonly HashSet<Keys> heldTalkKeys = new HashSet<Keys>();
+        private readonly Keys whisperKey;
         private bool worldSent;
         private readonly BoundedQueue<string> removedActors = new BoundedQueue<string>(128);
         private DateTime lastGameDate;
@@ -72,6 +75,7 @@ namespace LivingNPC.GameAdapter
             targetKey = settings.GetValue("Input", "TargetKey", Keys.F6);
             textKey = settings.GetValue("Input", "TextKey", Keys.F7);
             pttKey = settings.GetValue("Input", "PttKey", Keys.N);
+            whisperKey = settings.GetValue("Input", "WhisperKey", Keys.B);
             cancelKey = settings.GetValue("Input", "CancelKey", Keys.Back);
             Tick += OnTick; KeyDown += OnKeyDown; KeyUp += OnKeyUp; Aborted += OnAborted;
             log.Write("configuration_loaded", "enabled=" + enabled + " capabilities=" + capabilities.Length);
@@ -118,7 +122,7 @@ namespace LivingNPC.GameAdapter
             if (bridge.Online)
             {
                 if (!worldSent) { bridge.Events.TryAdd(Event("world.snapshot", null, new { online = world.Online, mission_active = world.MissionActive, cutscene_active = world.CutsceneActive, random_event_active = world.RandomEventActive, paused = world.Paused, protagonist_id = world.ProtagonistId })); worldSent = true; }
-                if (!wasOnline) { log.Write("bridge_ready", "generation=" + generation); game.ShowStatus("ready", "Living Los Santos: " + targetKey + " target, " + textKey + " text, " + pttKey + " push to talk, " + cancelKey + " cancel."); offlineShown = false; }
+                if (!wasOnline) { log.Write("bridge_ready", "generation=" + generation); game.ShowStatus("ready", "Living Los Santos: " + targetKey + " target, " + textKey + " text (/w whispers), " + pttKey + " push to talk, " + whisperKey + " whisper, " + cancelKey + " cancel."); offlineShown = false; }
                 if (input.PushToTalkHeld && !input.PushToTalkStartQueued)
                 {
                     if (DateTimeOffset.UtcNow >= pendingPttDeadline) { CancelInput(); game.ShowStatus("unavailable", "Living Los Santos: target confirmation timed out. Try again."); }
@@ -152,7 +156,7 @@ namespace LivingNPC.GameAdapter
                 nextSample = DateTimeOffset.UtcNow.AddMilliseconds(500);
             }
             if (typing != null) Game.DisableAllControlsThisFrame();
-            game.Render(typing);
+            game.Render(typing, input.Whisper);
             timer.Stop();
             if (timer.ElapsedMilliseconds > 20) { log.Write("slow_tick", "milliseconds=" + timer.ElapsedMilliseconds); CancelInput(); game.ShowStatus("slow", "Living Los Santos: slow adapter tick. Pending AI stopped."); }
         }
@@ -190,7 +194,7 @@ namespace LivingNPC.GameAdapter
         private bool Control(string kind)
         {
             if (bridge == null || !input.Bound) return false;
-            object payload = kind == "scene.cancel" ? (object)new { scene_id = input.SceneId } : new { scene_id = input.SceneId, runtime_instance_id = input.RuntimeInstanceId };
+            object payload = kind == "scene.cancel" ? (object)new { scene_id = input.SceneId } : input.ControlPayload()!;
             if (bridge.Controls.TryAdd(Event(kind, input.ActorId, payload))) return true;
             bridge.RequiresReconnect = true;
             game.ShowStatus("error", "Living Los Santos: control queue is full. Reconnecting to stop input.");
@@ -206,11 +210,7 @@ namespace LivingNPC.GameAdapter
         private void OnKeyDown(object sender, KeyEventArgs args)
         {
             if (!enabled) return;
-            if (args.KeyCode == pttKey && typing == null)
-            {
-                if (pttPhysicalDown) return;
-                pttPhysicalDown = true;
-            }
+            if ((args.KeyCode == pttKey || args.KeyCode == whisperKey) && typing == null && !heldTalkKeys.Add(args.KeyCode)) return;
             if (args.KeyCode == cancelKey && typing == null || args.KeyCode == Keys.Escape && typing != null)
             {
                 CancelInput(); return;
@@ -219,7 +219,8 @@ namespace LivingNPC.GameAdapter
             {
                 if (args.KeyCode == Keys.Enter)
                 {
-                    if (typing.Length > 0 && bridge != null && input.IsCurrent(game.Resolve(input.ActorId!), game.ReadWorld(), generation) && !bridge.Events.TryAdd(Event("player.utterance_text", input.ActorId, new { text = typing, input_mode = "typed", scene_id = input.SceneId })))
+                    var typed = input.TypedPayload(typing);
+                    if (typed != null && bridge != null && input.IsCurrent(game.Resolve(input.ActorId!), game.ReadWorld(), generation) && !bridge.Events.TryAdd(Event("player.utterance_text", input.ActorId, typed)))
                         game.ShowStatus("error", "Living Los Santos: input queue is full.");
                     typing = null; return;
                 }
@@ -245,10 +246,10 @@ namespace LivingNPC.GameAdapter
                 game.ShowStatus("target", actor == null ? "No eligible nearby resident in the pilot model allowlist." : "Target: " + actor.Name); return;
             }
             if (args.KeyCode == textKey) { CancelInput(); if (LockTarget()) typing = ""; return; }
-            if (args.KeyCode == pttKey && !input.PushToTalkHeld)
+            if ((args.KeyCode == pttKey || args.KeyCode == whisperKey) && !input.PushToTalkHeld)
             {
                 CancelInput();
-                if (LockTarget() && input.StartPushToTalk())
+                if (LockTarget() && input.StartPushToTalk((int)args.KeyCode, args.KeyCode == whisperKey))
                 {
                     pendingPttDeadline = DateTimeOffset.UtcNow.AddSeconds(5);
                     game.ShowStatus("preparing_mic", "Living Los Santos: confirming the target before microphone capture.");
@@ -257,9 +258,9 @@ namespace LivingNPC.GameAdapter
         }
         private void OnKeyUp(object sender, KeyEventArgs args)
         {
-            if (args.KeyCode != pttKey) return;
-            pttPhysicalDown = false;
-            if (!input.StopPushToTalk()) return;
+            if (args.KeyCode != pttKey && args.KeyCode != whisperKey) return;
+            heldTalkKeys.Remove(args.KeyCode);
+            if (!input.StopPushToTalk((int)args.KeyCode)) return;
             if (input.PushToTalkStartQueued)
             {
                 if (!Control("voice.ptt_stopped")) CancelInput();

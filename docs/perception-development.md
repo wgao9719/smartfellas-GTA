@@ -22,11 +22,17 @@ Each accepted witness gets a separate canonical event and private memory. Other 
 
 ## Delivered reports
 
-Reported speech requires a matching delivery receipt from the service's acknowledgment path. The teller identity, current instance, exact words, and quote event identifier must match. The listener must also pass the hearing checks.
+Reported speech requires a matching delivery receipt from the service's acknowledgment path. The teller identity, current instance, exact words, and quote event identifier must match. The listener must also pass the hearing checks. Receipts quote the display-rule text that the subtitle showed, including the `speaker` and `display_rule` fields of `dialogue.delivered`.
 
 The confirmed source is the delivered quote. `reported_event_id` preserves the claimed topic identifier. It does not verify the original incident. Canonical report records explicitly set `reported_lineage_verified=false`.
 
 Receipt freshness uses command creation time. A delayed acknowledgment cannot make old words eligible for a new report. This conservative rule can reject delayed speech. Trusted adapter delivery timestamps remain future work.
+
+## Overheard player speech
+
+A `player.spoke` incident must be audible and must name the scene of an utterance that the service accepted in the current epoch within the last 30 seconds. Its whisper flag must match the accepted utterance. The runtime replaces the incident text with the accepted words, because the adapter cannot know a voice transcript. The addressee is excluded, so it keeps only its conversation memory.
+
+The normal hearing radius applies to ordinary speech, and the whisper radius applies to whispers. A caller therefore cannot claim normal volume for a whisper. Bystanders remember `I overheard the player whisper: ...` or `I overheard the player say: ...` with `heard` provenance.
 
 ## Trigger integration
 

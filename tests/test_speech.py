@@ -1,5 +1,10 @@
 import asyncio
 import json
+import os
+import random
+import shutil
+import struct
+import subprocess
 import sys
 import wave
 
@@ -78,6 +83,167 @@ async def test_whisper_missing_confidence_and_temp_cleanup(tmp_path, monkeypatch
     assert result.text == "Hello neighbor."
     assert result.confidence is None
     assert not output_paths[0].parent.exists()
+
+
+FAKE_WHISPER_CLI = """
+import shutil
+import sys
+
+arguments = sys.argv[1:]
+# Like whisper-cli, write token data only for full JSON output.
+if "-ojf" not in arguments or "-np" not in arguments:
+    sys.exit(2)
+model, output = (arguments[arguments.index(flag) + 1] for flag in ("-m", "-of"))
+shutil.copyfile(model, output + ".json")
+print("[00:00:00.000 --> 00:00:01.000]   fixture")
+"""
+
+
+def fake_whisper_cli(tmp_path):
+    """A real executable for WhisperCpp and run_owned. Its model file holds -ojf JSON."""
+    script = tmp_path / "fake_whisper_cli.py"
+    script.write_text(FAKE_WHISPER_CLI)
+    executable = tmp_path / "whisper-cli"
+    executable.write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{script}" "$@"\n')
+    executable.chmod(0o755)
+    return executable
+
+
+def timed(start, end):
+    def stamp(milliseconds):
+        return f"00:00:{milliseconds // 1000:02},{milliseconds % 1000:03}"
+
+    return {
+        "timestamps": {"from": stamp(start), "to": stamp(end)},
+        "offsets": {"from": start, "to": end},
+    }
+
+
+def segment(text, tokens, end=1000):
+    return {
+        **timed(0, end),
+        "text": text,
+        "tokens": [
+            {"text": piece, **timed(0, end), "id": identifier, "p": p, "t_dtw": -1}
+            for piece, identifier, p in tokens
+        ],
+    }
+
+
+def full_json(*segments):
+    """The whisper-cli -ojf shape observed from whisper.cpp v1.9.5 with ggml-base.en."""
+    layers = {"state": 512, "head": 8, "layer": 6}
+    return {
+        "systeminfo": "WHISPER : COREML = 0 | OPENVINO = 0 | CPU : NEON = 1 | ",
+        "model": {
+            "type": "base", "multilingual": False, "vocab": 51864,
+            "audio": {"ctx": 1500, **layers}, "text": {"ctx": 448, **layers},
+            "mels": 80, "ftype": 1,
+        },
+        "params": {"model": "ggml-base.en.bin", "language": "en", "translate": False},
+        "result": {"language": "en"},
+        "transcription": list(segments),
+    }
+
+
+# Token text, id, and p values copied from real whisper-cli output.
+SPEECH = segment(" Please look at me.", [
+    ("[_BEG_]", 50363, 0.994657), (" Please", 4222, 0.549483), (" look", 804, 0.986557),
+    (" at", 379, 0.99858), (" me", 502, 0.999464), (".", 13, 0.887515),
+    ("[_TT_50]", 50413, 0.0355188),
+])
+BLANK = segment(" [BLANK_AUDIO]", [
+    ("[_BEG_]", 50363, 0.796836), (" [", 685, 0.226629), ("BL", 9148, 0.112603),
+    ("ANK", 15154, 0.992328), ("_", 62, 0.989101), ("AUD", 48877, 0.998976),
+    ("IO", 9399, 0.998612), ("]", 60, 0.998224), ("[_TT_500]", 50863, 0.0348323),
+], end=10000)
+NOISE = segment(" (blender whirring)", [
+    ("[_BEG_]", 50363, 0.834179), (" (", 357, 0.513252), ("bl", 2436, 0.0273796),
+    ("ender", 2194, 0.484162), (" wh", 348, 0.733939), ("ir", 343, 0.909456),
+    ("ring", 1806, 0.99161), (")", 8, 0.981791), ("[_TT_150]", 50513, 0.410055),
+], end=3000)
+SPOKEN_CONFIDENCE = (0.549483 + 0.986557 + 0.99858 + 0.999464 + 0.887515) / 5
+UNSCORED = {key: value for key, value in SPEECH.items() if key != "tokens"}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake whisper-cli is a POSIX shell script")
+@pytest.mark.parametrize(
+    ("segments", "text", "confidence"),
+    [
+        ([SPEECH], "Please look at me.", SPOKEN_CONFIDENCE),
+        ([BLANK, SPEECH, NOISE], "Please look at me.", SPOKEN_CONFIDENCE),
+        ([BLANK], "", None),
+        ([NOISE, BLANK], "", None),
+        ([], "", None),
+        ([UNSCORED], "Please look at me.", None),
+    ],
+)
+async def test_full_json_confidence_and_annotations_through_the_owned_process(
+    tmp_path, segments, text, confidence
+):
+    model = tmp_path / "model.bin"
+    model.write_text(json.dumps(full_json(*segments), indent="\t"))
+    whisper = speech.WhisperCpp(fake_whisper_cli(tmp_path), model)
+    result = await whisper.transcribe(wav(tmp_path / "mic.wav"))
+    assert (result.text, result.provider) == (text, "whisper.cpp")
+    if confidence is None:
+        assert result.confidence is None
+    else:
+        assert result.confidence == pytest.approx(confidence)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake whisper-cli is a POSIX shell script")
+@pytest.mark.parametrize("p", [1.5, -0.1, "NaN"])
+async def test_invalid_token_probability_fails_through_the_owned_process(tmp_path, p):
+    model = tmp_path / "model.bin"
+    document = full_json(SPEECH)
+    document["transcription"][0]["tokens"][1]["p"] = p
+    model.write_text(json.dumps(document))
+    whisper = speech.WhisperCpp(fake_whisper_cli(tmp_path), model)
+    with pytest.raises(speech.SpeechUnavailable, match="invalid transcript"):
+        await whisper.transcribe(wav(tmp_path / "mic.wav"))
+
+
+@pytest.mark.parametrize(
+    ("text", "spoken"),
+    [
+        (" [BLANK_AUDIO]", False), (" [ Silence ]", False), (" (silence)", False),
+        (" [MUSIC]", False), (" [NO SPEECH]", False), (" (blender whirring) [Music]", False),
+        (" ...", False), (" Please look at me.", True), (" [MUSIC] Hello.", True), (" 42", True),
+    ],
+)
+def test_annotation_only_segments_are_not_speech(text, spoken):
+    assert speech.is_speech(text) is spoken
+
+
+@pytest.mark.skipif(
+    not (os.environ.get("LLS_WHISPER_EXECUTABLE") and os.environ.get("LLS_WHISPER_MODEL")),
+    reason="set LLS_WHISPER_EXECUTABLE and LLS_WHISPER_MODEL to check an installed whisper.cpp",
+)
+async def test_installed_whisper_cli_full_json(tmp_path):
+    whisper = speech.WhisperCpp(
+        os.environ["LLS_WHISPER_EXECUTABLE"], os.environ["LLS_WHISPER_MODEL"]
+    )
+    generator = random.Random(3)
+    with wave.open(str(tmp_path / "hiss.wav"), "wb") as target:
+        target.setnchannels(1)
+        target.setsampwidth(2)
+        target.setframerate(16000)
+        target.writeframes(
+            b"".join(struct.pack("<h", int(generator.gauss(0, 30))) for _ in range(64000))
+        )
+    quiet = await whisper.transcribe(tmp_path / "hiss.wav")
+    assert not set(quiet.text) & set("[]()")
+    if shutil.which("say") and shutil.which("afconvert"):
+        voice = str(tmp_path / "voice.aiff")
+        subprocess.run(["say", "-o", voice, "Please look at me."], check=True)
+        subprocess.run(
+            ["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", voice, voice[:-4] + "wav"],
+            check=True,
+        )
+        spoken = await whisper.transcribe(tmp_path / "voice.wav")
+        assert "look at me" in spoken.text.lower()
+        assert spoken.confidence is not None and 0 < spoken.confidence <= 1
 
 
 @pytest.mark.asyncio

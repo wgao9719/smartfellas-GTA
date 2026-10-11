@@ -15,6 +15,8 @@ Living Los Santos is a GTA V Legacy Story Mode project for interactive, persiste
 - The simulated C# adapter exercises the real Python HTTP service. Core tests cover stale identities, cancellation, and action restrictions.
 - Standalone local speech probes support whisper.cpp, Piper, Windows SAPI, and explicit microphone capture.
 - The optional speech coordinator connects push-to-talk, transcription, playback, subtitles, cancellation, and delivery receipts through the game bridge.
+- Subtitles, synthesized speech, delivery receipts, and memories share one display-safe text rule. The adapter rejects unsafe dialogue instead of rewriting it.
+- Whisper mode uses a hold key or a typed `/w ` prefix. Whispers reach only nearby targets, and development perception limits overhearing to the whisper radius.
 - The development perception interface filters witnesses and runs optional authored triggers with actor-private evidence.
 - Development social scenes support recipient-owned invitations, private contexts, bounded turns, and memories from confirmed delivered quotes.
 - An optional development scheduler initiates social scenes and requests turns. It waits for separate delivery and hearing evidence.

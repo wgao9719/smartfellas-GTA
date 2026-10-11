@@ -6,10 +6,12 @@ from pathlib import Path
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from service.lls.__main__ import fixture_event, fixture_session
 from service.lls.app import create_app
-from service.lls.protocol import ActionProposal, Event
+from service.lls.display import is_display_safe
+from service.lls.protocol import ActionProposal, Event, VoiceControl
 from service.lls.providers import FakeProvider
 from service.lls.runtime import now
 from service.lls.settings import Settings
@@ -827,6 +829,134 @@ async def test_delivery_memory_requires_actual_ack(client):
     )
     spoken = [m["text"] for m in memories if m["text"].startswith("I said:")]
     assert spoken == ["I said: " + prefix]
+
+
+class MarkupProvider(FakeProvider):
+    def __init__(self, *parts):
+        self.parts = parts
+
+    async def dialogue(self, context):
+        for part in self.parts:
+            yield part
+
+
+def delivered_event(client, command):
+    row = client.app.state.repository.connection.execute(
+        "SELECT data FROM events WHERE profile_id=? AND event_id=?",
+        ("fake-demo", command["id"] + ":delivered"),
+    ).fetchone()
+    return json.loads(row["data"])["payload"]
+
+
+async def test_markup_reply_delivers_display_text_to_subtitles_memory_and_receipts(client):
+    sid, _ = await open_ready(client, actor_overrides={"name": "~r~Neighbor<C>"})
+    runtime = client.app.state.runtime
+    runtime.provider = MarkupProvider("Meet me at ~r~the docks~s~. <C>Now</C>!")
+    session = runtime.sessions[sid]
+    await utterance(client, sid)
+    await session.task
+    chunks = [c for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+    assert [c["payload"]["text"] for c in chunks] == ["Meet me at the docks. ", "Now!", ""]
+    assert {c["payload"]["speaker"] for c in chunks} == {"Neighbor"}
+    raw = {"session_id": sid, "runtime_generation": 1, "status": "completed"}
+    raw["observed"] = {"delivery": "subtitle", "text": "Meet me at ~r~the docks~s~. "}
+    response = await client.post(f"/v1/bridge/commands/{chunks[0]['id']}/ack", json=raw)
+    assert response.status_code == 422
+    for command in chunks:
+        await delivery_ack(client, session, command)
+    for command in chunks[:2]:
+        payload = delivered_event(client, command)
+        assert payload["text"] == command["payload"]["text"] and is_display_safe(payload["text"])
+        assert payload["speaker"] == "Neighbor" and payload["display_rule"] == 1
+        assert session.delivered_utterances[command["id"] + ":delivered"].text == payload["text"]
+    spoken = client.app.state.repository.retrieve_memories(
+        "fake-demo", session.branch_id, "npc-1", "franklin", session.game_datetime, "docks",
+        session_id=sid,
+    )
+    said = sorted(m["text"] for m in spoken if m["text"].startswith("I said:"))
+    assert said == ["I said: Meet me at the docks.", "I said: Now!"]
+
+
+async def test_markup_only_chunk_is_skipped_without_breaking_the_turn(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    runtime.provider = MarkupProvider("Hello there. ", "<C></C>~s~")
+    session = runtime.sessions[sid]
+    await utterance(client, sid)
+    await session.task
+    chunks = [c["payload"] for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+    assert [(c["text"], c["chunk_index"], c["final"]) for c in chunks] == [
+        ("Hello there. ", 0, False),
+        ("", 1, True),
+    ]
+
+
+async def test_runtime_command_normalizes_presentation_fields_but_not_dialogue(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    status = runtime.command(session, "status", None, {"state": "x", "message": "~r~Alert~s~\nnow"})
+    assert status["payload"]["message"] == "Alert now"
+    payload = {
+        "text": "Plain words.",
+        "speaker": "Nei<b>ghbor</b>",
+        "scene_id": "scene",
+        "turn_id": "turn",
+        "chunk_index": 0,
+        "final": True,
+    }
+    assert runtime.command(session, "dialogue.chunk", "npc-1", payload)["payload"]["speaker"] == (
+        "Neighbor"
+    )
+    with pytest.raises(ValidationError):
+        runtime.command(session, "dialogue.chunk", "npc-1", {**payload, "text": "Hi ~r~there"})
+
+
+@pytest.mark.parametrize("whisper", [True, False])
+async def test_typed_whisper_reaches_event_memory_and_context(client, whisper):
+    sid, _ = await open_ready(client)
+    runtime, repo = client.app.state.runtime, client.app.state.repository
+    provider = ContextProvider()
+    runtime.provider = provider
+    session = runtime.sessions[sid]
+    payload = {"text": "Keep this quiet.", "scene_id": "quiet", "whisper": whisper}
+    event = fixture_event(sid, 3, "player.utterance_text", payload, "npc-1")
+    response = await client.post(
+        "/v1/bridge/events:batch", json={"session_id": sid, "events": [event]}
+    )
+    assert response.status_code == 200, response.text
+    await session.task
+    row = repo.connection.execute(
+        "SELECT data FROM events WHERE profile_id=? AND event_id=?", ("fake-demo", "demo-3")
+    ).fetchone()
+    stored = json.loads(row["data"])["payload"]
+    assert (stored["whisper"], stored["input_mode"]) == (whisper, "typed")
+    assert provider.contexts[0]["input"] == "Keep this quiet."
+    assert provider.contexts[0]["input_volume"] == ("whisper" if whisper else "normal")
+    remembered = repo.retrieve_memories(
+        "fake-demo", session.branch_id, "npc-1", "franklin", session.game_datetime, "quiet",
+        session_id=sid,
+    )
+    verb = "whispered" if whisper else "said"
+    assert [m["text"] for m in remembered if m["text"].startswith("The player")] == [
+        f"The player {verb}: Keep this quiet."
+    ]
+    receipt = session.player_speech["quiet"]
+    assert (receipt["event_id"], receipt["whisper"], receipt["epoch"]) == (
+        "demo-3", whisper, session.epoch
+    )
+
+
+async def test_voice_control_whisper_is_optional_and_strictly_boolean(client):
+    control = {"scene_id": "scene", "runtime_instance_id": "ped-1"}
+    assert VoiceControl.model_validate(control).whisper is False
+    assert VoiceControl.model_validate({**control, "whisper": True}).whisper is True
+    sid, _ = await open_ready(client)
+    for value in ("yes", 1, None):
+        event = fixture_event(sid, 3, "voice.ptt_started", {**control, "whisper": value}, "npc-1")
+        assert (await client.post("/v1/bridge/control", json=event)).status_code == 422
+    event = fixture_event(sid, 3, "voice.ptt_started", control, "npc-1")
+    assert (await client.post("/v1/bridge/control", json=event)).status_code == 200
 
 
 @pytest.mark.asyncio

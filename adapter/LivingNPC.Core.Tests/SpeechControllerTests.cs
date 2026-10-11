@@ -65,6 +65,7 @@ public sealed class SpeechControllerTests
         Assert.Equal("Audio 1", game.LastSubtitle); Assert.Equal(2, game.Subtitles);
         var delivered = Assert.Single(Drain(controller));
         Assert.Equal("completed", delivered.Status); Assert.Equal("subtitle", delivered.Observed!["delivery"]);
+        Assert.Equal("Audio 0", delivered.Observed["text"]); Assert.Equal(DisplayText.Rule, delivered.Observed["display_rule"]);
     }
 
     [Fact] public void ReplacedUnrenderedAudioHasNoDeliveryEvidence()

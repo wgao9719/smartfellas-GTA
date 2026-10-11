@@ -13,6 +13,8 @@ BootstrapToken=
 TargetKey=F6
 TextKey=F7
 PttKey=N
+; Hold to whisper. Verify on the rig that B does not conflict with a game binding.
+WhisperKey=B
 CancelKey=Back
 
 [Compatibility]

@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from math import dist
 from uuid import uuid4
 
+from .display import DISPLAY_MAX_CHARS, display_text
 from .gateway import GatewayProvider
 from .perception import DeliveredUtterance, Incident, PerceptionLimits, Witness, witnesses_for
 from .providers import FakeProvider
@@ -457,7 +458,10 @@ class SocialEngine:
                     retell_event_id,
                     env.game_datetime,
                 )
-            text = await self._model(scene, actor_id, "turn", retelling)
+            # Delivery receipts must quote exactly what the subtitle shows.
+            text = display_text(
+                await self._model(scene, actor_id, "turn", retelling), DISPLAY_MAX_CHARS
+            )
             if not text.strip() or (retelling is not None and text != retelling["text"]):
                 raise SocialError("social reply did not preserve the requested exact quote")
             scene.pending = SocialUtterance(

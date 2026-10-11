@@ -109,12 +109,15 @@ namespace LivingNPC.Core
                 var duration = command.Payload["audio_duration_ms"];
                 if (delivery != "subtitle" && delivery != "audio" || duration != null && duration.Type != JTokenType.Null && (duration.Type != JTokenType.Integer || (double)duration < 1 || (double)duration > 30000)) { Acknowledge(command, "rejected", "invalid_audio_subtitle"); return; }
                 if (text.Length > 4000 || index < 0 || turn.Length == 0) { Acknowledge(command, "rejected", "invalid_subtitle"); return; }
+                // The service owns display normalization. Rewriting here would break delivery receipts.
+                var speaker = (string?)command.Payload["speaker"] ?? actor!.Name;
+                if (!DisplayText.IsSafe(text) || !DisplayText.IsSafe(speaker)) { Acknowledge(command, "rejected", "unsafe_display_text"); return; }
                 if (chunks.TryGetValue(turn, out var last) && index <= last.Index) { Acknowledge(command, "rejected", "duplicate_chunk"); return; }
                 if (chunks.Count >= 4096 && !chunks.ContainsKey(turn)) { Acknowledge(command, "rejected", "turn_history_full"); FailedClosed = true; return; }
                 chunks[turn] = new ChunkState { Index = index, ExpiresAt = last != null && last.ExpiresAt > command.ExpiresAt ? last.ExpiresAt : command.ExpiresAt };
                 if (subtitles.Count >= 64) { Acknowledge(command, "rejected", "subtitle_queue_full"); return; }
                 if (delivery == "audio" && text.Length > 0) ReplacePriorAudio(scene);
-                subtitles.Enqueue(new Subtitle { Command = command, Speaker = (string?)command.Payload["speaker"] ?? actor!.Name, Text = text });
+                subtitles.Enqueue(new Subtitle { Command = command, Speaker = speaker, Text = text });
                 return;
             }
             if (command.Kind != "action.execute") { Acknowledge(command, "rejected", "unknown_command"); return; }
@@ -126,6 +129,7 @@ namespace LivingNPC.Core
             Acknowledge(command, "started", "task_dispatched", new Dictionary<string, object> { ["task_dispatched"] = true });
         }
         private void ForgetAction(Active item) { game.Forget(item.Command); active.Remove(item.Command.ActorId!); }
+        private static Dictionary<string, object> Rendered(Subtitle subtitle) => new Dictionary<string, object> { ["text"] = subtitle.Text, ["delivery"] = "subtitle", ["display_rule"] = DisplayText.Rule };
         private static bool AudioForScene(Subtitle subtitle, string scene) => (string?)subtitle.Command.Payload["delivery_mode"] == "audio" && (string?)subtitle.Command.Payload["scene_id"] == scene;
         private void ReplacePriorAudio(string scene)
         {
@@ -133,7 +137,7 @@ namespace LivingNPC.Core
             {
                 if (!showing.Delivered)
                 {
-                    if (game.SubtitleRendered) Acknowledge(showing.Command, "completed", "subtitle_rendered", new Dictionary<string, object> { ["text"] = showing.Text, ["delivery"] = "subtitle" });
+                    if (game.SubtitleRendered) Acknowledge(showing.Command, "completed", "subtitle_rendered", Rendered(showing));
                     else Acknowledge(showing.Command, "canceled", "audio_subtitle_replaced_before_render");
                 }
                 showing = null; game.ClearSubtitle();
@@ -151,10 +155,10 @@ namespace LivingNPC.Core
             {
                 var actor = game.Resolve(showing.Command.ActorId!);
                 var invalid = safety.Check(showing.Command, SessionId, Generation, PolicyVersion, world, actor, now);
-                if (invalid != null) { if (!showing.Delivered) Acknowledge(showing.Command, "canceled", invalid, game.SubtitleRendered ? new Dictionary<string, object> { ["text"] = showing.Text, ["delivery"] = "subtitle" } : null); showing = null; game.ClearSubtitle(); }
+                if (invalid != null) { if (!showing.Delivered) Acknowledge(showing.Command, "canceled", invalid, game.SubtitleRendered ? Rendered(showing) : null); showing = null; game.ClearSubtitle(); }
                 else if (!showing.Delivered && game.SubtitleRendered)
                 {
-                    Acknowledge(showing.Command, "completed", "subtitle_rendered", new Dictionary<string, object> { ["text"] = showing.Text, ["delivery"] = "subtitle" });
+                    Acknowledge(showing.Command, "completed", "subtitle_rendered", Rendered(showing));
                     showing.Delivered = true;
                 }
                 if (showing != null && showing.Delivered && now >= showing.Until) { showing = null; game.ClearSubtitle(); }
@@ -193,7 +197,7 @@ namespace LivingNPC.Core
             }
             foreach (var item in retained) Commands.TryAdd(item);
             if (showing != null && (string.IsNullOrWhiteSpace(sceneId) || (string?)showing.Command.Payload["scene_id"] == sceneId))
-            { if (!showing.Delivered) Acknowledge(showing.Command, "canceled", "user_cancel", game.SubtitleRendered ? new Dictionary<string, object> { ["text"] = showing.Text, ["delivery"] = "subtitle" } : null); showing = null; }
+            { if (!showing.Delivered) Acknowledge(showing.Command, "canceled", "user_cancel", game.SubtitleRendered ? Rendered(showing) : null); showing = null; }
             var pendingSubtitles = subtitles.ToArray(); subtitles.Clear();
             foreach (var subtitle in pendingSubtitles)
             {

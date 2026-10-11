@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
 from .context import build_context
+from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
 from .memory_index import MemoryIndex
 from .neighborhood_bridge import NeighborhoodBridge
 from .outbound import AIControlOwner
@@ -90,6 +91,7 @@ class Session:
     outcome_pending: OrderedDict = field(default_factory=OrderedDict)
     outcome_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     delivered_utterances: OrderedDict = field(default_factory=OrderedDict)
+    player_speech: OrderedDict = field(default_factory=OrderedDict)
     perception_seen: OrderedDict = field(default_factory=OrderedDict)
     trigger_contexts: OrderedDict = field(default_factory=OrderedDict)
     delivery_turns: OrderedDict = field(default_factory=OrderedDict)
@@ -97,6 +99,7 @@ class Session:
     speech_state: str = "idle"
     speech_cleanup: list = field(default_factory=list)
     speech_playback: dict | None = None
+    speech_whisper: bool = False
     voice_task: asyncio.Task | None = None
     social_task: asyncio.Task | None = None
     social_cleanup: list = field(default_factory=list)
@@ -349,6 +352,9 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     503, "command queue full; acknowledge or cancel pending commands"
                 )
             del session.commands[terminal]
+        presented = {"dialogue.chunk": "speaker", "status": "message"}.get(kind)
+        if presented and isinstance(payload.get(presented), str):
+            payload = {**payload, presented: display_text(payload[presented])}
         session.command_seq += 1
         command = {
             "id": self.id_factory("cmd"),
@@ -660,12 +666,32 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     or source.get("interior_id") != batch.incident.interior_id
                 ):
                     raise HTTPException(409, "perception source does not match its current binding")
+            incident, candidates, overheard = batch.incident, batch.witnesses, None
+            if incident.event_type == "player.spoke":
+                # Only an accepted utterance supplies the words and the volume. Its
+                # addressee already remembers the conversation and never overhears it.
+                spoken = session.player_speech.get(batch.scene_id)
+                if (
+                    incident.modality != "audible"
+                    or spoken is None
+                    or spoken["epoch"] != session.epoch
+                    or not 0 <= (wall_now - spoken["accepted_at"]).total_seconds() <= 30
+                    or spoken["whisper"] != incident.whisper
+                ):
+                    raise HTTPException(409, "player speech requires a current accepted utterance")
+                incident = incident.model_copy(update={"text": spoken["text"]})
+                candidates = [w for w in candidates if w.actor_id != spoken["actor_id"]]
+                overheard = (
+                    "I overheard the player whisper: "
+                    if incident.whisper
+                    else "I overheard the player say: "
+                )
             bindings = {
                 actor: state["runtime_instance_id"] for actor, state in session.actors.items()
             }
             evidence = witnesses_for(
-                batch.incident,
-                batch.witnesses,
+                incident,
+                candidates,
                 wall_now,
                 bindings,
                 limits,
@@ -706,7 +732,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                         "confidence": item.confidence,
                     },
                 )
-                prefix = {
+                prefix = overheard or {
                     "directly_observed": "I observed: ",
                     "heard": "I heard: ",
                     "reported": f"I heard a report from {item.teller_id}: ",
@@ -833,6 +859,9 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     or not self.conversation_policy.check(actor, session.world).allowed
                 ):
                     continue
+                text = display_text(effect.text, DISPLAY_MAX_CHARS)
+                if not text.strip():
+                    continue
                 turn_id = self.id_factory("trigger")
                 # Authored speech is still only a queued command until its delivery acknowledgment.
                 command = self.command(
@@ -840,7 +869,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     "dialogue.chunk",
                     effect.actor_id,
                     {
-                        "text": effect.text[:1000],
+                        "text": text,
                         "speaker": actor["name"],
                         "scene_id": effect.scene_id,
                         "turn_id": turn_id,
@@ -1060,6 +1089,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
         actor = session.actors.get(actor_id)
         if not self.conversation_policy.check(actor, session.world).allowed:
             raise HTTPException(409, "target unavailable in current world state")
+        if payload["whisper"] and self.whisper_too_far(
+            session, actor_id, payload["scene_id"], voice_identity
+        ):
+            return False
         if (
             self.skill_scheduler_active(session)
             or session.skill_task is not None
@@ -1108,11 +1141,24 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
             actor_id,
             event.protagonist_id,
             event.game_datetime.isoformat(),
-            "The player said: " + payload["text"],
+            ("The player whispered: " if payload["whisper"] else "The player said: ")
+            + payload["text"],
             [event.event_id],
             "heard",
             session_id=session.id,
         )
+        # Development perception binds overhearing to this accepted text and volume.
+        session.player_speech[payload["scene_id"]] = {
+            "event_id": event.event_id,
+            "actor_id": actor_id,
+            "text": payload["text"],
+            "whisper": payload["whisper"],
+            "epoch": session.epoch,
+            "accepted_at": self.utc_now(),
+        }
+        session.player_speech.move_to_end(payload["scene_id"])
+        while len(session.player_speech) > 64:
+            session.player_speech.popitem(last=False)
         session.task = asyncio.create_task(
             self.turn(
                 session,
@@ -1121,6 +1167,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                 action_eligible=payload["input_mode"] != "voice" or voice_action_eligible,
             )
         )
+        return True
 
     async def turn(self, session, event, epoch, *, action_eligible=True):
         turn_id = self.id_factory("turn")
@@ -1187,6 +1234,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                 knowledge=knowledge,
                 relationship=relationship,
                 input_text=event.payload["text"],
+                input_volume="whisper" if event.payload["whisper"] else "normal",
                 eligible=eligible,
                 protagonist_id=event.protagonist_id,
                 game_datetime=event.game_datetime.isoformat(),
@@ -1231,6 +1279,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     chunk = chunk[: self.settings.max_reply_chars - len(text)]
                     if not chunk:
                         break
+                    # Subtitles, speech, receipts, and memories all use the displayed text.
+                    chunk = display_text(chunk)
+                    if not chunk.strip():
+                        continue
                     duration = max(3, min(15, len(chunk) / 12))
                     if index >= 20 or delivery_seconds + duration > 100:
                         break
@@ -1435,7 +1487,12 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     "game_datetime": command["_game_datetime"],
                     "protagonist_id": session.request.protagonist_id,
                     "event_type": "dialogue.delivered",
-                    "payload": {"text": actual, "turn_id": command["payload"]["turn_id"]},
+                    "payload": {
+                        "text": actual,
+                        "turn_id": command["payload"]["turn_id"],
+                        "speaker": command["payload"]["speaker"],
+                        "display_rule": DISPLAY_RULE,
+                    },
                     "provenance": "directly_observed",
                     "confidence": 1,
                     "observer_ids": [command["actor_id"]],
@@ -1573,6 +1630,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
         session.action_outcomes.clear()
         session.perception_seen.clear()
         session.delivered_utterances.clear()
+        session.player_speech.clear()
         session.trigger_contexts.clear()
         session.delivery_turns.clear()
         session.changed.set()

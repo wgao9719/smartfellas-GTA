@@ -9,20 +9,33 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import closing
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from service.lls.display import DISPLAY_RULE, is_display_safe  # noqa: E402
+
+
+def stored_payloads(database, event_type):
+    with closing(sqlite3.connect(database)) as connection:
+        rows = connection.execute("SELECT data FROM events").fetchall()
+    events = [json.loads(row[0]) for row in rows]
+    return [event["payload"] for event in events if event["event_type"] == event_type]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--speech", action="store_true", help="Use synthetic audio devices")
+    parser.add_argument("--whisper", action="store_true", help="Whisper the typed or spoken input")
     args = parser.parse_args()
     bundled = ROOT / ".dotnet" / ("dotnet.exe" if os.name == "nt" else "dotnet")
     dotnet = os.environ.get("LLS_DOTNET") or shutil.which("dotnet")
@@ -34,6 +47,7 @@ def main():
         port = reservation.getsockname()[1]
     endpoint = f"http://127.0.0.1:{port}"
     with tempfile.TemporaryDirectory(prefix="lls-contract-") as temporary:
+        database = Path(temporary) / "probe.sqlite3"
         environment = {
             **{
                 name: value
@@ -42,7 +56,7 @@ def main():
             },
             "LLS_HOST": "127.0.0.1",
             "LLS_PORT": str(port),
-            "LLS_DATABASE": str(Path(temporary) / "probe.sqlite3"),
+            "LLS_DATABASE": str(database),
             "LLS_PROVIDER": "fake",
             "LLS_CLOUD_OPT_IN": "0",
             "LLS_BRIDGE_TOKEN": "",
@@ -56,7 +70,7 @@ def main():
                 "--port",
                 str(port),
                 "--database",
-                str(Path(temporary) / "probe.sqlite3"),
+                str(database),
             ]
             if args.speech:
                 server_arguments.append("--speech")
@@ -93,11 +107,38 @@ def main():
                         "--",
                         endpoint,
                         *(["--speech"] if args.speech else []),
+                        *(["--whisper"] if args.whisper else []),
                     ],
                     cwd=ROOT,
                     env=environment,
                     check=True,
                     timeout=90,
+                )
+                # Durable receipts must quote display-safe text with the sanitized speaker.
+                delivered = stored_payloads(database, "dialogue.delivered")
+                assert len(delivered) == 2, delivered
+                for payload in delivered:
+                    assert is_display_safe(payload["text"]) and payload["text"].strip(), payload
+                    assert payload["display_rule"] == DISPLAY_RULE, payload
+                    assert payload["speaker"] == "Probe Neighbor", payload
+                # The adapter parses "/w". The service stores literal text with the locked volume.
+                [spoken] = stored_payloads(database, "player.utterance_text")
+                assert spoken["text"] == "Please look at me.", spoken
+                assert spoken["whisper"] is args.whisper, spoken
+                assert spoken["input_mode"] == ("voice" if args.speech else "typed"), spoken
+                print(
+                    json.dumps(
+                        {
+                            "check": "durable_receipts",
+                            "delivered_events": len(delivered),
+                            "display_rule": DISPLAY_RULE,
+                            "speaker": "Probe Neighbor",
+                            "utterance_events": 1,
+                            "utterance_whisper": spoken["whisper"],
+                            "utterance_input_mode": spoken["input_mode"],
+                        },
+                        sort_keys=True,
+                    )
                 )
             finally:
                 service.terminate()

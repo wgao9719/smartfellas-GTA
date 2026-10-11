@@ -27,7 +27,11 @@ The controller records `started` after task dispatch. It records `completed` onl
 
 Targeting uses an explicit six-model civilian allowlist. Each transient binding gets a random decorator marker and runtime instance ID. A missing marker, changed model, or changed instance invalidates the binding. The marker is not a persistent identity. The allowlist and decorator behavior require rig verification.
 
-The adapter uses Backspace to cancel by default. F6 selects a target. F7 opens a small typed input field. N sends PTT controls. All four keys are configurable. The input field currently supports Latin letters, digits, spaces, and basic punctuation. Escape closes text input. Controller bindings, text composition, font scaling, and full accessibility remain incomplete.
+The adapter uses Backspace to cancel by default. F6 selects a target. F7 opens a small typed input field, where a leading `/w ` whispers and `//` keeps a literal leading slash. N sends PTT controls. Holding B sends whispered PTT controls with the whisper flag locked at key-down. All five keys are configurable. The B default still requires a rig check for game key conflicts. The input field currently supports Latin letters, digits, spaces, and basic punctuation. Escape closes text input. Controller bindings, text composition, font scaling, and full accessibility remain incomplete.
+
+Subtitles follow display rule v1. `service/lls/display.py` and `LivingNPC.Core/DisplayText.cs` implement it, and `tests/fixtures/display_text.json` holds the shared cases. The rule turns `~n~` into a space and removes GTA formatting tokens, tags, and any remaining `~`, `<`, or `>`. It turns control characters and line or paragraph separators into spaces, removes invisible format characters, and collapses whitespace without trimming. The service also applies NFC and removes every Unicode format, private-use, and surrogate code point, so its output always passes the adapter check.
+
+The service applies the rule before speech synthesis, queuing, delivery receipts, and memories. The adapter renders dialogue and speaker labels verbatim. It rejects unsafe dialogue with an `unsafe_display_text` acknowledgment and never rewrites it. Status text and the typed echo use the same rule locally.
 
 ## Shared action contract
 
@@ -61,4 +65,4 @@ Curated spawn/reconciliation, adoption, controller input, persistent identity bi
 
 The adapter cannot detect every save-load boundary from dates alone. It detects loading state, protagonist changes, and a full-date rewind. An explicit profile and optional parent branch selection remain necessary for ambiguous saves.
 
-The subtitle presenter displays one queued chunk at a time. It acknowledges text only after a render pass. Its receipt does not prove that the player read it. Audio timing and interrupted delivery require further integration before the speech gate can pass.
+The subtitle presenter displays one queued chunk at a time. It acknowledges exactly the rendered text, with `display_rule`, only after a render pass. Its receipt does not prove that the player read it. Audio timing and interrupted delivery require further integration before the speech gate can pass.
