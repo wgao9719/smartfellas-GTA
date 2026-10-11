@@ -35,9 +35,9 @@ The cross-language probe confirmed two displayed subtitle chunks, the final mark
 
 The speech probe confirmed actual recording status before stop, transcribing status after microphone stop, two audio chunks, two subtitle receipts, the final marker, and thirteen acknowledgments. Its synthetic providers never opened audio devices. Both probes keep game verification false.
 
-The process-death probe kills only its owned temporary service process after verifying the started acknowledgment in SQLite. The C# controller withdraws its fake action once. Restarting the same database establishes a new session and rejects the stale action. Canonical history retains the started event and its non-completion memory. It contains no completed event for that action. Native task withdrawal remains unverified.
+The process-death probe kills only its owned temporary service process after verifying the started acknowledgment in SQLite. The C# controller withdraws its fake action once. Restarting the same database establishes a new session and rejects the stale action. Canonical history retains the started event, visible in the admin profile export, and contains no completed event for that action. The unpinned ambient actor and its session-only memories, including the non-completion memory, are purged during recovery just as on normal close. The earlier live check incorrectly expected that private memory to survive; see [Crash-check retention correction](#crash-check-retention-correction). Native task withdrawal remains unverified.
 
-Automatic action expiry and cancellation now persist separate service authorization events linked to the conversation turn. These events explicitly leave native completion and withdrawal unconfirmed. Their private memories survive service restart. Fourteen focused tests cover pinned timestamps, bounded retries, partial writes, command eviction, lifecycle cleanup, and erasure. Independent blocked-acknowledgment and administrative mutation probes found no new defect.
+Automatic action expiry and cancellation now persist separate service authorization events linked to the conversation turn. These events explicitly leave native completion and withdrawal unconfirmed. For persistent actors, their private memories survive service restart. Fourteen focused tests cover pinned timestamps, bounded retries, partial writes, command eviction, lifecycle cleanup, and erasure. Independent blocked-acknowledgment and administrative mutation probes found no new defect.
 
 Pending outcomes prevent command eviction until their writes finish. Administrative edits and erasure join these writes before changing data. A persistence failure returns 503 and preserves bounded retry state. A late acknowledgment cannot restore an expired or canceled command. Pending records remain in memory until committed, so abrupt process death can still lose an uncommitted outcome.
 
@@ -405,3 +405,37 @@ audio; all bridge checks use a fake game. GTA, native task release, real microph
 and native pin persistence remain unverified. This change does not add durable
 manifest/proposal audit records, paginate commands, or redesign auxiliary v1
 endpoint bodies. Shared fixture agreement is not exhaustive schema equivalence.
+
+## Crash-check retention correction
+
+On 2026-10-11, `win/fix-session-cleanup` fast-forwarded to `win/validation` at `345457d` before this follow-up. The existing worktree `.venv` and the Windows toolchain settings above were reused. The unmodified `uv run --frozen python tests/live_bridge_crash_check.py` reproduced the reported assertion failure: the private `:started:memory` row was absent after recovery. Extracting that same assertion into a testable helper also produced **2 failed** pytest cases, one after normal close and one after startup recovery.
+
+The old expectation was inconsistent with the actor's retention policy. The crash branch in `adapter/LivingNPC.BridgeProbe/Program.cs` publishes ambient ownership and omits `actor_kind`; `ActorSnapshot` defaults it to `ambient_ephemeral`. Pinning is a separate probe mode. Normal `Repository.end_session` already deletes the ambient actor and cascades its session-scoped memories, including the action's private non-completion memory. Startup recovery correctly applies that same policy.
+
+The spec decision follows [SPECS.md](../references/SPECS.md): **FR-ID-03** and §8.1 limit unpinned ambient memory/identity to one gameplay session; §8.3 requires crash-safe persistence but grants no ambient retention exception; §9.3 allows retention-policy-driven deletion and requires scoped retrieval/provenance. **§11.2** forbids claiming completion without observation, and **§17** requires service-unreachable kill switches to stop pending actions. The durable canonical `action.started` receipt records the incomplete outcome independently of the actor's private memory. It remains available through the existing admin profile export. Old session diagnostics are runtime-only and are not claimed to survive restart.
+
+The corrected check verifies ambient actor/memory scope and the non-completion text **before** the kill, then requires the exact unchanged started receipt, no invented completion, a closed old session, and no old ambient actor/memory/binding or cleanup-pending rows after restart. It also reads the receipt through the real authenticated admin profile-export endpoint. Six pytest regressions cover normal close, startup recovery, retained ambient history, and lost, altered, or invented receipts. README wording now distinguishes the canonical receipt from session-only memory. No service retention logic or adapter code was changed in this follow-up.
+
+Observed follow-up checks on TOWER-PENGU, using process-local `LLS_DOTNET` and `RestoreSources` as above:
+
+| Command | Observed result |
+|---|---|
+| `uv run --frozen ruff check service tests tools` | Passed |
+| `uv run --frozen pytest -W error tests/test_bridge_crash_check.py -q` | Before correction: 2 failed; final: 6 passed in 0.78 seconds |
+| `uv run --frozen python tests/live_bridge_check.py` | Passed: 2 subtitle chunks, 5 acknowledgments, 1 simulated action |
+| `uv run --frozen python tests/live_bridge_check.py --speech` | Passed: 2 audio/text chunks, 13 acknowledgments, confirmed simulated PTT |
+| `uv run --frozen python tests/live_bridge_check.py --pin` | Passed: 1 pin, 8 durable memories, 1 pre-pin memory retained, ambient officer purged |
+| `uv run --frozen python tests/live_bridge_crash_check.py` | Initially failed at the retained-memory assertion; final passed: 1 withdrawal, reconnect, stale-action rejection, unchanged started receipt visible in profile export, ambient history purged, no completion invented |
+| `uv run --frozen python tests/live_action_outcome_check.py` | Passed: 2 service outcomes and 2 persistent-actor private memories after restart; late completion rejected; 0 uninvolved outputs |
+| `uv run --frozen python tests/live_social_check.py` | Passed: 3 participants, 6 delivered turns, 12 reported memories, 3 opinions |
+| `uv run --frozen python tests/live_social_check.py --autonomous` | Passed: 2 participants, 2 automatic turns, 2 reported memories |
+| `uv run --frozen python tests/live_social_adaptation_check.py` | Passed: 2 encounters, 4 service processes; changed topic and scoped erasure, other listener preserved |
+| `uv run --frozen python tests/live_skill_check.py` | Passed: 2 versions, 4 primitives, 8 canonical action memories, retained execution after restart |
+| `uv run --frozen python tests/live_skill_autonomy_check.py` | Passed: 2 external actions, 2 candidates, 4 practice primitives, retained practice after restart |
+| `uv run --frozen python tests/live_neighborhood_check.py` | Passed: 48 actors, 3 game days, 10 advancement calls, 2,361 events, 0 backlog, restart equivalent |
+| `uv run --frozen python tests/live_neighborhood_autonomy_check.py` | Passed: 30 actors, 7 game hours, 3 automatic attempts, 120 confirmed events, 0 backlog, restart preserved |
+| `uv run --frozen python tools/simulated_load.py` | Passed: 36 actors, 200 confirmed turns, 134 ephemeral output memories removed, 66 persistent output memories retained, 0 network attempts, 62.19 seconds |
+| `uv run --frozen pytest -W error` | **1,545 passed, 1 skipped in 186.74 seconds**, exit 0; skip remains opt-in real whisper.cpp |
+| `git diff --check` | Passed |
+
+Every final live-check invocation above exited 0 and completed its owned-process and temporary-directory cleanup. The action-outcome check also had an earlier successful invocation before repeating it with the documented .NET environment. The additional autonomous social mode was run because it is a documented live check. These remain fake-game, synthetic-audio, and local HTTP/ASGI validations; native GTA behavior, real audio hardware, and real model providers remain unverified.
