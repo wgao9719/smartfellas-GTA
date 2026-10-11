@@ -99,6 +99,8 @@ Record the 20-interaction trial ledger, 20-minute soak, FPS comparison, script t
 
 ## Installed paths and diagnostics
 
+SQLite also needs a writable temporary directory, even when its database directory is writable. Check the service process's `TMP` and `TEMP` if `unable to open database file` appears during session cleanup. When both are absent, Windows can select `C:\Windows\`, while Python chooses a different fallback. Set them to an existing writable directory in the launch shell and restart the service. A nonstandard writable location is valid. See the [local Windows diagnosis](development-validation.md#local-windows-sqlite-temporary-directory-failure).
+
 The DLLs remain directly under `scripts/`. The adapter reads only `scripts/LivingNPC/LivingNPC.ini`. Logs use the same `LivingNPC` directory. Deployment installs an INI template and preserves existing settings and logs. The adapter does not create a persistent local state database.
 
 If an earlier setup used `scripts/LivingNPC.ini`, copy its settings into the new INI before reloading. The adapter does not read the old path.

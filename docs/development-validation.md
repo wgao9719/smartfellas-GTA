@@ -234,3 +234,37 @@ The run found five remaining Windows failures:
 - The Windows adapter job reached the live bridge check, and the check itself passed. Removing its temporary folder then failed, because the terminated service's interpreter still held the database. Terminating the virtual-environment launcher ends the real interpreter moments later. The seven live checks that stop a service now retry removal briefly.
 
 These fixes passed on macOS. A Windows run of the following commit must confirm them. No result here establishes GTA behavior.
+
+### Local Windows SQLite temporary-directory failure
+
+On 2026-10-11, TOWER-PENGU reproduced the load-test failure at `7aeabaa` using a separate `.venv` in the `win/fix-load-sqlite` worktree. Toolchain: uv 0.12.17, Python 3.12.14, SQLite 3.53.1, Windows PowerShell 5.1. Environment setup:
+
+```powershell
+$env:PATH = 'C:\Users\Brian\.lls-tools\uv;' + $env:PATH
+uv sync --frozen --group dev --python C:\Users\Brian\AppData\Roaming\uv\python\cpython-3.12.14-windows-x86_64-none\python.exe
+```
+
+Before the fix:
+
+| Command | Repetitions | Observed result |
+|---|---|---|
+| `uv run --frozen python tools/simulated_load.py` | 3 | All passed, each with 200 confirmed turns and zero network attempts. Measured workload times: 62.18, 62.81, 62.90 seconds. |
+| `uv run --frozen pytest -W error tests/test_simulated_load.py -q` | 3 | Each reported 2 passed, 1 failed, in 64.69, 65.30, 65.11 seconds. All failed in `end_session` during the final session-close request, after all 200 turns. |
+
+The failure was deterministic under the test's stripped subprocess environment. It removed `TMP`, `TEMP`, `TMPDIR`, and the user-profile variables. In that child, Python selected `C:\Windows\Temp` for its database directory, but Windows `GetTempPathW` selected `C:\Windows\` for SQLite's temporary files. A native SQLite log callback captured `SQLITE_CANTOPEN` (14), naming `C:\WINDOWS\etilqs_TFlGdb9yESTOtUT` at the cascading actor deletion. The absolute database path, its parent, and its WAL/SHM files still existed. Changing only the child's `TMP`/`TEMP` to a writable worktree directory allowed the same cleanup to succeed immediately on the same connection; all reopen and privacy assertions then passed. A second diagnostic run intercepted SQLite's VFS `xOpen`: the failed open had flags `0x201e`, including `SQLITE_OPEN_SUBJOURNAL`, identifying a statement journal. The identical open returned success after the environment-only change. That process had 339 handles and 34 threads at cleanup. Both diagnostic runs completed all final assertions after the retry.
+
+The ordinary launch environment had `TMP` and `TEMP` pointing to `C:\Users\Brian\AppData\Local\Temp`. Its `TMPDIR` pointed to `C:\Users\Public\Documents\Wondershare\CreatorTemp`, which Python used successfully in all three direct runs. That nonstandard directory was not the cause. `SQLITE_TMPDIR` was unset; SQLite used its default file-backed temporary-store policy (`TEMP_STORE=1`, `PRAGMA temp_store=0`).
+
+This is a harness environment defect. The repository shares one locked SQLite connection across worker threads, and the temporary database directory encloses shutdown and reopen. The failed temporary-file path and successful environment-only retry do not support a database/WAL lock, early directory deletion, or connection exhaustion as the cause. The fix gives the isolated child `TMPDIR`, `TEMP`, and `TMP` pointing to pytest's writable `tmp_path`. Credential isolation, workload size, timeout, SQLite durability, and resource limits remain unchanged. The existing full workload is the regression test. Players launching with a similarly incomplete environment need writable Windows temporary-directory settings; see [Windows diagnostics](windows-runtime.md#installed-paths-and-diagnostics).
+
+After the fix, `uv run --frozen pytest -W error tests/test_simulated_load.py -q` passed three consecutive times: 3 passed per run, in 64.08, 64.10, and 64.21 seconds. `uv run --frozen ruff check service tests tools` also passed.
+
+The full suite then ran with the rig's documented toolchain settings:
+
+```powershell
+$env:LLS_DOTNET = 'C:\Users\Brian\Documents\Github\smartfellas-GTA\.dotnet\dotnet.exe'
+$env:RestoreSources = 'https://api.nuget.org/v3/index.json'
+uv run --frozen pytest -W error
+```
+
+Result: **1,312 passed, 10 skipped, 1 failed in 140.61 seconds** (exit 1). The load test passed. The sole failure was the separately owned `tools/tests/test_deploy_adapter.py::test_windows_deploy_script_rejects_corrupt_upload_and_rolls_back_locked_dll`: `DID NOT RAISE CalledProcessError`, with the script reporting "Deployed adapter" after the corrupt upload. Deployment code was not changed. No CI, GTA, or native performance checks were run for this fix, and the earlier CI runner's temporary-directory permissions were not inspected.
