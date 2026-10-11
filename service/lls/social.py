@@ -308,13 +308,15 @@ class SocialEngine:
             memories=memories,
             memory_index=self.memory_index,
         )
-        # Background recall is not a carrier. Lines placed in this budget-trimmed prompt are.
+        # Any retained recall can be paraphrased, so track its actor-local sources.
         social = context["social"]
+        scene.heard[actor_id] = list(social["heard"])
         topic = social["topic_continuation"]
         carriers = tuple(dict.fromkeys([
             *(item["event_id"] for item in social["heard"]),
             *([topic["event_id"]] if topic else []),
             *([social["retell_source_id"]] if social["retell_source_id"] else []),
+            *(source for memory in context["memories"] for source in memory["source_event_ids"]),
         ]))
 
         async def consume():

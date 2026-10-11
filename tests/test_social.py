@@ -206,6 +206,7 @@ def source_memory(
     memory_time=None,
     protagonist="franklin",
     branch=None,
+    remember=True,
     **memory_fields,
 ):
     event_time = event_time or GAME - timedelta(minutes=30)
@@ -228,6 +229,8 @@ def source_memory(
             },
         },
     )
+    if not remember:
+        return None
     return scene.repo.add_memory(
         "profile",
         branch,
@@ -616,10 +619,13 @@ async def test_retelling_requires_current_private_retained_source(scene, invalid
     elif invalid == "alternate_memory":
         options["event_time"] = GAME - timedelta(minutes=50)
         options["memory_time"] = GAME - timedelta(minutes=30)
-    memory = source_memory(scene, actor=options.pop("actor", "avery"), **options)
+    memory = source_memory(
+        scene, actor=options.pop("actor", "avery"),
+        remember=invalid not in {"alternate_memory", "memory_protagonist"}, **options,
+    )
     if invalid == "alternate_memory":
+        scene.repo.open_timeline("profile", GAME.isoformat())
         alternate = scene.repo.open_timeline("profile", (GAME - timedelta(minutes=40)).isoformat())
-        scene.repo.delete_memory("profile", memory["memory_id"])
         scene.repo.add_memory(
             "profile",
             alternate,
@@ -631,7 +637,6 @@ async def test_retelling_requires_current_private_retained_source(scene, invalid
             "reported",
         )
     elif invalid == "memory_protagonist":
-        scene.repo.delete_memory("profile", memory["memory_id"])
         scene.repo.add_memory(
             "profile",
             scene.branch,

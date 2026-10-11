@@ -41,6 +41,7 @@ class Settings(StrictModel):
     database_path: str = "data/runtime/lls.sqlite3"
     snapshot_interval_seconds: float = Field(default=3600, ge=0, allow_inf_nan=False)
     snapshot_retention_count: int = Field(default=24, ge=1, le=1000)
+    raw_event_retention_days: int = Field(default=7, ge=1, le=365)
     provider: Literal["disabled", "fake", "openai", "local_openai"] = "disabled"
     cloud_opt_in: bool = False
     openai_base_url: str = "https://api.openai.com/v1"
@@ -171,6 +172,7 @@ class Settings(StrictModel):
                 os.environ.get("LLS_SNAPSHOT_INTERVAL_SECONDS", "3600")
             ),
             snapshot_retention_count=int(os.environ.get("LLS_SNAPSHOT_RETENTION_COUNT", "24")),
+            raw_event_retention_days=int(os.environ.get("LLS_RAW_EVENT_RETENTION_DAYS", "7")),
             provider=os.environ.get("LLS_PROVIDER", "disabled"),
             cloud_opt_in=os.environ.get("LLS_CLOUD_OPT_IN", "0") == "1",
             dialogue_model=os.environ.get("LLM_DIALOGUE_MODEL", ""),

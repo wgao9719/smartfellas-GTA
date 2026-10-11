@@ -537,6 +537,13 @@ async def test_recreated_memory_identifier_does_not_accept_old_inflight_vector(r
         calls += 1
         if calls == 2:
             repo.delete_memory("save-a", saved["memory_id"])
+            # Erased raw sources cannot be reused. A separate observation can still
+            # reuse a caller-supplied memory ID and must reject the old in-flight vector.
+            repo.record_event("save-a", branch, {
+                "event_id": "new-observation", "game_datetime": T1,
+                "protagonist_id": "franklin", "provenance": "heard",
+                "observer_ids": ["avery"], "payload": {"text": saved["text"]},
+            })
             recreated = repo.add_memory(
                 "save-a",
                 branch,
@@ -544,7 +551,7 @@ async def test_recreated_memory_identifier_does_not_accept_old_inflight_vector(r
                 "franklin",
                 T1,
                 saved["text"],
-                ["event-one"],
+                ["new-observation"],
                 "heard",
                 memory_id=saved["memory_id"],
             )

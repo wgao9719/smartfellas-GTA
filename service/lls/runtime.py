@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import secrets
+import sqlite3
 import time
 from collections import OrderedDict, deque
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager
@@ -173,6 +174,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             self.snapshot_last_success_path = None
             self.snapshot_last_failure_at = None
             self.snapshot_last_error_type = None
+            self._next_retention_at = float("-inf")
             self.id_factory = id_factory
             self.trigger_engine = trigger_engine
             self.policy = ActionPolicy(clock=clock)
@@ -461,6 +463,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         turn = session.delivery_turns.get(payload.get("turn_id"))
         if kind == "dialogue.chunk" and turn is not None:
             command["_conversation_turn"] = payload["turn_id"]
+            command["_memory_source_event_ids"] = turn["source_event_ids"]
             turn["chunks"][command["id"]] = {
                 "nonempty": bool(payload["text"]),
                 "complete": False,
@@ -1368,6 +1371,14 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     "scene_id": scene_id,
                     "epoch": epoch,
                     "input_event_id": event.event_id,
+                    "source_event_ids": tuple(dict.fromkeys([
+                        event.event_id,
+                        *[
+                            source for record in context["memories"] + context["knowledge"]
+                            for source in record["source_event_ids"]
+                        ],
+                        *[outcome["event_id"] for outcome in context["action_outcomes"]],
+                    ])),
                     "chunks": {},
                     "final_command_id": None,
                     "invalid": False,
@@ -1621,6 +1632,15 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     session.branch_id,
                     delivered_event,
                 )
+                links = [
+                    (source, delivered_event["event_id"])
+                    for source in command.get("_memory_source_event_ids", ())
+                ]
+                for offset in range(0, len(links), 64):
+                    await self.db(
+                        "link_memory_derivations", session.request.profile_id,
+                        command["actor_id"], links[offset:offset + 64],
+                    )
                 await self.db(
                     "add_memory",
                     session.request.profile_id,
@@ -1883,6 +1903,11 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         while True:
             await asyncio.sleep(1)
             self.refresh_speech_status()
+            try:
+                await self.expire_raw_history()
+            except sqlite3.OperationalError:
+                # Retry retention next tick without blocking pending session cleanup.
+                pass
             if self.neighborhood.scheduler is not None:
                 self.neighborhood.scheduler.tick()
             if self.skill_scheduler is not None and self._skills_first:
@@ -1905,6 +1930,26 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             self._skills_first = not self._skills_first
             await self.expire_sessions()
             self.snapshot_if_due()
+
+    async def expire_raw_history(self):
+        if self.clock() < self._next_retention_at:
+            return 0
+        cutoff = self.utc_now() - timedelta(days=self.settings.raw_event_retention_days)
+        count = await self.db("expire_raw_events", cutoff.isoformat())
+        for session in list(self.sessions.values()):
+            async with session.lock:
+                for command_id, command in list(session.commands.items()):
+                    if command["state"] in TERMINAL and command["_created_at_utc"] < cutoff:
+                        del session.commands[command_id]
+                for scene_id, speech in list(session.player_speech.items()):
+                    if speech["accepted_at"] < cutoff:
+                        del session.player_speech[scene_id]
+                for event_id, utterance in list(session.delivered_utterances.items()):
+                    if utterance.sampled_at < cutoff:
+                        del session.delivered_utterances[event_id]
+        self.speech.expire_receipts(cutoff)
+        self._next_retention_at = self.clock() + 60
+        return count
 
     async def shutdown(self):
         self.snapshot_stopping = True

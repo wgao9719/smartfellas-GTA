@@ -37,6 +37,10 @@ class ConfirmActor(StrictModel):
     confirm_actor_id: str = Field(min_length=1, max_length=128)
 
 
+class ConfirmConversation(ConfirmActor):
+    confirm_event_id: str = Field(min_length=1, max_length=128)
+
+
 class PinActor(ConfirmActor):
     display_name: DisplayName | None = None
 
@@ -455,6 +459,25 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
                 "deleted": await runtime.db("delete_memory", profile_id, memory_id),
                 "derived_memory_ids": derived,
             })
+
+    @secured.get("/profiles/{profile_id}/actors/{actor_id}/export")
+    async def export_actor(profile_id: str, actor_id: str):
+        if await runtime.db("get_actor", profile_id, actor_id) is None:
+            raise HTTPException(404, "actor not found in this profile")
+        return result(await runtime.db("export_actor", profile_id, actor_id))
+
+    @secured.delete("/profiles/{profile_id}/actors/{actor_id}/conversations/{event_id}")
+    async def erase_conversation(
+        profile_id: str, actor_id: str, event_id: str, body: ConfirmConversation,
+    ):
+        if body.confirm_actor_id != actor_id or body.confirm_event_id != event_id:
+            raise HTTPException(409, "conversation confirmation mismatch")
+        async with mutate_profile(profile_id):
+            if await runtime.db("get_actor", profile_id, actor_id) is None:
+                raise HTTPException(404, "actor not found in this profile")
+            if not await runtime.db("erase_conversation", profile_id, actor_id, event_id):
+                raise HTTPException(404, "conversation not found for this actor")
+            return result({"deleted": True})
 
     @secured.post("/profiles/{profile_id}/actors/{actor_id}/reset")
     async def reset_actor(profile_id: str, actor_id: str, body: ConfirmActor):

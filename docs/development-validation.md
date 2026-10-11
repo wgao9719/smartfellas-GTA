@@ -1,5 +1,46 @@
 # Development validation
 
+## Erasure/session-cleanup integration on Windows
+
+The [integration record](erasure-retention-integration.md) documents merging
+`win/validation` at `83d0968`, retaining session cleanup at schema v5 and moving
+retention to v6. Fresh databases create v6 directly. Final Windows checks passed
+Ruff, **1,633 pytest tests** (1 opt-in skip), **412 C# tests**, both GameAdapter builds
+with zero warnings, and every requested live check except the known upstream
+crash-recovery memory assertion. The 200-turn simulated load and fake demo passed.
+The crash check remains separately owned and was not modified.
+
+## Windows privacy fixes — 2026-10-11
+
+Worktree `erasure-retention`, branch `win/fix-erasure-retention`, on TOWER-PENGU.
+Created its own `.venv` with the explicit uv-managed Python 3.12.14 interpreter.
+Verified the audit findings against `SPECS.md` §9.3, §14.1, §17, and §18 before
+implementation. Initial regressions failed for source text remaining in export,
+missing character export, absent raw-history retention, foreground/social
+general-recall paraphrases, and stale cached hearing. Further failing regressions
+covered replay after erasure and derivation chains with no intermediate memory.
+
+Final commands, run from the worktree on Windows PowerShell:
+
+```powershell
+& C:\Users\Brian\.lls-tools\uv\uv.exe run --frozen ruff check service tests tools
+& C:\Users\Brian\.lls-tools\uv\uv.exe run --frozen pytest -W error
+```
+
+Ruff: **all checks passed**. Full pytest: **1,380 passed, 1 skipped in 176.68s**.
+The skip is the opt-in real whisper.cpp test. The dashboard privacy wrapper also
+passed; its direct Node run passed all 10 response-race tests. Schema upgrade tests
+cover v1/v2/v3/v4 to v5, fresh-schema equivalence, preserved data, collection-time
+backfill, reopen, foreign keys, and rejection of future versions.
+
+The first integration run had 8 failures (old schema assertions and fixtures that
+recreated erased sources); those were resolved while preserving their isolation
+and stale-vector checks. The final full run includes all fixes and new regressions.
+No adapter files changed, so this task did not rerun C# or live bridge checks.
+No GTA, Steam, or Rockstar process was launched. These results do not verify native
+GTA behavior, physical audio, or provider quality. See the [privacy policy](privacy-retention.md)
+for historical derivation, durable-memory, and backup limits.
+
 Date: 2026-10-10. Environment: macOS 27.0, arm64, Python 3.12.4, uv 0.12.17, .NET SDK 10.0.100.
 
 These results concern the local working tree based on `200c39cfc02323f8d2811f180bd8606964810f1a`. The implementation remains uncommitted. Later changes require their own checks. No G0–G4 gate has passed.
@@ -189,7 +230,7 @@ The audit also suggested `SO_EXCLUSIVEADDRUSE` for the listening socket. It was 
 | Six-model protected-role allowlist | A shared role table and classifier. Model, ped type, and relationship group must all indicate a civilian. The service recomputes the role and keeps the stricter policy. Missing facts are protected. | Every sampled value needs the rig. See the [capability sheet](actions/ped-classification-and-pin.md). |
 | No user-facing pin | F8 twice, or the dashboard, pins an eligible ambient civilian. The actor is promoted in place, so its conversation memories survive session closure with valid provenance. | Persistence natives are Debug-only and unverified. Pinned characters are not re-embodied in later sessions. |
 | Dense social-history read capped at 4,000,000 steps | The cost came from an unindexed `scrub_audit` scan per candidate. Schema v4 adds indexes and bounded per-owner reads. | One bad owner still fails the whole read closed |
-| Later quotes survived memory deletion | Deleting a memory also deletes the same actor's later lines that carried those words. Other actors' hearing memories remain. | Paraphrase through general recall is untracked. Canonical events keep the words. |
+| Later quotes survived memory deletion | Deleting a memory scrubs raw source words and removes same-actor derived lines, including new general-recall paraphrases. Other actors' independent hearing remains. | Historical untracked derivations require character reset or profile deletion; see [retention policy](privacy-retention.md). |
 
 Two further defects were found and fixed. A pruned or recycled runtime handle could never bind again in the same session, so long sessions lost targetable peds. whisper.cpp ran with `-oj`, which carries no token probabilities, so voice turns could never become action-eligible.
 
