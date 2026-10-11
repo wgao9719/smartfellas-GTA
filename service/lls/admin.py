@@ -63,7 +63,7 @@ class BackupRequest(StrictModel):
 
 
 class ProviderConfiguration(StrictModel):
-    provider: Literal["disabled", "fake", "local_openai", "openai", "anthropic"]
+    provider: Literal["disabled", "fake", "local_openai", "openai", "anthropic", "claude_cli"]
     dialogue_model: str = Field(default="", max_length=128)
     action_model: str = Field(default="", max_length=128)
     openai_base_url: str = Field(default="https://api.openai.com/v1", max_length=512)

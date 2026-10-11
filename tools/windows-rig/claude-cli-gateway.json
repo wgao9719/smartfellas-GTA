@@ -1,0 +1,16 @@
+{
+  "prices": {
+    "claude-sonnet-4-5-20250929": {"input_usd_per_million": 0, "output_usd_per_million": 0},
+    "claude-haiku-4-5-20251001": {"input_usd_per_million": 0, "output_usd_per_million": 0},
+    "claude-opus-5-5": {"input_usd_per_million": 0, "output_usd_per_million": 0},
+    "claude-sonnet-5-5": {"input_usd_per_million": 0, "output_usd_per_million": 0},
+    "claude-haiku-5-5": {"input_usd_per_million": 0, "output_usd_per_million": 0}
+  },
+  "foreground": {"max_requests": 2000, "max_estimated_usd": 0},
+  "background": {"max_requests": 0, "max_estimated_usd": 0},
+  "max_prompt_tokens": 16384,
+  "dialogue_output_tokens": 1024,
+  "action_output_tokens": 1024,
+  "skill_output_tokens": 2048,
+  "max_concurrent_requests": 2
+}

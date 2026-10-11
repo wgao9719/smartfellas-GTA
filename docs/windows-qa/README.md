@@ -99,6 +99,7 @@ Nothing here needs administrator rights. Tools go into `%USERPROFILE%\.lls-tools
    - `<repo>\.dotnet\dotnet.exe test adapter/LivingNPC.Core.Tests/LivingNPC.Core.Tests.csproj -c Release`
    - `uv run --frozen python tests/live_bridge_check.py`
 3. **In-game code changed?** Build and copy it in while the game is running; Windows doesn't lock the files:
+   - **Claude with no API key (your Claude Code sign-in):** run `claude auth login` once in a terminal, then `tools\windows-rig\start-service.ps1 -Provider claude-cli`. NPCs then talk with Claude Sonnet 4.5, and Claude Haiku 4.5 does the quick fact check; `-Model` and `-ActionModel` pick others listed in `tools\windows-rig\claude-cli-gateway.json`. The service runs the signed-in `claude` CLI for each reply, with its tools, MCP servers, settings and hooks turned off. This still sends NPC context to Anthropic, so it's the same cloud opt-in. A smaller `-ActionModel` keeps the per-sentence fact check under its 3-second deadline.
 
    ```
    dotnet build adapter/LivingNPC.GameAdapter/LivingNPC.GameAdapter.csproj -c Debug

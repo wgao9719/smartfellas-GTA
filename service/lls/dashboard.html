@@ -79,7 +79,7 @@
     <div class="config-grid">
       <label for="provider-choice">Provider<select id="provider-choice">
         <option value="disabled">AI off</option><option value="local_openai">Local OpenAI-compatible server</option>
-        <option value="openai">Hosted OpenAI-compatible server</option><option value="anthropic">Claude (Anthropic Messages API)</option>
+        <option value="openai">Hosted OpenAI-compatible server</option><option value="anthropic">Claude (Anthropic Messages API)</option><option value="claude_cli">Claude (signed-in Claude Code CLI)</option>
         <option value="fake">Simulated dialogue (testing)</option>
       </select></label>
       <label for="provider-endpoint">Server endpoint<input id="provider-endpoint" type="url" spellcheck="false"></label>
@@ -290,10 +290,10 @@
       throw Error('Enter a valid value for '+document.querySelector('label[for="'+id+'"]').firstChild.textContent+'.');
     return value;
   }
-  function hostedProvider(provider){return provider==='openai'||provider==='anthropic';}
+  function hostedProvider(provider){return provider==='openai'||provider==='anthropic'||provider==='claude_cli';}
   function providerEndpoint(config,provider){
     return provider==='local_openai'?config.local_base_url:
-      provider==='anthropic'?config.anthropic_base_url:config.openai_base_url;
+      provider==='anthropic'||provider==='claude_cli'?config.anthropic_base_url:config.openai_base_url;
   }
   function displayProvider(data) {
     providerConfiguration=data.configuration;
@@ -339,7 +339,7 @@
     config.provider=el('provider-choice').value;
     if(config.provider==='local_openai')config.local_base_url=el('provider-endpoint').value.trim();
     if(config.provider==='openai')config.openai_base_url=el('provider-endpoint').value.trim();
-    if(config.provider==='anthropic')config.anthropic_base_url=el('provider-endpoint').value.trim();
+    if(config.provider==='anthropic'||config.provider==='claude_cli')config.anthropic_base_url=el('provider-endpoint').value.trim();
     config.dialogue_model=el('dialogue-model').value.trim();config.action_model=el('action-model').value.trim();
     config.embedding.provider=el('embedding-provider').value;
     config.embedding.model=el('embedding-model').value.trim();
@@ -372,7 +372,7 @@
   el('refresh-provider').addEventListener('click',()=>run(loadProvider,el('refresh-provider')));
   el('enable-cloud').addEventListener('click',()=>run(async()=>{
     displayProvider(await api('/provider/consent','POST',{
-      endpoint:providerConfiguration.provider==='anthropic'?providerConfiguration.anthropic_base_url:
+      endpoint:providerConfiguration.provider==='anthropic'||providerConfiguration.provider==='claude_cli'?providerConfiguration.anthropic_base_url:
         providerConfiguration.openai_base_url,configuration_revision:providerRevision}));
     status('Cloud consent enabled for the saved endpoint.');
   }));

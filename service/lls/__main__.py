@@ -13,7 +13,7 @@ import uvicorn
 
 from .app import create_app
 from .credentials import load_api_key
-from .gateway_config import HOSTED_PROVIDERS
+from .gateway_config import KEYED_PROVIDERS
 from .roles import joaat
 from .settings import Settings
 
@@ -220,7 +220,7 @@ def main():
     if args.demo or args.replay:
         asyncio.run(fake_demo(args.replay))
         return
-    load_api_key(hosted=os.environ.get("LLS_PROVIDER", "disabled") in HOSTED_PROVIDERS)
+    load_api_key(hosted=os.environ.get("LLS_PROVIDER", "disabled") in KEYED_PROVIDERS)
     settings = Settings.from_env()
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, access_log=False)
 

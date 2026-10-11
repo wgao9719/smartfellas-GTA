@@ -46,6 +46,18 @@ The **Claude (Anthropic Messages API)** provider (`LLS_PROVIDER=anthropic`) call
 - **Usage.** Streamed `message_start` and `message_delta` counts settle each reservation. Input includes any cache reads and writes, at the configured input price.
 - **Configuration without the dashboard.** `LLS_AI_GATEWAY_FILE` loads prices and limits from a JSON `GatewayConfig`. Saved dashboard settings still override the environment and this file. The rig's `start-service.ps1 -Provider claude` uses Claude Sonnet 5 (`claude-sonnet-5`) and `claude-gateway.json`. That file lists Anthropic's published prices per million tokens: $2 input and $10 output for Sonnet 5 and 5.5, $4 and $20 for Opus 5.5. The ledger uses them as estimates, not invoices.
 
+### Claude through the Claude Code CLI
+
+`LLS_PROVIDER=claude_cli` sends the same requests through the **Claude Code CLI you are signed in to** (`claude auth login` once on the service computer) instead of an API key. It is meant for development and demos on a machine that already uses Claude Code. The prompts, consent, reservations, scrubber and response parsing are the Messages API provider's. Only the transport differs:
+
+- Each request runs `claude -p` once in an empty temporary folder with `--tools ""`, `--strict-mcp-config` and `--no-session-persistence`, so the CLI can't use tools, MCP servers or project instructions, and it keeps no transcript. Requests travel on stdin and replies return as `stream-json`; the prompt is never on the command line. Dialogue streams with `--include-partial-messages`, and grounding and action checks use `--json-schema`. Model names must be ones the CLI's route accepts; through a proxy that can mean dated IDs such as `claude-sonnet-4-5-20250929`.
+- The child process gets the service's environment minus every `ANTHROPIC_*`, `CLAUDE_*`, `CLAUDECODE`, `LLM_*` and `LLS_*` variable, so a surrounding Claude Code session can't lend it a token and service secrets never reach it. No API key is read.
+- The CLI takes about a second to start, so one process per prompt shape (dialogue, grounding) is started ahead of time and waits for its single request. Who is speaking travels with the request: the system prompt holds the constant rules, and the character's identity starts the user message.
+- User settings stay loaded, because they can hold how the CLI signs in (for example a local proxy), but `--settings` turns off every hook and always-on thinking. The CLI still adds a short environment note (working folder, OS and today's real date) to the system prompt; no user memory, CLAUDE.md or project files reach the model.
+- Grounding checks get 8 seconds instead of 3, because even a warm CLI adds about a second before the model starts.
+- A signed-out CLI fails the turn with its own message (for example "Not logged in"), which appears in the provider's last failure.
+- `LLS_CLAUDE_CLI` names the executable; by default the service uses `claude` on `PATH`, then `~/.local/bin/claude(.exe)`. Prices in `tools/windows-rig/claude-cli-gateway.json` are zero because a subscription isn't billed per token. The request limits still apply.
+
 ## Reservations and estimates
 
 Every HTTP model attempt first reserves a request and its maximum configured estimated cost in SQLite. Action-schema repair requires a separate reservation. Foreground and background requests have separate limits. The default background allowance is zero. Local attempts also consume request allowances, with no hosted monetary charge.

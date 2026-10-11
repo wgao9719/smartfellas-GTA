@@ -43,13 +43,17 @@ class Settings(StrictModel):
     snapshot_interval_seconds: float = Field(default=3600, ge=0, allow_inf_nan=False)
     snapshot_retention_count: int = Field(default=24, ge=1, le=1000)
     raw_event_retention_days: int = Field(default=7, ge=1, le=365)
-    provider: Literal["disabled", "fake", "openai", "anthropic", "local_openai"] = "disabled"
+    provider: Literal["disabled", "fake", "openai", "anthropic", "claude_cli", "local_openai"] = (
+        "disabled"
+    )
     cloud_opt_in: bool = False
     openai_base_url: str = "https://api.openai.com/v1"
     anthropic_base_url: str = "https://api.anthropic.com/v1"
     # Claude effort for every request; "" omits the field for models without effort support.
     anthropic_effort: Literal["", "low", "medium", "high", "xhigh", "max"] = "medium"
     local_base_url: str = "http://127.0.0.1:1234/v1"
+    # claude_cli only: the signed-in Claude Code CLI; "" finds it on PATH or ~/.local/bin.
+    claude_cli_executable: str = ""
     model_timeout_seconds: float = Field(default=30, ge=1, le=120)
     grounding_classifier_enabled: bool = True
     model_response_bytes: int = Field(default=262144, ge=1024, le=1048576)
@@ -191,7 +195,9 @@ class Settings(StrictModel):
             anthropic_base_url=os.environ.get(
                 "LLS_ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1"
             ),
-            anthropic_effort=os.environ.get("LLS_ANTHROPIC_EFFORT", "medium"),
+            # "none" leaves effort out (Windows PowerShell cannot set an empty variable).
+            anthropic_effort=os.environ.get("LLS_ANTHROPIC_EFFORT", "medium").replace("none", ""),
+            claude_cli_executable=os.environ.get("LLS_CLAUDE_CLI", ""),
             ai_gateway=cls.gateway_file(cls.env_path("LLS_AI_GATEWAY_FILE")),
             memory_consolidation=MemoryConsolidationConfig(
                 enabled=os.environ.get("LLS_MEMORY_SUMMARIES", "0") == "1"

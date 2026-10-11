@@ -9,7 +9,9 @@ from pydantic import Field, field_validator
 from .protocol import Identifier, StrictModel
 
 # Providers whose requests leave the service computer and therefore need cloud consent.
-HOSTED_PROVIDERS = frozenset({"openai", "anthropic"})
+HOSTED_PROVIDERS = frozenset({"openai", "anthropic", "claude_cli"})
+# Hosted providers that authenticate with LLM_API_KEY; claude_cli uses the CLI's own sign-in.
+KEYED_PROVIDERS = frozenset({"openai", "anthropic"})
 
 
 def hosted_endpoint(configuration):
@@ -20,7 +22,7 @@ def hosted_endpoint(configuration):
     else:
         provider = configuration.provider
         anthropic, openai = configuration.anthropic_base_url, configuration.openai_base_url
-    return anthropic if provider == "anthropic" else openai
+    return anthropic if provider in {"anthropic", "claude_cli"} else openai
 
 
 def validate_remote_endpoint(value: str) -> str:

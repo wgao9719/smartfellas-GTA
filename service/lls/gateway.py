@@ -7,6 +7,7 @@ from contextlib import aclosing
 
 from .anthropic_provider import AnthropicProvider
 from .budgets import BudgetExceeded, BudgetLedger
+from .claude_cli_provider import ClaudeCliProvider
 from .gateway_config import HOSTED_PROVIDERS, validate_local_endpoint, validate_remote_endpoint
 from .outbound import OutboundDenied, OutboundGate, raise_if_cancelling
 from .providers import DisabledProvider, FakeProvider, OpenAIProvider, ProviderResponseError
@@ -81,6 +82,8 @@ class GatewayProvider:
         self.grounding_routes = weakref.WeakKeyDictionary()
         if self.name == "anthropic":
             self.primary = AnthropicProvider(settings, gate=self.gate, transport=transport)
+        elif self.name == "claude_cli":
+            self.primary = ClaudeCliProvider(settings, gate=self.gate, transport=transport)
         elif self.name in {"openai", "local_openai"}:
             self.primary = OpenAIProvider(settings, gate=self.gate, transport=transport)
         else:
@@ -123,6 +126,9 @@ class GatewayProvider:
 
     async def aclose(self):
         await self.gate.aclose()
+        close = getattr(self.primary, "aclose", None)
+        if close is not None:
+            await close()
 
     @property
     def classify_grounding(self):

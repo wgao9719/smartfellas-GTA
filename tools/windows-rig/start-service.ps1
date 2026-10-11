@@ -2,8 +2,11 @@
 # -Provider local_openai expects the local llama.cpp server from start-llm.ps1 (no cloud, no keys).
 # -Provider claude sends NPC context to Anthropic's API. Choosing it is the explicit cloud opt-in.
 #   Paste your Anthropic key into secrets\LLM_API_KEY.txt (git-ignored); see secrets\README.md.
-param([ValidateSet('fake','local_openai','claude','disabled')][string]$Provider = 'fake',
+# -Provider claude-cli sends the same context through the Claude Code CLI you are signed in to
+#   (run `claude auth login` once). No API key; also an explicit cloud opt-in.
+param([ValidateSet('fake','local_openai','claude','claude-cli','disabled')][string]$Provider = 'fake',
       [string]$Model = 'claude-sonnet-5',
+      [string]$ActionModel = '',
       [string]$Repo = '')
 . (Join-Path $PSScriptRoot 'rig-paths.ps1')
 if (-not $Repo) { $Repo = $script:RigRepo }
@@ -46,6 +49,24 @@ if ($Provider -eq 'claude') {
     $env:LLM_ACTION_MODEL = $Model
     $env:LLS_ANTHROPIC_EFFORT = 'medium'
     $env:LLS_AI_GATEWAY_FILE = $gateway   # Prices, daily limits and output budgets.
+}
+if ($Provider -eq 'claude-cli') {
+    # NPC dialogue defaults to the older, quicker Sonnet 4.5; Haiku 4.5 does the per-sentence check.
+    if (-not $PSBoundParameters.ContainsKey('Model')) { $Model = 'claude-sonnet-4-5-20250929' }
+    if (-not $ActionModel) { $ActionModel = 'claude-haiku-4-5-20251001' }
+    $gateway = Join-Path $PSScriptRoot 'claude-cli-gateway.json'
+    $prices = (Get-Content $gateway -Raw | ConvertFrom-Json).prices
+    foreach ($m in @($Model, $ActionModel) | Where-Object { $_ }) {
+        if (-not $prices.$m) { throw "Add $m to $gateway before using it." }
+    }
+    $env:LLS_PROVIDER = 'claude_cli'
+    $env:LLS_CLOUD_OPT_IN = '1'
+    $env:LLM_DIALOGUE_MODEL = $Model
+    # A smaller action model keeps the per-sentence grounding check inside its deadline.
+    $env:LLM_ACTION_MODEL = if ($ActionModel) { $ActionModel } else { $Model }
+    # 4.5-generation models take no effort setting; 'none' leaves it out.
+    $env:LLS_ANTHROPIC_EFFORT = 'none'
+    $env:LLS_AI_GATEWAY_FILE = $gateway
 }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $p = Start-Process -FilePath $script:RigUv -ArgumentList @('run','--frozen','python','-m','service.lls') `
