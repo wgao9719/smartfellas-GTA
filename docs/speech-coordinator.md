@@ -47,6 +47,7 @@ Output-device construction, start, abort, and close run in joined worker threads
 | --- | --- | --- |
 | Capture | `recording` | The microphone supplied valid input frames through its device callback. |
 | Transcript | `completed` | Transcription finished and temporary capture audio was removed before return. |
+| Transcript | `failed`, reason `empty_transcript` | Recognition found no words. The runtime shows `Didn't catch that. Try again.` and starts no turn. |
 | Playback | `started` | The output callback accepted PCM frames. |
 | Playback | `completed` | The output callback accepted all frames and the device reported completion. |
 | Any | `canceled` | Cancellation or identity invalidation stopped the operation. |
@@ -59,6 +60,8 @@ Output-device construction, start, abort, and close run in joined worker threads
 Only completed playback supplies `delivered_text`. Canceled or failed playback supplies no full-text delivery evidence, even when playback started. Software playback completion does not prove that a person heard the audio.
 
 Transcript `action_eligible` indicates only that finite confidence meets the configured threshold. Unknown confidence returns false. Invalid confidence fails transcription. Action policy, consent, actor identity, and world-state checks remain mandatory. The runtime must treat a false confidence gate as dialogue-only input.
+
+The whisper.cpp adapter reads `whisper-cli -ojf` output. Its confidence is the mean probability of the spoken tokens, and annotation-only segments never become player text. The [speech probes](speech-probes.md#microphone-and-recognition) record the JSON shape observed on macOS. That shape still requires verification with the Windows build on the rig.
 
 ## Data retention
 

@@ -40,7 +40,11 @@ The `record` command opens the microphone immediately. It records for the specif
    uv run python -m service.lls.speech transcribe --executable /path/to/whisper-cli --model /path/to/ggml-base.en.bin --audio mic-test.wav
    ```
 
-The probe prints the recognized text. Standard whisper.cpp JSON can omit confidence. The probe reports `null` in that case. Unknown confidence must not authorize game actions.
+The probe prints the recognized text. It runs `whisper-cli` with full JSON output (`-ojf`) and reports the mean token probability as confidence. Special tokens such as `[_BEG_]` and timestamp tokens such as `[_TT_50]` do not count. JSON without token probabilities reports `null`. Unknown confidence must not authorize game actions.
+
+Whisper marks silence and noise with annotations such as `[BLANK_AUDIO]`, `[ Silence ]`, `(silence)`, `[MUSIC]`, and `(blender whirring)`. The service drops every segment that has no letters or digits outside brackets and parentheses. When nothing remains, the transcript is empty. The runtime then shows `Didn't catch that. Try again.` and starts no turn.
+
+The full JSON shape was observed on macOS with whisper.cpp v1.9.5 and the `ggml-base.en` model. Each token has `text`, `timestamps`, `offsets`, `id`, `p`, and `t_dtw`. Low hiss produced `[BLANK_AUDIO]`, Gaussian noise produced `(blender whirring)`, and pure tones produced no segments. Digital silence produced the word `You` with a token probability near 0.11, so it remains dialogue-only input. Verify the JSON shape and the silence behavior with the Windows build on the rig.
 
 Capture uses 16 kHz mono PCM audio. It stops after 30 seconds. Cancellation clears the in-memory recording. The standalone command keeps the file you explicitly requested.
 
@@ -76,4 +80,10 @@ The output is system audio. It does not prove spatial audio or lip sync in GTA. 
 
 Record the executable versions, model checksums, voice licenses, audio devices, and selected compute backend. Run the probes while GTA is active. Record recognition accuracy, elapsed times, audible output, and cancellation behavior. Repeat microphone denial and device removal checks.
 
-Automated tests use generated silent WAV fixtures and controlled fake devices. They check process cancellation, output bounds, malformed audio, missing confidence, microphone cleanup, and overwrite protection. They do not verify a real microphone, real voice model, Windows SAPI, or GTA.
+Automated tests use generated silent WAV fixtures and controlled fake devices. They check process cancellation, output bounds, malformed audio, missing confidence, microphone cleanup, and overwrite protection. A fake `whisper-cli` executable replays the observed `-ojf` shape through the owned-process path to check confidence, annotation removal, and empty transcripts. They do not verify a real microphone, real voice model, Windows SAPI, or GTA.
+
+An opt-in test runs an installed whisper.cpp when you set both `LLS_WHISPER_EXECUTABLE` and `LLS_WHISPER_MODEL`. Otherwise it is skipped.
+
+```sh
+LLS_WHISPER_EXECUTABLE=/path/to/whisper-cli LLS_WHISPER_MODEL=/path/to/ggml-base.en.bin uv run pytest tests/test_speech.py -k installed
+```

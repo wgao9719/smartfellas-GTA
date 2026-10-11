@@ -11,6 +11,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 import time
@@ -20,6 +21,7 @@ from pathlib import Path
 
 MAX_AUDIO_SECONDS = 30
 MAX_PROCESS_OUTPUT = 2 * 1024 * 1024
+ANNOTATION = re.compile(r"\[[^\[\]]*\]|\([^()]*\)")
 
 
 class SpeechUnavailable(RuntimeError):
@@ -66,6 +68,11 @@ def inspect_wav(path: str | Path) -> AudioInfo:
     return AudioInfo(rate, channels, frames, frames / rate)
 
 
+def is_speech(text: str) -> bool:
+    """Whisper marks silence and noise as [BLANK_AUDIO], (silence), [MUSIC], and similar."""
+    return any(character.isalnum() for character in ANNOTATION.sub("", text))
+
+
 def require_file(value: str | Path, label: str) -> Path:
     path = Path(value).expanduser().resolve()
     if not path.is_file():
@@ -86,7 +93,7 @@ async def run_program(argv, *, stdin: bytes = b"", timeout: float = 60, env=None
 
 
 class WhisperCpp:
-    """whisper-cli JSON output adapter. Unknown confidence stays unknown."""
+    """whisper-cli full JSON adapter. Unknown confidence stays unknown."""
 
     def __init__(self, executable: str | Path, model: str | Path):
         self.executable = require_file(executable, "whisper.cpp executable")
@@ -108,7 +115,7 @@ class WhisperCpp:
                     Path(audio).resolve(),
                     "-l",
                     "en",
-                    "-oj",
+                    "-ojf",
                     "-of",
                     output,
                     "-np",
@@ -119,22 +126,24 @@ class WhisperCpp:
                 raise SpeechUnavailable("Whisper did not produce bounded JSON output.")
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                segments = data["transcription"]
+                # Annotation-only segments are not player words. Nothing left means silence.
+                segments = [s for s in data["transcription"] if is_speech(s["text"])]
                 text = " ".join(segment["text"].strip() for segment in segments).strip()
-                if not text or len(text) > 4000:
-                    raise ValueError("empty or oversized transcript")
-                # Standard -oj may omit token probabilities. Do not invent confidence.
+                if len(text) > 4000:
+                    raise ValueError("oversized transcript")
+                # Special tokens such as [_BEG_] and [_TT_50] carry no recognized words.
+                # Missing probabilities stay unknown instead of becoming confidence.
                 probabilities = [
                     float(token["p"])
                     for segment in segments
                     for token in segment.get("tokens", [])
-                    if "p" in token
+                    if "p" in token and not token.get("text", "").startswith("[_")
                 ]
                 if any(not math.isfinite(p) or not 0 <= p <= 1 for p in probabilities):
                     raise ValueError("invalid token probability")
                 confidence = sum(probabilities) / len(probabilities) if probabilities else None
             except (AttributeError, KeyError, TypeError, ValueError) as exc:
-                raise SpeechUnavailable("Whisper returned an invalid or empty transcript.") from exc
+                raise SpeechUnavailable("Whisper returned an invalid transcript.") from exc
         return Transcript(
             text, confidence, "whisper.cpp", round((time.monotonic() - started) * 1000)
         )

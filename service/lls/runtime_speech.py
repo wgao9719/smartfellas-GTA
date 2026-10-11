@@ -225,7 +225,12 @@ class SpeechRuntime:
                 return
             if receipt.state != "completed":
                 self.speech_status(
-                    session, identity, receipt.state, "Transcription did not finish."
+                    session,
+                    identity,
+                    receipt.state,
+                    "Didn't catch that. Try again."
+                    if receipt.reason == "empty_transcript"
+                    else "Transcription did not finish.",
                 )
                 return
             transcript = Event.model_validate(

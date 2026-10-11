@@ -59,6 +59,7 @@ class Microphone:
 class Transcriber:
     def __init__(self):
         self.confidence = None
+        self.text = "Please look at me."
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.release.set()
@@ -68,7 +69,7 @@ class Transcriber:
         self.started.set()
         try:
             await self.release.wait()
-            return Transcript("Please look at me.", self.confidence, "mock-stt", 1)
+            return Transcript(self.text, self.confidence, "mock-stt", 1)
         finally:
             self.cleaned = True
 
@@ -357,6 +358,20 @@ async def test_whisper_ptt_locks_volume_into_the_transcript(speech_scene):
             "look", session_id=session.id,
         )
         assert "The player whispered: Please look at me." in [m["text"] for m in heard]
+
+
+async def test_empty_transcript_reports_it_and_starts_no_turn(speech_scene):
+    async with speech_scene() as values:
+        client, runtime, session, microphone, transcriber, synthesizer, playback, provider = values
+        transcriber.text = ""
+        assert (await control(client, session, "voice.ptt_started")).status_code == 200
+        await session.voice_task
+        assert (await control(client, session, "voice.ptt_stopped")).status_code == 200
+        await session.voice_task
+        status = [c["payload"] for c in session.commands.values() if c["kind"] == "status"][-1]
+        assert (status["state"], status["message"]) == ("failed", "Didn't catch that. Try again.")
+        assert session.task is None and provider.contexts == [] and stored_utterances(runtime) == []
+        assert not microphone.active and transcriber.cleaned
 
 
 async def move_target(client, session, distance):

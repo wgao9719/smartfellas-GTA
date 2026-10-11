@@ -386,10 +386,7 @@ class SpeechCoordinator:
                     self.config.transcription_seconds,
                 )
                 confidence = transcript.confidence
-                if (
-                    not isinstance(transcript.text, str)
-                    or not 1 <= len(transcript.text.strip()) <= 4000
-                ):
+                if not isinstance(transcript.text, str) or len(transcript.text.strip()) > 4000:
                     raise ValueError("invalid transcript")
                 if confidence is not None and (
                     type(confidence) not in {int, float}
@@ -397,15 +394,19 @@ class SpeechCoordinator:
                     or not 0 <= confidence <= 1
                 ):
                     raise ValueError("invalid transcript confidence")
-                state = "completed"
-                values = {
-                    "text": transcript.text.strip(),
-                    "confidence": confidence,
-                    "action_eligible": (
-                        confidence is not None
-                        and confidence >= self.config.minimum_action_confidence
-                    ),
-                }
+                if not transcript.text.strip():
+                    # Silence or noise alone. The runtime reports it and starts no turn.
+                    state, values = "failed", {"reason": "empty_transcript"}
+                else:
+                    state = "completed"
+                    values = {
+                        "text": transcript.text.strip(),
+                        "confidence": confidence,
+                        "action_eligible": (
+                            confidence is not None
+                            and confidence >= self.config.minimum_action_confidence
+                        ),
+                    }
         except (asyncio.CancelledError, _IdentityChanged) as exc:
             state, values = "canceled", {"reason": self._cancel_reason(operation, exc)}
         except Exception:

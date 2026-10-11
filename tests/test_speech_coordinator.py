@@ -116,6 +116,21 @@ async def test_invalid_confidence_never_authorizes_actions(confidence):
     assert not result.text and not speech.microphone.paths[0].exists()
 
 
+@pytest.mark.parametrize("text", ["", "   "])
+@pytest.mark.asyncio
+async def test_empty_transcript_fails_without_text_or_action(text):
+    class Silence(Transcriber):
+        async def transcribe(self, audio):
+            return Transcript(text, None, "mock", 1)
+
+    speech = coordinator(transcriber=Silence())
+    await speech.start_capture(IDENTITY)
+    result = await speech.finish_capture(IDENTITY)
+    assert (result.state, result.reason, result.text) == ("failed", "empty_transcript", "")
+    assert not result.action_eligible and not speech.microphone.active
+    await speech.close()
+
+
 @pytest.mark.asyncio
 async def test_receipts_follow_actual_start_and_playback_completion():
     accepted = asyncio.Event()
