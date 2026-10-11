@@ -48,5 +48,7 @@ namespace LivingNPC.Core
         void ShowSubtitle(string speaker, string text);
         void ClearSubtitle();
         void ShowStatus(string state, string message);
+        // Registers the ped as mod-owned under the same actor id. False refuses and drops the binding.
+        bool Pin(Command command, ActorState actor, string displayName);
     }
 }

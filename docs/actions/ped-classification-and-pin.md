@@ -1,4 +1,4 @@
-# Ped classification capability sheet
+# Ped classification and pinning capability sheet
 
 Status: **UNVERIFIED ON GTA**. Compile reference: SHVDN v3.6.0. Supported game build: none established. Role table: `data/ped_roles.json`, version 1, `verification: "unverified"`.
 
@@ -78,5 +78,44 @@ Use a Debug build. Save the game first. Record the adapter log for each step.
 10. Target a random-event participant during the event. Expect `Not available` or a refusal.
 11. Record each observed ped type, relationship group, and model hash in the tables above.
 12. Record any ordinary pedestrian that shows `*_unlisted`, with its model hash.
+
+## Pinning
+
+FR-ID-03 lets the player keep an ordinary pedestrian. Pinning promotes the session identity in place: the actor keeps its id, its own conversation memories, relationship updates, and owned knowledge. Nothing promises that the engine entity survives.
+
+1. The player selects a pedestrian with F6, then presses F8 twice within 5 seconds on the same actor and runtime instance. One request waits at a time, for at most 10 seconds.
+2. `PinPolicy` requires a safe world, ambient ownership, the civilian role, the ambient policy, no mission flag, not busy or in combat, and at most 8 m.
+3. The adapter sends `actor.pin_requested` on the event lane. The service requires the `actor_pin` manifest flag, a fresh civilian ambient snapshot, and a passing conversation policy. It allows one pin per 10 seconds and 8 per session.
+4. The service cancels the scene, promotes the actor in one transaction, and queues `actor.pin` with the display name. The default name is `Resident <4 hex>`. The dashboard can supply another name.
+5. The adapter rechecks the ped, caps registered pins at 8, and marks the binding mod-owned under the same actor id. Any refusal drops the binding and sends `actor.removed`.
+6. A completed acknowledgment shows `Pinned as <name>. This conversation will be remembered. They may not return after you leave.` Any other outcome shows `Saved as <name>, but this pedestrian is no longer available.` The saved identity stays in the database without an embodiment.
+
+| Item | API or behavior | Expected value | Observed on rig |
+|---|---|---|---|
+| Pin key | `[Input] PinKey`, default F8 | No conflict with the game or installed mods | |
+| Registered pin | Binding marked mod-owned | Same actor id; snapshot reports `spawned_persistent` and `mod_owned` | |
+| Ownership after pin | `IsPersistent` false without persistence | `mod_owned`, policy ambient | |
+| Script takeover | Mission flag set by another script | `game_script_owned`, `registered_ped_taken_by_script`, binding pruned | |
+| Despawn | Player leaves the area | Binding pruned, `actor.removed`, identity kept | |
+| Persistence opt-in | `Ped.SetIsPersistentNoClearTask(true)`, Debug and `EnableUnverifiedPinPersistence=true` only | Ped keeps its current task and stays loaded | |
+| Persistence ownership | `DOES_ENTITY_BELONG_TO_THIS_SCRIPT(ped, false)` | `true` after the opt-in | |
+| Release | `Entity.MarkAsNoLongerNeeded` on prune, reset, or abort | Only when this script still owns the ped | |
+
+`Entity.IsPersistent = true` would clear the ped's tasks, so the opt-in uses `SetIsPersistentNoClearTask`. The manifest then carries `pin_persistence_unverified`.
+
+### Pin rig test script
+
+1. Use a Debug build with `EnableUnverifiedPinPersistence=false`. Save the game first.
+2. Talk to an ordinary pedestrian with F6 and F7.
+3. Press F8 once. Expect the confirmation prompt. Wait 6 seconds and press F8 once more. Expect the prompt again, not a pin.
+4. Press F8 twice quickly. Expect `Pinned as Resident ....`
+5. Type another message. Confirm the reply uses the pinned name and remembers the earlier exchange.
+6. Walk away until the ped despawns. Confirm `actor.removed` in the service diagnostics and the pinned character in the dashboard.
+7. Close the session. Confirm the dashboard still lists the pinned pedestrian and its memories.
+8. Try F8 near a police officer, a story character, and a shop clerk. Expect a refusal and no new dashboard character.
+9. Pin 8 pedestrians in one session. Expect the ninth to be refused.
+10. Repeat steps 2–6 with `EnableUnverifiedPinPersistence=true`. Record whether the ped keeps its task, stays loaded, and is released after reset.
+11. Start a mission while a pinned ped is nearby. Record whether a script takes it and whether the binding is pruned without release.
+12. Forget the pinned character from the dashboard. Confirm its memories are gone.
 
 Do not mark this sheet verified until every row has an observed value from the reference rig.

@@ -18,6 +18,8 @@ namespace LivingNPC.GameAdapter
         private readonly string? parentBranchId;
         private readonly string[] capabilities;
         private readonly Keys targetKey, textKey, pttKey, cancelKey;
+        private readonly Keys pinKey;
+        private readonly PinConfirmation pinConfirmation = new PinConfirmation();
         private BridgeWorker? bridge;
         private CommandController? controller;
         private long generation = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), seq;
@@ -73,6 +75,10 @@ namespace LivingNPC.GameAdapter
             textKey = settings.GetValue("Input", "TextKey", Keys.F7);
             pttKey = settings.GetValue("Input", "PttKey", Keys.N);
             cancelKey = settings.GetValue("Input", "CancelKey", Keys.Back);
+            pinKey = settings.GetValue("Input", "PinKey", Keys.F8);
+#if DEVELOPMENT
+            game.PinPersistence = settings.GetValue("Development", "EnableUnverifiedPinPersistence", false);
+#endif
             Tick += OnTick; KeyDown += OnKeyDown; KeyUp += OnKeyUp; Aborted += OnAborted;
             log.Write("configuration_loaded", "enabled=" + enabled + " capabilities=" + capabilities.Length);
             if (!enabled) game.ShowStatus("error", "Living Los Santos: invalid endpoint or development settings.");
@@ -91,9 +97,16 @@ namespace LivingNPC.GameAdapter
                 Manifest = new Dictionary<string, object> { ["game_edition"] = "legacy", ["story_mode"] = true, ["gta_build"] = Game.Version.ToString(), ["scripthookv_build"] = hookVersion,
                     ["shvdn_build"] = typeof(Script).Assembly.GetName().Version!.ToString(), ["adapter_version"] = adapterVersion,
                     ["game_os_version"] = Environment.OSVersion.VersionString, ["service_os"] = serviceOs, ["service_host_mode"] = IPAddress.IsLoopback(IPAddress.Parse(endpoint.Host)) ? "local" : "dev_lan",
-                    ["compat_layer"] = "none", ["arch"] = "x64", ["capability_flags"] = new[] { "typed_input", "ptt_control", "subtitles", "runtime_decorator_binding", "role_classifier_v1", "role_table_" + PedRoleTable.Default.Version } } };
+                    ["compat_layer"] = "none", ["arch"] = "x64", ["capability_flags"] = CapabilityFlags() } };
+            pinConfirmation.Reset();
             bridge = new BridgeWorker(endpoint, request, bootstrapToken); wasOnline = false; offlineShown = false;
             log.Write("bridge_connect", "generation=" + generation);
+        }
+        private string[] CapabilityFlags()
+        {
+            var flags = new List<string> { "typed_input", "ptt_control", "subtitles", "runtime_decorator_binding", "role_classifier_v1", "role_table_" + PedRoleTable.Default.Version, "actor_pin" };
+            if (game.PinPersistence) flags.Add("pin_persistence_unverified");
+            return flags.ToArray();
         }
         private EventEnvelope Event(string kind, string? actorId, object payload)
         {
@@ -118,7 +131,7 @@ namespace LivingNPC.GameAdapter
             if (bridge.Online)
             {
                 if (!worldSent) { bridge.Events.TryAdd(Event("world.snapshot", null, new { online = world.Online, mission_active = world.MissionActive, cutscene_active = world.CutsceneActive, random_event_active = world.RandomEventActive, paused = world.Paused, protagonist_id = world.ProtagonistId })); worldSent = true; }
-                if (!wasOnline) { log.Write("bridge_ready", "generation=" + generation); game.ShowStatus("ready", "Living Los Santos: " + targetKey + " target, " + textKey + " text, " + pttKey + " push to talk, " + cancelKey + " cancel."); offlineShown = false; }
+                if (!wasOnline) { log.Write("bridge_ready", "generation=" + generation); game.ShowStatus("ready", "Living Los Santos: " + targetKey + " target, " + textKey + " text, " + pttKey + " push to talk, " + pinKey + " twice to pin, " + cancelKey + " cancel."); offlineShown = false; }
                 if (input.PushToTalkHeld && !input.PushToTalkStartQueued)
                 {
                     if (DateTimeOffset.UtcNow >= pendingPttDeadline) { CancelInput(); game.ShowStatus("unavailable", "Living Los Santos: target confirmation timed out. Try again."); }
@@ -147,6 +160,8 @@ namespace LivingNPC.GameAdapter
             {
                 PruneAndPublish();
                 if (bridge == null) { game.Render(typing); return; }
+                var pending = pinConfirmation.PendingActorId; pinConfirmation.Expire(DateTimeOffset.UtcNow);
+                if (pending != null && game.Resolve(pending) is var pinned && (pinned == null || pinned.Ownership == Ownership.ModOwned)) pinConfirmation.Complete(pending);
                 bridge.Snapshots.ReplaceOldest(Event("world.snapshot", null, new { online = world.Online, mission_active = world.MissionActive, cutscene_active = world.CutsceneActive, random_event_active = world.RandomEventActive, paused = world.Paused, protagonist_id = world.ProtagonistId }));
                 if (game.SelectedActorId != null) SendSnapshot(game.Resolve(game.SelectedActorId));
                 nextSample = DateTimeOffset.UtcNow.AddMilliseconds(500);
@@ -246,6 +261,7 @@ namespace LivingNPC.GameAdapter
                 game.ShowStatus("target", actor != null ? "Target: " + actor.Name + " (" + PedClassifier.Availability(actor, game.ReadWorld(), generation) + ")"
                     : refusal != null ? "Nearest: " + PedRoleTable.Label(refusal.Role) + " — not available" : "No nearby resident is available."); return;
             }
+            if (args.KeyCode == pinKey) { RequestPin(); return; }
             if (args.KeyCode == textKey) { CancelInput(); if (LockTarget()) typing = ""; return; }
             if (args.KeyCode == pttKey && !input.PushToTalkHeld)
             {
@@ -256,6 +272,21 @@ namespace LivingNPC.GameAdapter
                     game.ShowStatus("preparing_mic", "Living Los Santos: confirming the target before microphone capture.");
                 }
             }
+        }
+        // FR-ID-03: two presses on the same actor and instance within 5 s send one request.
+        private void RequestPin()
+        {
+            if (bridge?.Online != true) return;
+            var actor = game.SelectedActorId == null ? null : game.Resolve(game.SelectedActorId);
+            var refusal = PinPolicy.Check(actor, game.ReadWorld(), generation);
+            if (refusal != null) { pinConfirmation.Disarm(); game.ShowStatus("pin", "Living Los Santos: " + PinPolicy.Describe(refusal)); return; }
+            var press = pinConfirmation.Press(actor!.ActorId, actor.RuntimeInstanceId, DateTimeOffset.UtcNow);
+            if (press == PinPress.Pending) { game.ShowStatus("pin", "Living Los Santos: a pin request is still waiting for the service."); return; }
+            if (press == PinPress.Armed) { game.ShowStatus("pin", "Living Los Santos: press " + pinKey + " again within 5 seconds to pin " + actor.Name + "."); return; }
+            CancelInput();
+            if (!bridge.Events.TryAdd(Event("actor.pin_requested", actor.ActorId, new { runtime_instance_id = actor.RuntimeInstanceId })))
+            { pinConfirmation.Reset(); game.ShowStatus("error", "Living Los Santos: input queue is full."); return; }
+            game.ShowStatus("pin", "Living Los Santos: pinning " + actor.Name + ".");
         }
         private void LogClassification(ActorState? actor)
         {

@@ -719,3 +719,148 @@ def test_fixed_fifty_question_retrieval_regression(regression_repository, questi
         assert found[0]["source_event_ids"] == expected
         if question["required_qualification"]:
             assert found[0]["text"] == question["required_qualification"]
+
+
+def pin_world(repo):
+    branch = repo.start_session("save-a", "session-a", T0)["branch_id"]
+    for actor_id in ("walker", "other"):
+        ambient(repo, actor_id)
+    event(repo, branch, observers=["walker", "other"])
+    memory(repo, branch, actor="walker", session_id="session-a")
+    memory(repo, branch, actor="other", session_id="session-a")
+    repo.apply_relationship_event(
+        "save-a", branch, "walker", "franklin", "event-1", session_id="session-a"
+    )
+    repo.apply_relationship_event(
+        "save-a", branch, "other", "franklin", "event-1", session_id="session-a"
+    )
+    for owner in ("walker", "other"):
+        repo.add_knowledge(
+            "save-a", branch, T1, f"{owner} knows the bicycle shop.", ["event-1"],
+            "directly_observed", owner_id=owner, protagonist_id="franklin",
+            session_id="session-a",
+        )
+    return branch
+
+
+def scopes(repo, actor_id):
+    query = {
+        "memories": "SELECT session_id FROM memories WHERE actor_id=?",
+        "relationship_updates": "SELECT session_id FROM relationship_updates WHERE actor_id=?",
+        "knowledge_cards": "SELECT session_id FROM knowledge_cards WHERE owner_id=?",
+    }
+    return {
+        table: {row[0] for row in repo.connection.execute(sql, (actor_id,))}
+        for table, sql in query.items()
+    }
+
+
+def pin(repo, branch, actor_id="walker", session_id="session-a"):
+    return repo.pin_actor(
+        "save-a", actor_id, session_id, display_name="Resident 3f9a",
+        pinned_at_game_datetime=T2, branch_id=branch,
+    )
+
+
+def test_pin_promotes_in_place_and_survives_session_end(repo):
+    branch = pin_world(repo)
+    repo.bind_instance("save-a", "walker", "session-a", 77, 1)
+    assert repo.get_actor("save-a", "walker")["runtime_binding"] == [77, 1]
+    pinned = pin(repo, branch)
+    assert (pinned["id"], pinned["actor_kind"], pinned["session_id"]) == (
+        "walker", "spawned_persistent", None
+    )
+    assert pinned["pinned_from_session"] == "session-a"
+    assert "runtime_binding" not in pinned
+    assert pinned["pinned_at"] == {"game_datetime": "2025-01-01T11:00:00.000000+00:00",
+                                   "branch_id": branch}
+    assert repo.get_actor("save-a", "walker") == pinned
+    assert scopes(repo, "walker") == {
+        "memories": {None}, "relationship_updates": {None}, "knowledge_cards": {None}
+    }
+    assert scopes(repo, "other") == {
+        "memories": {"session-a"}, "relationship_updates": {"session-a"},
+        "knowledge_cards": {"session-a"},
+    }
+    assert pin(repo, branch) == pinned
+    audits = repo.connection.execute(
+        "SELECT COUNT(*) FROM scrub_audit WHERE operation='pin_actor' AND object_id='walker'"
+    ).fetchone()[0]
+    assert audits == 1
+    repo.end_session("save-a", "session-a")
+    assert repo.get_actor("save-a", "other") is None
+    assert not repo.retrieve_memories("save-a", branch, "other", "franklin", T4, "bicycle")
+    later = repo.start_session("save-a", "session-b", T3)["branch_id"]
+    assert later == branch
+    repo.bind_instance("save-a", "walker", "session-b", 88, 2)
+    assert repo.resolve_instance("save-a", "session-b", 88, 2)["actor_id"] == "walker"
+    assert recall(repo, branch, actor="walker", session_id="session-b")
+    relation = repo.get_relationship(
+        "save-a", branch, "walker", "franklin", T4, session_id="session-b"
+    )
+    assert relation["familiarity"] == 0.02
+    cards = repo.retrieve_knowledge(
+        "save-a", branch, "walker", "franklin", T4, session_id="session-b"
+    )
+    assert [card["text"] for card in cards] == ["walker knows the bicycle shop."]
+    # Writes after the pin are durable without any session scope.
+    event(repo, branch, "event-2", at=T3, observers=["walker"])
+    later_memory = memory(repo, branch, "event-2", at=T3, actor="walker", session_id="session-b")
+    assert later_memory["session_id"] is None
+
+
+def test_pin_is_atomic(repo, monkeypatch):
+    branch = pin_world(repo)
+
+    def fail(*_):
+        raise RuntimeError("injected audit failure")
+
+    monkeypatch.setattr(repo, "_audit", fail)
+    with pytest.raises(RuntimeError, match="injected"):
+        pin(repo, branch)
+    actor = repo.get_actor("save-a", "walker")
+    assert (actor["actor_kind"], actor["session_id"]) == ("ambient_ephemeral", "session-a")
+    assert "pinned_from_session" not in actor
+    assert scopes(repo, "walker")["memories"] == {"session-a"}
+
+
+def test_pin_refuses_non_ambient_and_other_session_actors(repo):
+    branch = pin_world(repo)
+    with pytest.raises(ValueError, match="only a pedestrian from this session"):
+        pin(repo, branch, actor_id="avery")
+    with pytest.raises(ValueError, match="only a pedestrian from this session"):
+        pin(repo, branch, session_id="session-b")
+    with pytest.raises(ValueError, match="unknown actor"):
+        pin(repo, branch, actor_id="missing")
+    with pytest.raises(ValueError, match="display name"):
+        repo.pin_actor(
+            "save-a", "walker", "session-a", display_name="", pinned_at_game_datetime=T2,
+            branch_id=branch,
+        )
+    assert repo.get_actor("save-a", "walker")["actor_kind"] == "ambient_ephemeral"
+
+
+def test_forget_applies_only_to_pinned_actors(repo):
+    branch = pin_world(repo)
+    for actor_id in ("avery", "other"):
+        with pytest.raises(ValueError, match="only pinned pedestrians"):
+            repo.forget_pinned_actor("save-a", actor_id)
+    with pytest.raises(ValueError, match="unknown actor"):
+        repo.forget_pinned_actor("save-a", "missing")
+    pin(repo, branch)
+    repo.forget_pinned_actor("save-a", "walker")
+    assert repo.get_actor("save-a", "walker") is None
+    assert scopes(repo, "walker") == {
+        "memories": set(), "relationship_updates": set(), "knowledge_cards": set()
+    }
+    operations = {
+        row[0]
+        for row in repo.connection.execute(
+            "SELECT operation FROM scrub_audit WHERE object_id IN ('walker',?)",
+            (json.dumps(["walker", "player:franklin", "event-1"], separators=(",", ":")),),
+        )
+    }
+    assert {"pin_actor", "reset_actor", "forget_pinned_actor", "forget_relationship_source"} <= (
+        operations
+    )
+    assert scopes(repo, "other")["memories"] == {"session-a"}

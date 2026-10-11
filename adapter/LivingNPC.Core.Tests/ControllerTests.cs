@@ -9,7 +9,7 @@ namespace LivingNPC.Core.Tests;
 public sealed class FakeGame : IGameAdapter
 {
     public WorldState World = new() { ProtagonistId = "franklin", GameDatetime = new DateTime(2013, 9, 17) };
-    public ActorState Actor = new() { ActorId = "npc", RuntimeInstanceId = "instance-1", Generation = 7, Exists = true, Alive = true, Distance = 3, Ownership = Ownership.Ambient, Policy = ControlPolicy.Ambient, CanMove = true };
+    public ActorState Actor = new() { ActorId = "npc", RuntimeInstanceId = "instance-1", Generation = 7, Exists = true, Alive = true, Distance = 3, Ownership = Ownership.Ambient, Policy = ControlPolicy.Ambient, CanMove = true, Role = PedRole.Civilian };
     public int Starts, Releases, Subtitles;
     public int SubtitleClears;
     public string LastSubtitle = "";
@@ -25,6 +25,14 @@ public sealed class FakeGame : IGameAdapter
     public void ShowSubtitle(string speaker, string text) { Subtitles++; LastSubtitle = text; }
     public void ClearSubtitle() { SubtitleClears++; LastSubtitle = ""; }
     public void ShowStatus(string state, string message) => Status = state;
+    public int Pins;
+    public bool AcceptPin = true;
+    public bool Pin(Command command, ActorState actor, string displayName)
+    {
+        Pins++;
+        if (!AcceptPin) return false;
+        actor.Ownership = Ownership.ModOwned; actor.Kind = "spawned_persistent"; actor.Name = displayName; return true;
+    }
 }
 
 public class ControllerTests
@@ -194,6 +202,59 @@ public class ControllerTests
         for (var n = 0; n < 4097; n++) controller.Cancel("scene" + n, Now);
         Assert.Equal(4096, controller.CanceledSceneCount); Assert.True(controller.FailedClosed);
         controller.Commands.TryAdd(Action()); controller.Tick(Now); Assert.Equal(0, game.Starts);
+    }
+    public static Command Pin(string name = "Resident 3f9a", string id = "pin1") => new() { Id = id, Seq = 6, SessionId = "ses", ActorId = "npc", RuntimeInstanceId = "instance-1", RuntimeGeneration = 7, Kind = "actor.pin", IdempotencyKey = id, ExpiresAt = Now.AddSeconds(10), Payload = JObject.FromObject(new { display_name = name, actor_kind = "spawned_persistent" }) };
+    [Fact] public void PinRebindsAmbientCivilian()
+    {
+        var game = new FakeGame(); var controller = Controller(game);
+        controller.Commands.TryAdd(Pin()); controller.Tick(Now);
+        var ack = Assert.Single(Drain(controller));
+        Assert.Equal(("completed", "pinned", "npc"), (ack.Status, ack.Reason, (string)ack.Observed!["actor_id"]));
+        Assert.Equal(1, game.Pins);
+        Assert.Equal(("npc", "instance-1", Ownership.ModOwned, "spawned_persistent", "Resident 3f9a"), (game.Actor.ActorId, game.Actor.RuntimeInstanceId, game.Actor.Ownership, game.Actor.Kind, game.Actor.Name));
+        var reply = Action("after-pin"); controller.Commands.TryAdd(reply); controller.Tick(Now.AddMilliseconds(100));
+        Assert.Equal("started", Assert.Single(Drain(controller)).Status);
+    }
+    [Theory]
+    [InlineData("protected", "rejected", "protected_actor")][InlineData("script_owned", "rejected", "protected_actor")][InlineData("mod_owned", "rejected", "already_pinned")]
+    [InlineData("police_role", "rejected", "not_civilian")][InlineData("stale_instance", "rejected", "stale_actor_binding")][InlineData("generation", "rejected", "stale_session")]
+    [InlineData("expired", "expired", "authorization_expired")][InlineData("bad_name", "rejected", "invalid_display_name")][InlineData("long_name", "rejected", "invalid_display_name")]
+    [InlineData("active_task", "rejected", "actor_task_conflict")][InlineData("distant", "rejected", "actor_out_of_range")][InlineData("adapter_refused", "rejected", "pin_refused")]
+    public void PinRefused(string variant, string status, string reason)
+    {
+        var game = new FakeGame(); var controller = Controller(game); var command = Pin();
+        switch (variant)
+        {
+            case "protected": game.Actor.Policy = ControlPolicy.Protected; break;
+            case "script_owned": game.Actor.Ownership = Ownership.GameScriptOwned; game.Actor.MissionEntity = true; break;
+            case "mod_owned": game.Actor.Ownership = Ownership.ModOwned; break;
+            case "police_role": game.Actor.Role = PedRole.Police; break;
+            case "stale_instance": command.RuntimeInstanceId = "recycled-handle"; break;
+            case "generation": command.RuntimeGeneration = 6; break;
+            case "expired": command.ExpiresAt = Now; break;
+            case "bad_name": command.Payload["display_name"] = "Bad~Name"; break;
+            case "long_name": command.Payload["display_name"] = new string('x', 49); break;
+            case "active_task": controller.Commands.TryAdd(Action()); controller.Tick(Now); Drain(controller); break;
+            case "distant": game.Actor.Distance = 9; break;
+            case "adapter_refused": game.AcceptPin = false; break;
+        }
+        controller.Commands.TryAdd(command); controller.Tick(Now.AddMilliseconds(50));
+        var ack = Assert.Single(Drain(controller));
+        Assert.Equal((status, reason), (ack.Status, ack.Reason));
+        Assert.Equal(variant == "adapter_refused" ? 1 : 0, game.Pins);
+        if (variant != "mod_owned") Assert.NotEqual(Ownership.ModOwned, game.Actor.Ownership);
+    }
+    [Fact] public void SceneCancelBeforePinKeepsPin()
+    {
+        var game = new FakeGame(); var controller = Controller(game);
+        var cancel = Action("cancel-all"); cancel.Kind = "scene.cancel"; cancel.Seq = 5; cancel.ActorId = null; cancel.RuntimeInstanceId = null; cancel.Payload = new JObject();
+        var reply = Action("late-reply"); reply.Seq = 4;
+        controller.Commands.TryAdd(reply); controller.Commands.TryAdd(cancel); controller.Commands.TryAdd(Pin());
+        controller.Tick(Now);
+        var acks = Drain(controller);
+        Assert.Contains(acks, a => a.CommandId == "cancel-all" && a.Status == "completed");
+        Assert.Contains(acks, a => a.CommandId == "pin1" && a.Status == "completed" && a.Reason == "pinned");
+        Assert.Equal(1, game.Pins); Assert.Equal(Ownership.ModOwned, game.Actor.Ownership);
     }
     [Fact] public void SnapshotDropDoesNotRemoveDifferentInFlightItem()
     {

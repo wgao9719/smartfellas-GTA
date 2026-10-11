@@ -59,4 +59,5 @@ jobs:
       - run: dotnet build adapter/LivingNPC.GameAdapter/LivingNPC.GameAdapter.csproj --configuration Release
       - run: uv run python tests/live_bridge_check.py
       - run: uv run python tests/live_bridge_check.py --speech
+      - run: uv run python tests/live_bridge_check.py --pin
       - run: uv run --frozen python tests/live_bridge_crash_check.py

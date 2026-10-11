@@ -27,6 +27,7 @@ G0 is not done. No game, loader, or SHVDN combination is currently certified by 
 18. Hold N to request microphone capture.
 19. Release N to stop capture and start transcription.
 20. Press Backspace to cancel the current interaction.
+21. Press F8 twice within 5 seconds to pin the selected pedestrian. Expect `Pinned as Resident ....`
 
 The service defaults to AI disabled. The fake provider is for simulation tests. A hosted provider requires explicit configuration and cloud consent. PTT may report that speech is unavailable until microphone and transcription support is configured. The adapter shows `Recording` only after a service status confirms it.
 
@@ -53,6 +54,19 @@ The adapter reports `task_dispatched=true` in a started acknowledgment. This con
 Both completed acknowledgments include `distance_meters`, the cumulative distance between successive position samples. Tracking starts immediately before dispatch and continues through completion. The adapter uses a monotonic clock and rejects any sample interval above 250 milliseconds. It rejects unavailable positions, nonfinite coordinates, and backward timestamps. A failed measurement supplies no completion facts. A stationary sequence of valid samples can report zero distance.
 
 The distance describes the sampled path. It cannot measure movement between samples. `wait_here` also reports `elapsed_ms` and `displacement_meters`. `face_player` also reports `heading_error_degrees`. These receipts remain unverified until the Windows rig confirms native behavior.
+
+## Pin persistence test
+
+CAUTION: Save the game before this test. The persistence call is unverified.
+
+1. Deploy a Debug build.
+2. Set `EnableUnverifiedPinPersistence=true` in the INI's `[Development]` section.
+3. Reload the adapter through the SHVDN console.
+4. Run the pin rig test script in the [capability sheet](actions/ped-classification-and-pin.md).
+5. Record whether the pinned ped keeps its task, stays loaded, and is released after a reset or reload.
+6. Restore `EnableUnverifiedPinPersistence=false` after the test.
+
+Without this setting, a pinned ped is registered but the game may still despawn it. The pinned identity and its memories remain either way.
 
 ## Recovery and rollback
 

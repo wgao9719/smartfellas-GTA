@@ -7,7 +7,7 @@ G0 is **not done**. The source builds on this Mac. No Windows rig, second Mac, g
 | .NET SDK | 10.0.100, macOS arm64 |
 | Public compile reference | SHVDN v3.6.0, SHA-256 pinned in `compatibility.yaml` |
 | Adapter build | `net48`, Debug and Release compile successfully |
-| Pure C# tests | 162 tests pass on `net10.0`. One reads `GTA.PedHash` from the compile reference |
+| Pure C# tests | 187 tests pass on `net10.0`. One reads `GTA.PedHash` from the compile reference |
 | Actual C# → Python HTTP round trip | Passed with a simulated game and explicit fake provider |
 | Native actions | `face_player` and `wait_here` have provisional executors. Runtime support is unverified. |
 | Release native capabilities | Empty until the rig establishes support |
@@ -21,13 +21,13 @@ The HTTP probe observed two rendered subtitle chunks, one final marker, one simu
 
 `LivingNPC.GameAdapter` targets `net48`. Only the SHVDN script thread calls GTA APIs. The worker has separate HTTP lanes for controls, observations/acknowledgments, and command polling. A stalled observation request or long poll does not block PTT. Body sizes and queue capacities are bounded.
 
-The action controller checks the session, runtime generation, immutable runtime instance, expiration, policy version, ownership, control policy, proximity, and current game state. Persistent actors qualify only when the adapter's current registry classifies them as mod-owned. The current native implementation creates no persistent actors. It never adopts a script-owned ped.
+The action controller checks the session, runtime generation, immutable runtime instance, expiration, policy version, ownership, control policy, proximity, and current game state. Persistent actors qualify only when the adapter's current registry classifies them as mod-owned. A pinned pedestrian enters that registry under its existing actor id. The registry keeps it only while it is still the mod's. The adapter never adopts a script-owned ped. It creates no curated persistent actors yet.
 
 The controller records `started` after task dispatch. It records `completed` only after the adapter observes the completion condition. Mission takeover cancels tracking without clearing the engine's task. Queue saturation stops dispatch. Pending acknowledgments stay queued for retry. Deferred terminal acknowledgments survive an acknowledgement-queue overflow in bounded session state.
 
 Targeting classifies nearby peds from sampled facts: model, ped type, relationship group, cuffed state, police vehicle, player group, mission flag, and owning script in Debug builds. A ped becomes a target only when its model, ped type, and relationship group all indicate a civilian and its ownership is ambient. The adapter and service share `data/ped_roles.json`. The service recomputes the role from the snapshot's facts and keeps the stricter result. Missing facts classify as unknown and protected. Refused peds receive no decorator. Each transient binding gets a random decorator marker and runtime instance ID. A missing marker, changed model, or changed instance invalidates the binding. The marker is not a persistent identity. The [classification capability sheet](actions/ped-classification-and-pin.md) lists the facts and expected values that require rig verification.
 
-The adapter uses Backspace to cancel by default. F6 selects a target and reports `Available`, `Busy`, `Out of range`, or `Not available`. Without an eligible ped, it names the nearest refused role, for example `Nearest: police officer — not available`. F7 opens a small typed input field. N sends PTT controls. All four keys are configurable. The input field currently supports Latin letters, digits, spaces, and basic punctuation. Escape closes text input. Controller bindings, text composition, font scaling, and full accessibility remain incomplete.
+The adapter uses Backspace to cancel by default. F6 selects a target and reports `Available`, `Busy`, `Out of range`, or `Not available`. Without an eligible ped, it names the nearest refused role, for example `Nearest: police officer — not available`. F7 opens a small typed input field. N sends PTT controls. F8 pressed twice pins the selected pedestrian. All five keys are configurable. The input field currently supports Latin letters, digits, spaces, and basic punctuation. Escape closes text input. Controller bindings, text composition, font scaling, and full accessibility remain incomplete.
 
 ## Shared action contract
 
@@ -57,7 +57,7 @@ Store the evidence under `docs/evidence/g0/` only after each procedure runs. Rec
 
 The compile reference does not establish compatibility with a current GTA build. Do not install the v3.6.0 loader merely because the project uses its API reference. The rig must use one complete compatible SHVDN release.
 
-Curated spawn/reconciliation, adoption, controller input, persistent identity binding, full native action coverage, and complete input accessibility remain incomplete. Native status values, heading conditions, decorator reliability, mission ownership, random events, and pause behavior require recorded tests.
+Curated spawn/reconciliation, verified pin persistence, controller input, persistent identity binding, full native action coverage, and complete input accessibility remain incomplete. Native status values, heading conditions, decorator reliability, mission ownership, random events, and pause behavior require recorded tests.
 
 The adapter cannot detect every save-load boundary from dates alone. It detects loading state, protagonist changes, and a full-date rewind. An explicit profile and optional parent branch selection remain necessary for ambiguous saves.
 

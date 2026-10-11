@@ -20,9 +20,48 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def verify_pin(database, probe):
+    """The promoted actor and its pre-pin conversation outlive the closed session."""
+    sys.path.insert(0, str(ROOT))
+    from service.lls.storage import Repository
+
+    profile, actor_id = probe["profile_id"], probe["pinned_actor_id"]
+    with Repository(database) as repo:
+        actor = repo.get_actor(profile, actor_id) or {}
+        memories = repo.list_memories(profile, actor_id, limit=500)
+        before = [m for m in memories if m["text"] == "The player said: Please look at me."]
+        ended = repo.connection.execute(
+            "SELECT COUNT(*) FROM game_sessions WHERE profile_id=? AND ended_at IS NOT NULL",
+            (profile,),
+        ).fetchone()[0]
+        officer = repo.get_actor(profile, "probe-cop")
+    result = {
+        "status": "passed",
+        "mode": "pinned_identity_durability",
+        "actor_kind": actor.get("actor_kind"),
+        "pre_pin_memories": len(before),
+        "durable_memories": sum(m["session_id"] is None for m in memories),
+        "memories": len(memories),
+        "sessions_closed": ended,
+        "ambient_officer_purged": officer is None,
+        "game_verified": False,
+    }
+    if (
+        result["actor_kind"] != "spawned_persistent"
+        or actor.get("session_id") is not None
+        or not before
+        or result["durable_memories"] != len(memories)
+        or ended != 1
+        or officer is not None
+    ):
+        raise RuntimeError("Pinned identity did not survive session close: " + json.dumps(result))
+    print(json.dumps(result))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--speech", action="store_true", help="Use synthetic audio devices")
+    parser.add_argument("--pin", action="store_true", help="Pin a pedestrian and check durability")
     args = parser.parse_args()
     bundled = ROOT / ".dotnet" / ("dotnet.exe" if os.name == "nt" else "dotnet")
     dotnet = os.environ.get("LLS_DOTNET") or shutil.which("dotnet")
@@ -82,7 +121,7 @@ def main():
                         time.sleep(0.05)
                 else:
                     raise RuntimeError("Isolated service did not become ready.")
-                subprocess.run(
+                probe = subprocess.run(
                     [
                         dotnet,
                         "run",
@@ -93,11 +132,14 @@ def main():
                         "--",
                         endpoint,
                         *(["--speech"] if args.speech else []),
+                        *(["--pin"] if args.pin else []),
                     ],
                     cwd=ROOT,
                     env=environment,
                     check=True,
                     timeout=90,
+                    capture_output=args.pin,
+                    text=True,
                 )
             finally:
                 service.terminate()
@@ -106,6 +148,10 @@ def main():
                 except subprocess.TimeoutExpired:
                     service.kill()
                     service.wait(timeout=3)
+            if args.pin:
+                print(probe.stdout, end="")
+                lines = probe.stdout.strip().splitlines()
+                verify_pin(Path(temporary) / "probe.sqlite3", json.loads(lines[-1]))
 
 
 if __name__ == "__main__":

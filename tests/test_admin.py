@@ -7,7 +7,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from service.lls.__main__ import fixture_session
+from service.lls.__main__ import fixture_actor_snapshot, fixture_session
 from service.lls.admin import create_admin_router
 from service.lls.protocol import SessionOpen
 from service.lls.runtime import Runtime
@@ -256,3 +256,96 @@ async def test_timeline_selection_is_profile_scoped_and_used_on_next_connection(
     next_session = await open_profile(client)
     assert next_session.branch_id == branch
     assert "pilot" not in client.runtime.selected_branches
+
+
+async def pin_session(client, profile="pilot"):
+    body = fixture_session()
+    body.update(profile_id=profile, game_datetime=T2)
+    body["manifest"]["capability_flags"] = ["fake_game", "actor_pin"]
+    session = await client.runtime.open(SessionOpen.model_validate(body))
+    stamp = client.runtime.clock()
+    session.world = {
+        "online": False, "mission_active": False, "cutscene_active": False,
+        "random_event_active": False, "paused": False, "protagonist_id": "franklin",
+        "_sampled_at": stamp,
+    }
+    client.repository.register_actor(
+        profile,
+        {
+            "actor_id": "walker", "actor_kind": "ambient_ephemeral", "session_id": session.id,
+            "display_name": "Nearby resident", "control_policy": "ambient",
+        },
+    )
+    session.actors["walker"] = {
+        **fixture_actor_snapshot(runtime_instance_id="walker-1", name="Nearby resident"),
+        "actor_kind": "ambient_ephemeral",
+        "_sampled_at": stamp,
+    }
+    return session
+
+
+async def pin_diagnostics(client, session):
+    actors = (await client.get(f"/v1/admin/sessions/{session.id}/diagnostics")).json()["actors"]
+    return next((a["pin_eligible"], a["pin_reason"]) for a in actors if a["actor_id"] == "walker")
+
+
+@pytest.mark.asyncio
+async def test_pin_requires_token_csrf_confirmation_and_eligibility(client):
+    session = await pin_session(client)
+    path = f"/v1/admin/sessions/{session.id}/actors/walker/pin"
+    body = {"confirm_actor_id": "walker"}
+    unauthorized = {"Authorization": "Bearer wrong"}
+    assert (await client.post(path, json=body, headers=unauthorized)).status_code == 401
+    assert (await client.post(path, json=body, headers={"X-CSRF-Token": "x"})).status_code == 403
+    assert (await client.post(path, json={"confirm_actor_id": "bea"})).status_code == 409
+    for name in ["", "x" * 49, "<b>Bold</b>", "tab\there", " padded"]:
+        response = await client.post(path, json={**body, "display_name": name})
+        assert response.status_code == 422
+    missing = "/v1/admin/sessions/missing/actors/walker/pin"
+    assert (await client.post(missing, json=body)).status_code == 404
+    session.actors["walker"]["control_policy"] = "protected"
+    assert await pin_diagnostics(client, session) == (
+        False, "This pedestrian is protected and cannot be pinned."
+    )
+    refused = await client.post(path, json=body)
+    assert refused.status_code == 409 and "protected" in refused.json()["detail"]
+    assert client.repository.get_actor("pilot", "walker")["actor_kind"] == "ambient_ephemeral"
+    session.actors["walker"]["control_policy"] = "ambient"
+    assert await pin_diagnostics(client, session) == (True, None)
+    response = await client.post(path, json={**body, "display_name": "Corner Regular"})
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "pin_requested", "actor_id": "walker", "display_name": "Corner Regular",
+        "actor_kind": "spawned_persistent",
+    }
+    stored = client.repository.get_actor("pilot", "walker")
+    assert (stored["actor_kind"], stored["display_name"]) == (
+        "spawned_persistent", "Corner Regular"
+    )
+    assert [c["kind"] for c in session.commands.values()][-2:] == ["scene.cancel", "actor.pin"]
+    assert await pin_diagnostics(client, session) == (False, "Already pinned in this session.")
+
+
+@pytest.mark.asyncio
+async def test_forget_refuses_pack_actors_and_removes_pinned_ones(client):
+    seed(client)
+    session = await pin_session(client)
+    pin_path = f"/v1/admin/sessions/{session.id}/actors/walker/pin"
+    assert (await client.post(pin_path, json={"confirm_actor_id": "walker"})).status_code == 200
+
+    async def forget(actor, confirm=None):
+        return await client.request(
+            "DELETE",
+            f"/v1/admin/profiles/pilot/actors/{actor}",
+            json={"confirm_actor_id": confirm or actor},
+        )
+
+    assert (await forget("avery")).status_code == 409
+    assert (await forget("walker", "avery")).status_code == 409
+    assert (await forget("missing")).status_code == 404
+    response = await forget("walker")
+    assert response.status_code == 200
+    assert response.json() == {"status": "forgotten", "actor_id": "walker"}
+    assert client.repository.get_actor("pilot", "walker") is None
+    assert client.repository.get_actor("pilot", "avery") is not None
+    assert "walker" not in session.actors and session.pins["walker"]["state"] == "forgotten"

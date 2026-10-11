@@ -19,7 +19,7 @@ namespace LivingNPC.GameAdapter
             public string ActorId = "", Instance = "", Kind = "ambient_ephemeral", Name = "Nearby resident";
             public int Marker, Model;
             public long Generation;
-            public bool ModOwned = false;
+            public bool ModOwned = false, TookPersistence;
             public PedFacts? StaticFacts, Facts;
             public int FactsFrame = -1;
         }
@@ -33,6 +33,9 @@ namespace LivingNPC.GameAdapter
         private readonly int thread = Thread.CurrentThread.ManagedThreadId;
         private readonly Dictionary<string, Binding> bindings = new Dictionary<string, Binding>();
         private readonly Dictionary<string, TaskRecord> tasks = new Dictionary<string, TaskRecord>();
+        private readonly List<string> dropped = new List<string>();
+        // Debug builds with EnableUnverifiedPinPersistence only.
+        public bool PinPersistence { get; set; }
         private string subtitle = "", status = "Living Los Santos: connecting";
         private DateTimeOffset subtitleUntil;
         public string? SelectedActorId { get; private set; }
@@ -93,7 +96,7 @@ namespace LivingNPC.GameAdapter
                 var facts = new PedFacts { ModelHash = known.ModelHash, Human = known.Human, AnimalModel = known.AnimalModel, PedType = known.PedType,
                     RelationshipGroupHash = ped.RelationshipGroup.Hash, Cuffed = ped.IsCuffed, InPoliceVehicle = ped.IsInPoliceVehicle,
                     PlayerGroup = Function.Call<bool>(Hash.IS_PED_GROUP_MEMBER, ped.Handle, Function.Call<int>(Hash.GET_PED_GROUP_INDEX, Game.Player.Character.Handle)),
-                    MissionEntity = ped.IsPersistent, InModRegistry = binding?.ModOwned == true,
+                    MissionEntity = ped.IsPersistent, InModRegistry = binding?.ModOwned == true, TookPersistence = binding?.TookPersistence == true,
                     BelongsToModScript = Function.Call<bool>(Hash.DOES_ENTITY_BELONG_TO_THIS_SCRIPT, ped.Handle, false) };
 #if DEVELOPMENT
                 facts.OwningScript = OwningScript(ped);
@@ -115,16 +118,45 @@ namespace LivingNPC.GameAdapter
         public string[] PruneBindings(long generation)
         {
             OnScriptThread();
-            var removed = new List<string>();
+            var removed = new List<string>(dropped); dropped.Clear();
             foreach (var binding in bindings.Values.ToArray())
             {
                 // Registered pins can despawn or be taken by a script as well.
                 if (binding.Generation == generation && Valid(binding) && (binding.ModOwned ? PedClassifier.Classify(Sample(binding.Ped, binding)).Ownership == Ownership.ModOwned
                     : !binding.Ped.IsPersistent && binding.Ped.Position.DistanceTo(Game.Player.Character.Position) <= 60)) continue;
-                bindings.Remove(binding.ActorId); removed.Add(binding.ActorId);
+                bindings.Remove(binding.ActorId); removed.Add(binding.ActorId); ReleasePersistence(binding);
                 if (SelectedActorId == binding.ActorId) SelectedActorId = null;
             }
             return removed.ToArray();
+        }
+        // FR-ID-03: the same actor id becomes mod-owned. Any refusal drops the binding.
+        public bool Pin(Command command, ActorState actor, string displayName)
+        {
+            OnScriptThread();
+            if (!bindings.TryGetValue(actor.ActorId, out var binding)) return false;
+            binding.Facts = null;
+            var classified = PedClassifier.Classify(Valid(binding) ? Sample(binding.Ped, binding) : null);
+            if (binding.Instance != actor.RuntimeInstanceId || binding.ModOwned || classified.Ownership != Ownership.Ambient || classified.Role != PedRole.Civilian ||
+                classified.Policy != ControlPolicy.Ambient || bindings.Values.Count(b => b.ModOwned) >= PinPolicy.MaxPins)
+            {
+                bindings.Remove(binding.ActorId); dropped.Add(binding.ActorId);
+                if (SelectedActorId == binding.ActorId) SelectedActorId = null;
+                return false;
+            }
+            binding.ModOwned = true; binding.Kind = "spawned_persistent"; binding.Name = displayName; binding.Facts = null;
+#if DEVELOPMENT
+            // Unverified: IsPersistent=true would clear the ped's tasks.
+            if (PinPersistence) { binding.Ped.SetIsPersistentNoClearTask(true); binding.TookPersistence = true; }
+#endif
+            return true;
+        }
+        // Never release a ped another script has taken.
+        private static void ReleasePersistence(Binding binding)
+        {
+            if (!binding.TookPersistence) return;
+            binding.TookPersistence = false;
+            try { if (binding.Ped.Exists() && Function.Call<bool>(Hash.DOES_ENTITY_BELONG_TO_THIS_SCRIPT, binding.Ped.Handle, false)) binding.Ped.MarkAsNoLongerNeeded(); }
+            catch (Exception) { }
         }
         private bool Valid(Binding value) => value.Ped.Exists() && value.Ped.Model.Hash == value.Model &&
             Function.Call<bool>(Hash.DECOR_EXIST_ON, value.Ped.Handle, Decorator) && Function.Call<int>(Hash.DECOR_GET_INT, value.Ped.Handle, Decorator) == value.Marker;
@@ -212,7 +244,7 @@ namespace LivingNPC.GameAdapter
             }
             tasks.Remove(command.Id);
         }
-        public void Reset() { OnScriptThread(); bindings.Clear(); tasks.Clear(); SelectedActorId = null; Recording = false; ClearSubtitle(); }
+        public void Reset() { OnScriptThread(); foreach (var binding in bindings.Values) ReleasePersistence(binding); bindings.Clear(); dropped.Clear(); tasks.Clear(); SelectedActorId = null; Recording = false; ClearSubtitle(); }
         public void ShowSubtitle(string speaker, string text) { OnScriptThread(); SubtitleRendered = false; subtitle = Clean(speaker + ": " + text); subtitleUntil = DateTimeOffset.UtcNow.AddSeconds(30); }
         public void ClearSubtitle() { OnScriptThread(); subtitle = ""; SubtitleRendered = false; }
         public void ShowStatus(string state, string message) { OnScriptThread(); Recording = state == "recording"; status = Clean(message); }

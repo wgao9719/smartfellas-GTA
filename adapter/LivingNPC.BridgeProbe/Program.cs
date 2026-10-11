@@ -12,6 +12,7 @@ var speechMode = args.Contains("--speech");
 var crashMode = args.Contains("--crash");
 if (speechMode && crashMode) throw new InvalidOperationException("Crash and speech probes are separate.");
 if (!endpoint.IsLoopback) throw new InvalidOperationException("The simulated bridge probe requires loopback.");
+if (args.Contains("--pin")) { await PinProbe.Run(endpoint); return; }
 var generation = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 var request = new SessionRequest { ProfileId = "csharp-probe-" + Guid.NewGuid().ToString("N"), ProtagonistId = "franklin", RuntimeGeneration = generation, GameDatetime = "2013-09-17T12:00:00", Capabilities = new[] { "face_player", "wait_here" }, Manifest = new Dictionary<string, object> {
     ["game_edition"] = "legacy", ["story_mode"] = true, ["gta_build"] = "simulated", ["scripthookv_build"] = "simulated", ["shvdn_build"] = "simulated", ["adapter_version"] = "bridge-probe", ["game_os_version"] = "simulated", ["service_os"] = "macos", ["service_host_mode"] = "local", ["compat_layer"] = "none", ["arch"] = "arm64", ["capability_flags"] = new[] { "fake_game" } } };
@@ -127,7 +128,11 @@ sealed class FakeGame : IGameAdapter
     public string Status = "";
     public bool SubtitleRendered => true;
     public void Forget(Command command) { }
-    public FakeGame(long generation) { actor = new ActorState { ActorId = "probe-npc", RuntimeInstanceId = "probe-instance", Generation = generation, Exists = true, Alive = true, CanMove = true, Distance = 2, Ownership = Ownership.Ambient, Policy = ControlPolicy.Ambient }; }
+    public FakeGame(long generation) { actor = new ActorState { ActorId = "probe-npc", RuntimeInstanceId = "probe-instance", Generation = generation, Exists = true, Alive = true, CanMove = true, Distance = 2, Ownership = Ownership.Ambient, Policy = ControlPolicy.Ambient, Role = PedRole.Civilian, RoleReason = "civilian_evidence", Name = "Probe Neighbor" }; }
+    public ActorState Actor => actor;
+    public int Pins;
+    public string Message = "";
+    public bool Pin(Command command, ActorState state, string displayName) { Pins++; state.Ownership = Ownership.ModOwned; state.Kind = "spawned_persistent"; state.Name = displayName; return true; }
     public WorldState ReadWorld() => new() { ProtagonistId = "franklin" };
     public ActorState? Resolve(string id) => id == actor.ActorId ? actor : null;
     public bool Start(Command command, ActorState state, string action, JObject arguments) { Starts++; return true; }
@@ -135,5 +140,84 @@ sealed class FakeGame : IGameAdapter
     public void Release(Command command, ActorState state, string action) { Releases++; }
     public void ShowSubtitle(string speaker, string text) => Subtitles++;
     public void ClearSubtitle() { }
-    public void ShowStatus(string state, string message) { Status = state; }
+    public void ShowStatus(string state, string message) { Status = state; Message = message; }
+}
+
+// FR-ID-03 round trip: a lying police label is refused, then a civilian is pinned and remembered.
+static class PinProbe
+{
+    private static PedFacts Facts(string model, int pedType, string group, bool registered = false) =>
+        new() { ModelHash = Joaat.Hash(model), PedType = pedType, RelationshipGroupHash = Joaat.Hash(group), Human = true, InModRegistry = registered };
+    public static async Task Run(Uri endpoint)
+    {
+        var generation = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var request = new SessionRequest { ProfileId = "csharp-pin-probe-" + Guid.NewGuid().ToString("N"), ProtagonistId = "franklin", RuntimeGeneration = generation, GameDatetime = "2013-09-17T12:00:00", Capabilities = new[] { "face_player", "wait_here" }, Manifest = new Dictionary<string, object> {
+            ["game_edition"] = "legacy", ["story_mode"] = true, ["gta_build"] = "simulated", ["scripthookv_build"] = "simulated", ["shvdn_build"] = "simulated", ["adapter_version"] = "bridge-probe", ["game_os_version"] = "simulated", ["service_os"] = "macos", ["service_host_mode"] = "local", ["compat_layer"] = "none", ["arch"] = "arm64",
+            ["capability_flags"] = new[] { "fake_game", "role_classifier_v1", "role_table_" + PedRoleTable.Default.Version, "actor_pin" } } };
+        using var bridge = new BridgeWorker(endpoint, request, Environment.GetEnvironmentVariable("LLS_BRIDGE_TOKEN") ?? "");
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(60);
+        while (bridge.Session == null && DateTimeOffset.UtcNow < deadline) await Task.Delay(25);
+        if (bridge.Session == null) throw new InvalidOperationException("Session open failed: " + bridge.LastFailure);
+        var session = bridge.Session;
+        var game = new FakeGame(generation); var npc = game.Actor;
+        var controller = new CommandController(game, session.SessionId, generation, session.PolicyVersion, request.Capabilities);
+        long seq = 0;
+        EventEnvelope Envelope(string kind, string? actorId, object payload) => new() { SessionId = session.SessionId, Seq = ++seq, Kind = kind, ActorId = actorId, ProtagonistId = "franklin", GameDatetime = request.GameDatetime, RuntimeGeneration = generation, Payload = payload };
+        object Snapshot() => new { runtime_handle = 42, runtime_instance_id = npc.RuntimeInstanceId, ownership = npc.Ownership == Ownership.ModOwned ? "mod_owned" : "ambient", control_policy = "ambient", exists = true, alive = true, distance = 2, mission_entity = false, busy = false,
+            position = new { x = 0, y = 0, z = 0 }, name = npc.Name, actor_kind = npc.Kind, role_class = "civilian", role_reason = "civilian_evidence", ped_facts = Facts("a_m_y_business_01", 4, "CIVMALE", npc.Ownership == Ownership.ModOwned) };
+        var world = new { online = false, mission_active = false, cutscene_active = false, random_event_active = false, paused = false, protagonist_id = "franklin" };
+        var finals = new HashSet<string>(); var completed = new HashSet<string>(); var statuses = new List<string>();
+        var nextSnapshot = DateTimeOffset.UtcNow;
+        async Task Until(Func<bool> done, string what)
+        {
+            while (!done())
+            {
+                if (DateTimeOffset.UtcNow > deadline) throw new InvalidOperationException("Pin probe timed out waiting for " + what + ": " + bridge.LastFailure);
+                // The adapter's 500 ms sampling cadence also keeps the probe under the service rate limit.
+                if (DateTimeOffset.UtcNow >= nextSnapshot)
+                {
+                    bridge.Snapshots.ReplaceOldest(Envelope("world.snapshot", null, world));
+                    bridge.Snapshots.ReplaceOldest(Envelope("actor.snapshot", npc.ActorId, Snapshot()));
+                    nextSnapshot = DateTimeOffset.UtcNow.AddMilliseconds(500);
+                }
+                while (bridge.Commands.TryTake(out var command))
+                {
+                    if (command.Kind == "dialogue.chunk" && (bool?)command.Payload["final"] == true) finals.Add(command.Id);
+                    if (command.Kind == "status") statuses.Add((string?)command.Payload["message"] ?? "");
+                    controller.Commands.TryAdd(command);
+                }
+                controller.Tick(DateTimeOffset.UtcNow);
+                while (controller.Acks.TryTake(out var ack)) { if (ack.Status == "completed") completed.Add(ack.CommandId); bridge.Acks.TryAdd(ack); }
+                await Task.Delay(20);
+            }
+        }
+        // A police officer whose adapter label claims "civilian" stays protected on the service.
+        var cop = new { runtime_handle = 43, runtime_instance_id = "cop-instance", ownership = "ambient", control_policy = "ambient", exists = true, alive = true, distance = 3, mission_entity = false, busy = false,
+            position = new { x = 1, y = 0, z = 0 }, name = "Probe Officer", role_class = "civilian", role_reason = "civilian_evidence", ped_facts = Facts("s_m_y_cop_01", 6, "COP") };
+        bridge.Events.TryAdd(Envelope("world.snapshot", null, world));
+        bridge.Events.TryAdd(Envelope("actor.snapshot", "probe-cop", cop));
+        var refused = Envelope("player.utterance_text", "probe-cop", new { text = "Can you help me?", input_mode = "typed", scene_id = "pin-probe-cop" });
+        bridge.Events.TryAdd(refused);
+        await Until(() => bridge.Events.Count == 0, "the police utterance decision");
+        if (refused.Accepted) throw new InvalidOperationException("A lying police snapshot accepted an utterance.");
+        var notices = new List<string>(); while (bridge.Notices.TryTake(out var notice)) notices.Add(notice);
+        if (!notices.Contains("event_rejected_409")) throw new InvalidOperationException("The police utterance was not refused: " + string.Join(",", notices));
+        bridge.Events.TryAdd(Envelope("actor.snapshot", npc.ActorId, Snapshot()));
+        bridge.Events.TryAdd(Envelope("player.utterance_text", npc.ActorId, new { text = "Please look at me.", input_mode = "typed", scene_id = "pin-probe-before" }));
+        await Until(() => finals.Count == 1 && finals.All(completed.Contains) && bridge.Acks.Count == 0, "the pre-pin turn");
+        bridge.Events.TryAdd(Envelope("actor.pin_requested", npc.ActorId, new { runtime_instance_id = npc.RuntimeInstanceId }));
+        await Until(() => game.Pins == 1 && statuses.Any(m => m.StartsWith("Pinned as ")) && bridge.Acks.Count == 0, "the pin acknowledgment");
+        bridge.Events.TryAdd(Envelope("actor.snapshot", npc.ActorId, Snapshot()));
+        bridge.Events.TryAdd(Envelope("player.utterance_text", npc.ActorId, new { text = "Do you remember me?", input_mode = "typed", scene_id = "pin-probe-after" }));
+        await Until(() => finals.Count == 2 && finals.All(completed.Contains) && bridge.Acks.Count == 0, "the post-pin turn");
+        using var http = new HttpClient(new HttpClientHandler { UseProxy = false }) { BaseAddress = endpoint };
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", session.Token);
+        var actor = JObject.Parse(await http.GetStringAsync("/v1/diagnostics"))["actors"]![npc.ActorId]!;
+        if ((string?)actor["actor_kind"] != "spawned_persistent" || (string?)actor["ownership"] != "mod_owned" || (string?)actor["control_policy"] != "ambient" || (string?)actor["role_class"] != "civilian")
+            throw new InvalidOperationException("The pinned snapshot was not accepted as mod-owned: " + actor);
+        var close = new StringContent(Wire.Encode(new { runtime_generation = generation }), System.Text.Encoding.UTF8, "application/json");
+        (await http.PostAsync("/v1/bridge/sessions/" + session.SessionId + "/close", close)).EnsureSuccessStatusCode();
+        Console.WriteLine(Wire.Encode(new { status = "passed", mode = "simulated_game_pin", game_verified = false, profile_id = request.ProfileId, pinned_actor_id = npc.ActorId, display_name = npc.Name,
+            lying_police_utterance_refused = true, pin_calls = game.Pins, pin_status = statuses.First(m => m.StartsWith("Pinned as ")), post_pin_turn_delivered = true, actor_kind_after_pin = (string?)actor["actor_kind"] }));
+    }
 }
