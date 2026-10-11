@@ -69,7 +69,7 @@ namespace LivingNPC.Core
                 var observation = game.Observe(item.Command, actor!, item.Action);
                 if (observation.Status == EffectStatus.Running) continue;
                 var status = observation.Status == EffectStatus.Completed ? "completed" : observation.Status == EffectStatus.TakenOver ? "canceled" : "failed";
-                if (observation.Status == EffectStatus.Failed) ReleaseIfOurs(item);
+                if (observation.Status == EffectStatus.Failed || observation.Status == EffectStatus.Completed) ReleaseIfOurs(item);
                 Acknowledge(item.Command, status, observation.Reason, observation.Facts); ForgetAction(item);
                 if (observation.Status == EffectStatus.Completed) nativeFailures = 0;
                 else if (observation.Status == EffectStatus.Failed) NativeFailed();
@@ -140,12 +140,18 @@ namespace LivingNPC.Core
                 Acknowledge(command, "completed", "pinned", new Dictionary<string, object> { ["actor_id"] = actor!.ActorId }); return;
             }
             if (command.Kind != "action.execute") { Acknowledge(command, "rejected", "unknown_command"); return; }
-            if (active.ContainsKey(actor!.ActorId)) { Acknowledge(command, "rejected", "actor_task_conflict"); return; }
             var action = (string)command.Payload["action_id"]!;
+            active.TryGetValue(actor!.ActorId, out var previousAction);
+            if (action == "stop_following" && (previousAction == null || previousAction.Action != "follow_player" || !CanContinue(previousAction, actor, world)))
+            { Acknowledge(command, "rejected", "no_mod_follow_task"); return; }
+            if (previousAction != null && !(action == "stop_following" && previousAction.Action == "follow_player"))
+            { Acknowledge(command, "rejected", "actor_task_conflict"); return; }
             if (!game.Start(command, actor, action, (JObject)command.Payload["arguments"]!)) { Acknowledge(command, "rejected", "native_task_refused"); NativeFailed(); return; }
+            if (previousAction != null) { Acknowledge(previousAction.Command, "canceled", "stop_following"); ForgetAction(previousAction); }
             active.Add(actor.ActorId, new Active { Command = command, Action = action, Instance = actor.RuntimeInstanceId });
             safety.Started(actor.ActorId, action, now);
-            Acknowledge(command, "started", "task_dispatched", new Dictionary<string, object> { ["task_dispatched"] = true });
+            var loadingGesture = action == "play_verified_gesture";
+            Acknowledge(command, "started", loadingGesture ? "animation_loading" : "task_dispatched", new Dictionary<string, object> { ["task_dispatched"] = !loadingGesture });
         }
         private void NativeFailed()
         {
@@ -165,10 +171,14 @@ namespace LivingNPC.Core
             if (MayRelease(item, actor, game.ReadWorld())) game.Release(item.Command, actor!, item.Action);
         }
         private bool CanContinue(Active item, ActorState? actor, WorldState world) =>
-            MayRelease(item, actor, world) && actor!.Distance >= 0 && actor.Distance <= 15;
+            MayRelease(item, actor, world) && actor!.Distance >= 0 && actor.Distance <=
+                (item.Action == "follow_player" ? (double?)item.Command.Payload["arguments"]?["max_follow_meters"] ?? 15 : LocalActionController.Moves(item.Action) ? 30 : 15) &&
+            (!LocalActionController.Moves(item.Action) || actor.CanMove && actor.Policy == ControlPolicy.Ambient);
         private bool MayRelease(Active item, ActorState? actor, WorldState world) =>
             world.Safe && actor != null && actor.Exists && actor.Alive && actor.Generation == Generation && actor.RuntimeInstanceId == item.Instance &&
-            !actor.Busy && !actor.InCombat && actor.Policy != ControlPolicy.Protected && (actor.Ownership == Ownership.Ambient || actor.Ownership == Ownership.ModOwned);
+            !actor.Busy && !actor.InCombat && actor.Policy != ControlPolicy.Protected && (!actor.MissionEntity || actor.Ownership == Ownership.ModOwned) &&
+            (actor.Policy != ControlPolicy.ServiceLimited || item.Action == "face_player") && (actor.Ownership == Ownership.Ambient || actor.Ownership == Ownership.ModOwned);
+        public bool IsFollowing(string actorId, string instance) => active.TryGetValue(actorId, out var item) && item.Action == "follow_player" && item.Instance == instance;
         private static Dictionary<string, object> Rendered(Subtitle subtitle) => new Dictionary<string, object> { ["text"] = subtitle.Text, ["delivery"] = "subtitle", ["display_rule"] = DisplayText.Rule };
         private static bool AudioForScene(Subtitle subtitle, string scene) => (string?)subtitle.Command.Payload["delivery_mode"] == "audio" && (string?)subtitle.Command.Payload["scene_id"] == scene;
         private void ReplacePriorAudio(string scene)

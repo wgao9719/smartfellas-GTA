@@ -10,7 +10,7 @@ using Newtonsoft.Json.Linq;
 
 namespace LivingNPC.GameAdapter
 {
-    internal sealed class GtaGameAdapter : IGameAdapter
+    internal sealed partial class GtaGameAdapter : IGameAdapter
     {
         private sealed class Binding
         {
@@ -27,6 +27,10 @@ namespace LivingNPC.GameAdapter
             public int Duration, Hash;
             public ActionMotionTracker Motion = null!;
             public bool ObservedActive;
+            public string ActorId = "", Action = "", Dictionary = "", Animation = "";
+            public LocalActionController? Local;
+            public int Revision, PriorHash;
+            public bool AnimationDispatched;
         }
         private readonly AdapterLog log;
         private readonly ThreadAffinity thread = new ThreadAffinity();
@@ -44,7 +48,16 @@ namespace LivingNPC.GameAdapter
         public void ClearSelection() { OnScriptThread(); SelectedActorId = null; }
         public bool Recording { get; private set; }
         public bool SubtitleRendered { get; private set; }
-        public void Forget(Command command) { OnScriptThread(); tasks.Remove(command.Id); }
+        public void Forget(Command command)
+        {
+            OnScriptThread();
+            tasks.TryGetValue(command.Id, out var task); tasks.Remove(command.Id);
+            if (task?.Dictionary.Length > 0)
+            {
+                try { Function.Call(Hash.REMOVE_ANIM_DICT, task.Dictionary); }
+                catch (Exception) { log.Write("animation_dictionary_release_failed"); }
+            }
+        }
         public GtaGameAdapter(AdapterLog log)
         {
             this.log = log;
@@ -270,12 +283,16 @@ namespace LivingNPC.GameAdapter
                 Role = classified.Role, RoleReason = classified.Reason, Facts = facts, Kind = binding.Kind,
                 Busy = ped.IsInVehicle() || ped.IsRagdoll || ped.IsFleeing || ped.IsOnFire,
                 InCombat = ped.IsInCombat, CanMove = !ped.IsInVehicle() && !ped.IsRagdoll,
+                ModFollowing = tasks.Values.Any(t => t.ActorId == actorId && t.Action == "follow_player"),
+                ObservedThreat = Function.Call<bool>(Hash.IS_PLAYER_FREE_AIMING_AT_ENTITY, Game.Player.Handle, ped.Handle),
                 Distance = pos.DistanceTo(Game.Player.Character.Position), X = pos.X, Y = pos.Y, Z = pos.Z };
         }
         public bool Start(Command command, ActorState actor, string actionId, JObject arguments)
         {
             OnScriptThread();
             if (!bindings.TryGetValue(actor.ActorId, out var binding) || !Valid(binding)) return false;
+            if (binding.Instance != command.RuntimeInstanceId || binding.Generation != command.RuntimeGeneration || !ReadWorld().Safe) return false;
+            if (LocalActionController.Supported(actionId)) return StartLocal(command, actor, binding, actionId, arguments);
             if (!TryPosition(binding.Ped, out var origin)) return false;
             var motion = new ActionMotionTracker(MonotonicMilliseconds(), origin.X, origin.Y, origin.Z);
             if (!motion.IsValid) return false;
@@ -283,7 +300,7 @@ namespace LivingNPC.GameAdapter
             if (actionId == "face_player") binding.Ped.Task.TurnTo(Game.Player.Character, duration);
             else if (actionId == "wait_here") binding.Ped.Task.StandStill(duration);
             else return false;
-            tasks[command.Id] = new TaskRecord { Motion = motion, Duration = duration,
+            tasks[command.Id] = new TaskRecord { ActorId = actor.ActorId, Action = actionId, Motion = motion, Duration = duration,
                 Hash = Game.GenerateHash(actionId == "face_player" ? "SCRIPT_TASK_TURN_PED_TO_FACE_ENTITY" : "SCRIPT_TASK_STAND_STILL") };
             return true;
         }
@@ -303,6 +320,7 @@ namespace LivingNPC.GameAdapter
         {
             OnScriptThread();
             if (!tasks.TryGetValue(command.Id, out var task) || !bindings.TryGetValue(actor.ActorId, out var binding) || !Valid(binding)) return new EffectObservation { Status = EffectStatus.Failed, Reason = "binding_lost" };
+            if (task.Local != null) return ObserveLocal(task, binding);
             if (!TryPosition(binding.Ped, out var position))
                 return new EffectObservation { Status = EffectStatus.Failed, Reason = "movement_sample_unavailable" };
             if (!task.Motion.TrySample(MonotonicMilliseconds(), position.X, position.Y, position.Z, out var motion))
@@ -345,10 +363,15 @@ namespace LivingNPC.GameAdapter
                 binding.Facts = null;
                 if (!Valid(binding)) return;
                 var statusNow = Function.Call<int>(Hash.GET_SCRIPT_TASK_STATUS, binding.Ped.Handle, task.Hash);
-                if (statusNow == 0 || statusNow == 1) binding.Ped.Task.ClearAll();
-            }, () => tasks.Remove(command.Id), log);
+                if (task.Local?.Gesture.Length > 0)
+                {
+                    if (Function.Call<bool>(Hash.IS_ENTITY_PLAYING_ANIM, binding.Ped.Handle, task.Dictionary, task.Animation, 3))
+                        Function.Call(Hash.STOP_ANIM_TASK, binding.Ped.Handle, task.Dictionary, task.Animation, -4.0f);
+                }
+                else if (statusNow == 0 || statusNow == 1) binding.Ped.Task.ClearAll();
+            }, () => Forget(command), log);
         }
-        public void Reset() { OnScriptThread(); foreach (var binding in bindings.Values) { ReleasePersistence(binding); binding.Guard.Invalidate(); } bindings.Clear(); dropped.Clear(); tasks.Clear(); SelectedActorId = null; Recording = false; status.Clear(); ClearSubtitle(); }
+        public void Reset() { OnScriptThread(); foreach (var binding in bindings.Values) { ReleasePersistence(binding); binding.Guard.Invalidate(); } bindings.Clear(); dropped.Clear(); foreach (var id in tasks.Keys.ToArray()) Forget(new Command { Id = id }); SelectedActorId = null; Recording = false; status.Clear(); ClearSubtitle(); }
         // Dialogue renders verbatim. Unsafe text never renders, so it never earns a subtitle receipt.
         public void ShowSubtitle(string speaker, string text)
         {

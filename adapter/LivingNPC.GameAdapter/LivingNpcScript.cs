@@ -69,7 +69,7 @@ namespace LivingNPC.GameAdapter
             var devLan = settings.GetBoolean("Service", "DevLAN", false);
 #if DEVELOPMENT
             const bool developmentBuild = true;
-            capabilities = settings.GetBoolean("Development", "EnableUnverifiedActions", false) ? new[] { "face_player", "wait_here" } : Array.Empty<string>();
+            capabilities = settings.GetBoolean("Development", "EnableUnverifiedActions", false) ? new[] { "face_player", "wait_here", "follow_player", "stop_following", "go_to_safe_point", "wander_nearby", "flee_from_threat", "play_verified_gesture" } : Array.Empty<string>();
 #else
             const bool developmentBuild = false;
             capabilities = Array.Empty<string>();
@@ -221,6 +221,7 @@ namespace LivingNPC.GameAdapter
                 ownership = actor.Ownership == Ownership.ModOwned ? "mod_owned" : actor.Ownership == Ownership.GameScriptOwned ? "game_script_owned" : actor.Ownership == Ownership.Unknown ? "unknown" : "ambient",
                 control_policy = actor.Policy == ControlPolicy.Protected ? "protected" : actor.Policy == ControlPolicy.ServiceLimited ? "service_limited" : "ambient", exists = actor.Exists, alive = actor.Alive,
                 distance = actor.Distance, mission_entity = actor.MissionEntity, busy = actor.Busy, in_combat = actor.InCombat, can_move = actor.CanMove,
+                mod_following = actor.ModFollowing, observed_threat = actor.ObservedThreat,
                 position = new { x = actor.X, y = actor.Y, z = actor.Z }, name = actor.Name, actor_kind = actor.Kind,
                 role_class = PedRoleTable.WireName(actor.Role), role_reason = actor.RoleReason, ped_facts = actor.Facts });
             if (reliable) { if (!bridge.Events.TryAdd(snapshot)) { game.ShowStatus("error", "Living Los Santos: observation queue is full."); return null; } }
@@ -235,6 +236,17 @@ namespace LivingNPC.GameAdapter
             targetSnapshot = SendSnapshot(actor, true);
             if (targetSnapshot == null) { input.Reset(); return false; }
             return true;
+        }
+        private bool PrepareTurn()
+        {
+            var actor = game.SelectedActorId == null ? null : game.Resolve(game.SelectedActorId);
+            if (input.CanContinueFollow(actor, game.ReadWorld(), generation, controller))
+            {
+                targetSnapshot = SendSnapshot(actor, true);
+                return targetSnapshot != null;
+            }
+            CancelInput(clearTarget: false);
+            return LockTarget();
         }
         private bool Control(string kind, string? canceledScene = null)
         {
@@ -320,15 +332,13 @@ namespace LivingNPC.GameAdapter
             if (args.KeyCode == pinKey) { RequestPin(); return; }
             if (args.KeyCode == textKey)
             {
-                CancelInput(clearTarget: false);
-                if (LockTarget()) { typing = ""; game.ShowStatus("typing", "Living Los Santos: typing. Enter to send; Escape to cancel."); }
+                if (PrepareTurn()) { typing = ""; game.ShowStatus("typing", "Living Los Santos: typing. Enter to send; Escape to cancel."); }
                 else game.ShowStatus("unavailable", "Living Los Santos: select an available target with " + targetKey + ".");
                 return;
             }
             if ((args.KeyCode == pttKey || args.KeyCode == whisperKey) && !input.PushToTalkHeld)
             {
-                CancelInput(clearTarget: false);
-                if (LockTarget() && input.StartPushToTalk((int)args.KeyCode, args.KeyCode == whisperKey))
+                if (PrepareTurn() && input.StartPushToTalk((int)args.KeyCode, args.KeyCode == whisperKey))
                 {
                     pendingPttDeadline = DateTimeOffset.UtcNow.AddSeconds(5);
                     game.ShowStatus("preparing_mic", "Living Los Santos: confirming the target before microphone capture.");

@@ -20,6 +20,7 @@ namespace LivingNPC.Core
         public int Handle;
         public long Generation;
         public bool Exists, Alive, Busy, InCombat, MissionEntity, CanMove;
+        public bool ModFollowing, ObservedThreat;
         public float Distance;
         public Ownership Ownership;
         public ControlPolicy Policy;

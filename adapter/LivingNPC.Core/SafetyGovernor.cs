@@ -30,17 +30,21 @@ namespace LivingNPC.Core
             var action = (string?)command.Payload["action_id"] ?? "";
             if (!capabilities.Contains(action)) return "capability_unverified";
             if (actor.Policy == ControlPolicy.ServiceLimited && action != "face_player") return "service_limited";
-            if (action != "face_player" && action != "wait_here") return "no_executor";
+            if (!LocalActionController.Supported(action) && action != "face_player" && action != "wait_here") return "no_executor";
             if (command.Payload["arguments"] is not JObject args) return "invalid_arguments";
-            // These bounded G0 primitives accept only a duration. Model text cannot add authority.
             var argumentError = ActionRegistry.Default.ValidateArguments(action, args);
             if (argumentError != null) return argumentError;
+            if (LocalActionController.Moves(action))
+            {
+                if (!actor.CanMove) return "actor_cannot_move";
+                if ((bool?)command.Payload["consent"] != true && !(action == "flee_from_threat" && actor.ObservedThreat)) return "consent_required";
+            }
             var duration = args["duration_seconds"];
             // G0's unverified native prototype has a stricter duration than metadata.
-            if (duration != null && (double)duration > 5) return "invalid_duration";
+            if ((action == "face_player" || action == "wait_here") && duration != null && (double)duration > 5) return "invalid_duration";
             if (cooldowns.TryGetValue(actor.ActorId + ":" + action, out var until) && now < until) return "cooldown";
             return null;
         }
-        public void Started(string actorId, string action, DateTimeOffset now) { cooldowns[actorId + ":" + action] = now.AddSeconds(2); }
+        public void Started(string actorId, string action, DateTimeOffset now) { cooldowns[actorId + ":" + action] = now.AddSeconds(ActionRegistry.Default.Cooldown(action)); }
     }
 }

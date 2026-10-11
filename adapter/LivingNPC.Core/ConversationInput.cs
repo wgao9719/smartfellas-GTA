@@ -42,11 +42,13 @@ namespace LivingNPC.Core
             return Bound && Generation == generation && Eligible(actor, world, generation, 15) &&
                 actor!.ActorId == ActorId && actor.RuntimeInstanceId == RuntimeInstanceId;
         }
+        public bool CanContinueFollow(ActorState? actor, WorldState world, long generation, CommandController? controller) =>
+            IsCurrent(actor, world, generation) && !PushToTalkHeld && controller?.IsFollowing(actor!.ActorId, actor.RuntimeInstanceId) == true;
 
         public bool StartPushToTalk(int key, bool whisper)
         {
             if (!Bound || PushToTalkHeld) return false;
-            PushToTalkHeld = true; PushToTalkKey = key; Whisper = whisper; return true;
+            PushToTalkHeld = true; PushToTalkStartQueued = false; PushToTalkKey = key; Whisper = whisper; return true;
         }
 
         public bool StopPushToTalk(int key)
