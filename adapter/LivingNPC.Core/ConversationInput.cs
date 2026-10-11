@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace LivingNPC.Core
 {
-    // State only. The adapter owns key events; no audio or game call lives here.
+    // Input lifecycle. The adapter owns key events and selection; no GTA dependency lives here.
     public sealed class ConversationInput
     {
         public string? SceneId { get; private set; }
@@ -78,6 +78,20 @@ namespace LivingNPC.Core
             if (!PushToTalkHeld || PushToTalkStartQueued || !targetSnapshotAccepted) return false;
             PushToTalkStartQueued = true; return true;
         }
+
+        // Turn/pin restarts preserve the selection; explicit cancellation clears it by default.
+        public void Cancel(CommandController? controller, Action<string?> cancelScene, Action clearSelection, bool clearTarget = true)
+        {
+            controller?.Cancel(SceneId);
+            if (clearTarget && Bound) controller?.Cancel(null);
+            if (Bound || clearTarget) cancelScene(clearTarget ? null : SceneId);
+            Reset();
+            if (clearTarget) clearSelection();
+        }
+
+        // Reserve Escape for GTA's pause menu outside typing. The native behavior needs rig verification.
+        public static bool ShouldCancel(bool typing, bool configuredCancel, bool escape) =>
+            typing ? escape : configuredCancel && !escape;
 
         public void Reset()
         {

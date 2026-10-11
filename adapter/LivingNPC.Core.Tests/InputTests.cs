@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using LivingNPC.Core;
+using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace LivingNPC.Core.Tests;
@@ -7,6 +8,108 @@ namespace LivingNPC.Core.Tests;
 public sealed class InputTests
 {
     private const int PttKey = 78, WhisperKey = 66;
+    [Theory][InlineData(false, false)][InlineData(true, false)][InlineData(false, true)][InlineData(true, true)]
+    public void CancelClearsSelectionWithOrWithoutBoundInput(bool bound, bool paused)
+    {
+        var game = new FakeGame(); var input = new ConversationInput(); var controller = ControllerTests.Controller(game);
+        string? selected = game.Actor.ActorId, canceledScene = null;
+        if (bound)
+        {
+            Assert.True(input.TryBind(game.Actor, game.World, 7));
+            Assert.True(input.StartPushToTalk(PttKey, false));
+        }
+        var scene = input.SceneId;
+        var action = ControllerTests.Action(); action.Payload["scene_id"] = scene ?? "scene-1";
+        controller.Commands.TryAdd(action); controller.Tick(ControllerTests.Now);
+        Assert.Equal(1, game.Starts);
+        game.World.Paused = paused;
+        input.Cancel(controller, canceled => canceledScene = canceled, () => selected = null);
+        Assert.Null(canceledScene); Assert.False(input.Bound); Assert.False(input.PushToTalkHeld);
+        Assert.Null(selected); Assert.Equal(paused ? 0 : 1, game.Releases);
+    }
+
+    [Fact] public void IdleSelectionClearsWithoutAControllerOrScene()
+    {
+        var input = new ConversationInput(); string? selected = "npc"; var serviceCanceled = false;
+        input.Cancel(null, scene =>
+        {
+            Assert.Null(scene);
+            var wire = JObject.Parse(Wire.Encode(new EventEnvelope { Kind = "scene.cancel", Payload = new { scene_id = scene } }));
+            Assert.Empty((JObject)wire["payload"]!); serviceCanceled = true;
+        }, () => selected = null);
+        Assert.Null(selected); Assert.True(serviceCanceled);
+    }
+
+    [Fact] public void ExplicitCancelAlsoStopsUnsolicitedWorkOutsideTheBoundScene()
+    {
+        var game = new FakeGame(); var input = new ConversationInput(); var controller = ControllerTests.Controller(game);
+        Assert.True(input.TryBind(game.Actor, game.World, 7));
+        controller.Commands.TryAdd(ControllerTests.Action()); controller.Tick(ControllerTests.Now);
+        controller.Commands.TryAdd(ControllerTests.Action("queued-action"));
+        string? canceledScene = "not-sent";
+        input.Cancel(controller, scene => canceledScene = scene, () => { });
+        Assert.Equal(1, game.Releases); Assert.Equal(0, controller.Commands.Count);
+        Assert.Null(canceledScene); Assert.Equal(1, controller.CanceledSceneCount);
+    }
+
+    [Fact] public void CancelStopsActiveAndQueuedWorkBeforeResettingTheScene()
+    {
+        var game = new FakeGame { SubtitleRendered = false }; var input = new ConversationInput();
+        var controller = ControllerTests.Controller(game);
+        Assert.True(input.TryBind(game.Actor, game.World, 7)); Assert.True(input.StartPushToTalk(PttKey, false));
+        var scene = input.SceneId;
+        var action = ControllerTests.Action(); action.Payload["scene_id"] = scene;
+        controller.Commands.TryAdd(action);
+        for (var n = 0; n < 2; n++)
+        {
+            var subtitle = ControllerTests.Action("subtitle-" + n); subtitle.Kind = "dialogue.chunk";
+            subtitle.Payload = JObject.FromObject(new { text = "Hello " + n, speaker = "Neighbor", scene_id = scene, turn_id = "turn-1", chunk_index = n, final = false });
+            controller.Commands.TryAdd(subtitle);
+        }
+        controller.Tick(ControllerTests.Now);
+        Assert.Equal(1, game.Starts); Assert.Equal("Hello 0", game.LastSubtitle);
+        var queued = ControllerTests.Action("queued-action"); queued.Payload["scene_id"] = scene;
+        controller.Commands.TryAdd(queued);
+        var sentCancellation = false; string? selected = game.Actor.ActorId;
+        input.Cancel(controller, canceled =>
+        {
+            Assert.Null(canceled);
+            Assert.Equal(scene, input.SceneId); Assert.Equal(0, controller.Commands.Count);
+            Assert.Equal("", game.LastSubtitle); Assert.Equal(1, game.Releases);
+            sentCancellation = true;
+        }, () => selected = null);
+        Assert.True(sentCancellation); Assert.False(input.Bound); Assert.False(input.PushToTalkHeld); Assert.Null(selected);
+        var acks = new List<Ack>(); while (controller.Acks.TryTake(out var ack)) acks.Add(ack);
+        Assert.Equal(4, acks.FindAll(ack => ack.Status == "canceled").Count);
+        controller.Tick(ControllerTests.Now.AddMilliseconds(100)); Assert.Equal(1, game.Starts); Assert.Equal("", game.LastSubtitle);
+    }
+
+    [Theory][InlineData("typed")][InlineData("ptt")][InlineData("whisper")][InlineData("pin")]
+    public void StartingAnotherInputKeepsTheSelectionAndCancelsTheOldScene(string mode)
+    {
+        var game = new FakeGame(); var input = new ConversationInput();
+        Assert.True(input.TryBind(game.Actor, game.World, 7)); Assert.True(input.StartPushToTalk(PttKey, false));
+        var oldScene = input.SceneId; string? canceledScene = null, selected = game.Actor.ActorId;
+        input.Cancel(null, canceled => canceledScene = canceled, () => selected = null, clearTarget: false);
+        Assert.Equal(oldScene, canceledScene); Assert.Equal(game.Actor.ActorId, selected);
+        Assert.False(input.Bound); Assert.False(input.PushToTalkHeld);
+        var actor = game.Resolve(selected!);
+        if (mode == "pin") { Assert.Null(PinPolicy.Check(actor, game.World, 7)); return; }
+        Assert.True(input.TryBind(actor, game.World, 7)); Assert.NotEqual(oldScene, input.SceneId);
+        if (mode == "typed") Assert.NotNull(input.TypedPayload("Hello"));
+        else Assert.True(input.StartPushToTalk(mode == "whisper" ? WhisperKey : PttKey, mode == "whisper"));
+    }
+
+    [Theory]
+    [InlineData(false, false, false, false)][InlineData(false, true, false, true)]
+    [InlineData(false, false, true, false)][InlineData(false, true, true, false)]
+    [InlineData(true, false, false, false)][InlineData(true, true, false, false)]
+    [InlineData(true, false, true, true)][InlineData(true, true, true, true)]
+    public void CancelKeyKeepsEscapeForPauseOutsideTyping(bool typing, bool configuredCancel, bool escape, bool expected)
+    {
+        Assert.Equal(expected, ConversationInput.ShouldCancel(typing, configuredCancel, escape));
+    }
+
     [Fact] public void PushToTalkKeepsSceneAndInstanceUntilCancellation()
     {
         var game = new FakeGame(); var input = new ConversationInput();
