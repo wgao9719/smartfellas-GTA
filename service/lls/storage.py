@@ -145,9 +145,34 @@ class Repository:
 
     def _migrate(self) -> None:
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version > 3:
+        if version > 4:
             raise RuntimeError("database schema is newer than this service")
+        if version == 4:
+            return
         if version == 3:
+            # Social windows index only decision- and hearing-shaped memories, so action
+            # outcomes and reports never lengthen a walk. Erasure markers and source events
+            # gain lookups. The source index leads with event_id: on default statistics a
+            # profile-first index wins profile+memory_id joins and scans the whole profile.
+            # Derivations hold only identifiers: this actor's memories citing the derived
+            # event repeat or answer this actor's memories citing the source event.
+            self.connection.executescript("""
+            BEGIN IMMEDIATE;
+            CREATE INDEX IF NOT EXISTS scrub_lookup ON scrub_audit(profile_id,operation,object_id);
+            CREATE INDEX IF NOT EXISTS memory_social_window
+              ON memories(profile_id,actor_id,protagonist_id,provenance,game_datetime)
+              WHERE provenance='system_fact' AND substr(text,1,11)='I chose to '
+              OR provenance='reported' AND instr(text,' told me: ')>1;
+            CREATE INDEX IF NOT EXISTS memory_source_event ON memory_sources(event_id,profile_id);
+            CREATE TABLE IF NOT EXISTS memory_derivations (
+              profile_id TEXT NOT NULL REFERENCES profiles ON DELETE CASCADE,
+              actor_id TEXT NOT NULL, source_event_id TEXT NOT NULL,
+              derived_event_id TEXT NOT NULL,
+              PRIMARY KEY(profile_id,actor_id,source_event_id,derived_event_id)
+            );
+            PRAGMA user_version=4;
+            COMMIT;
+            """)
             return
         if version == 2:
             self.connection.executescript("""
@@ -186,6 +211,7 @@ class Repository:
             PRAGMA user_version=3;
             COMMIT;
             """)
+            self._migrate()
             return
         if version == 1:
             self.connection.executescript("""

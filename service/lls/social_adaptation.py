@@ -3,21 +3,25 @@
 Own explicit decisions express a temporary scene boundary. Exact confirmed hearing
 supports familiarity with the teller, never trust in the content or its subjects.
 No derived counters are stored, so corrections, deletion, rewind, and decay apply
-on every read. Callers must keep each returned owner's history private.
+on every read. Each owner's decisions and hearing are separate newest-first walks
+over owner-scoped indexes, bounded by a per-owner SQLite work budget. Unrelated
+actors, profiles, and erasure markers add no walk work. Callers must keep each
+returned owner's history private.
 """
 
 import json
 import math
 import sqlite3
 from datetime import datetime, timedelta
+from operator import itemgetter
 
 from .storage import _date, _protagonist
 
 MAX_OWNERS = 128
 MAX_ANCHORS_PER_OWNER = 128
-# 128 owners with 100 recent decision anchors each use about 3.2M steps.
-# Keep a fixed ceiling even when retained history exceeds the returned limits.
-SQL_STEP_BUDGET = 4_000_000
+# Full 64-anchor decision and hearing windows use well under half of this.
+# Exhausting the budget fails closed instead of returning a partial history.
+SQL_STEPS_PER_OWNER = 64_000
 HISTORY_DAYS = 56
 CONTACT_HALF_LIFE_DAYS = 7
 BOUNDARY_HALF_LIFE_DAYS = 1
@@ -50,12 +54,59 @@ def _empty():
     }
 
 
+def _history_sql(lineage_size):
+    """Return one owner's newest anchors of one provenance in the visible timeline."""
+    branches = " OR ".join("(m.branch_id=? AND m.game_datetime<=?)" for _ in range(lineage_size))
+    # Speaker data validates an exact hearing receipt but never enters another
+    # actor's prompt. CROSS JOIN keeps the indexed owner window as the outer loop,
+    # so rows arrive in index order and LIMIT ends the walk without a sort.
+    return (
+        "SELECT m.actor_id,m.memory_id,m.text,m.provenance,"
+        "m.confidence AS memory_confidence,m.decay_days,e.event_id,e.data,"
+        "e.game_datetime,e.branch_id,e.rowid AS source_order,"
+        "speaker.data AS speaker_data,speaker.branch_id AS speaker_branch,"
+        "speaker.game_datetime AS speaker_time "
+        "FROM memories m INDEXED BY memory_social_window "
+        "CROSS JOIN memory_sources s ON s.profile_id=m.profile_id AND s.memory_id=m.memory_id "
+        "CROSS JOIN events e ON e.profile_id=s.profile_id AND e.event_id=s.event_id "
+        "LEFT JOIN events speaker ON speaker.profile_id=e.profile_id "
+        "AND speaker.event_id=json_extract(e.data,'$.payload.heard_delivery_event_id') "
+        "WHERE m.profile_id=? AND m.actor_id=? AND m.protagonist_id=? AND m.provenance=? "
+        "AND m.game_datetime>=? AND m.game_datetime<=? AND (" + branches + ") "
+        # The partial index admits only memories that can pass anchor validation.
+        "AND (m.provenance='system_fact' AND substr(m.text,1,11)='I chose to ' "
+        "OR m.provenance='reported' AND instr(m.text,' told me: ')>1) "
+        "AND e.protagonist_id=m.protagonist_id AND m.visibility_scope='private' "
+        "AND m.branch_id=e.branch_id AND m.game_datetime=e.game_datetime "
+        "AND (m.session_id IS NULL OR m.session_id=?) "
+        "AND (m.expires_at IS NULL OR m.expires_at>?) "
+        "AND m.memory_id=e.event_id||':memory' "
+        "AND NOT EXISTS (SELECT 1 FROM memory_sources other "
+        "WHERE other.memory_id=m.memory_id AND other.event_id!=s.event_id) "
+        "AND json_extract(e.data,'$.provenance')=m.provenance "
+        "AND CASE m.provenance WHEN 'reported' THEN "
+        "json_extract(e.data,'$.event_type')='social.quote_delivered' "
+        "AND speaker.event_id IS NOT NULL ELSE json_extract(e.data,'$.event_type') IN "
+        "('social.accept','social.refuse','social.continue','social.withdraw') END "
+        # Three separate probes each seek scrub_lookup instead of scanning markers.
+        "AND NOT EXISTS (SELECT 1 FROM scrub_audit d WHERE d.profile_id=m.profile_id "
+        "AND d.operation='delete_memory' AND d.object_id=m.memory_id) "
+        "AND NOT EXISTS (SELECT 1 FROM scrub_audit d WHERE d.profile_id=m.profile_id "
+        "AND d.operation='delete_event' AND d.object_id IN (e.event_id,speaker.event_id)) "
+        "AND NOT EXISTS (SELECT 1 FROM scrub_audit d WHERE d.profile_id=m.profile_id "
+        "AND d.operation='forget_social_source' "
+        "AND d.object_id=json_array(m.actor_id,e.event_id)) "
+        "ORDER BY m.game_datetime DESC,m.rowid DESC LIMIT ?"
+    )
+
+
 class SocialAdaptation:
-    def __init__(self, repository, *, sql_step_budget=SQL_STEP_BUDGET):
-        if type(sql_step_budget) is not int or sql_step_budget < 1000:
-            raise ValueError("social query budget requires at least 1000 SQLite steps")
+    def __init__(self, repository, *, sql_steps_per_owner=SQL_STEPS_PER_OWNER):
+        if type(sql_steps_per_owner) is not int or sql_steps_per_owner < 1000:
+            raise ValueError("social query budget requires at least 1000 SQLite steps per owner")
         self.repo = repository
-        self.sql_step_budget = sql_step_budget
+        self.sql_steps_per_owner = sql_steps_per_owner
+        self.last_sql_steps = 0
 
     def read(
         self, profile_id, branch_id, protagonist_id, game_datetime, actor_ids, *, session_id=None
@@ -78,102 +129,56 @@ class SocialAdaptation:
         result = {owner: _empty() for owner in owners}
         with self.repo._lock:
             lineage = self.repo._lineage(profile_id, branch_id, stamp)
-            branch_filter = " OR ".join(
-                "(m.branch_id=? AND m.game_datetime<=?)" for _ in lineage
-            )
-            # One bounded source read for all owners. Speaker data validates an
-            # exact hearing receipt but never enters another actor's prompt.
-            # CROSS JOIN preserves indexed owner-first lookup. SQLite otherwise
-            # starts from every event in the profile, including unrelated actors.
-            sql = (
-                "WITH candidates AS (SELECT m.actor_id,m.memory_id,m.text,m.provenance,"
-                "m.confidence AS memory_confidence,m.decay_days,e.event_id,e.data,"
-                "e.game_datetime,e.branch_id,e.rowid AS source_order,"
-                "speaker.data AS speaker_data,speaker.branch_id AS speaker_branch,"
-                "speaker.game_datetime AS speaker_time,"
-                "ROW_NUMBER() OVER (PARTITION BY m.actor_id,"
-                "(json_extract(e.data,'$.event_type')='social.quote_delivered') "
-                "ORDER BY e.game_datetime DESC,e.rowid DESC) AS source_rank "
-                "FROM memories m INDEXED BY memory_actor "
-                "CROSS JOIN actors a ON a.profile_id=m.profile_id "
-                "AND a.actor_id=m.actor_id "
-                "CROSS JOIN memory_sources s "
-                "ON s.profile_id=m.profile_id AND s.memory_id=m.memory_id "
-                "CROSS JOIN events e ON e.profile_id=s.profile_id AND e.event_id=s.event_id "
-                "LEFT JOIN events speaker ON speaker.profile_id=e.profile_id "
-                "AND speaker.event_id=json_extract(e.data,'$.payload.heard_delivery_event_id') "
-                "WHERE m.profile_id=? AND m.actor_id IN ("
-                + ",".join("?" for _ in owners)
-                + ") AND m.protagonist_id=? AND e.protagonist_id=m.protagonist_id "
-                "AND m.visibility_scope='private' AND m.branch_id=e.branch_id "
-                "AND m.game_datetime=e.game_datetime AND m.game_datetime>=? "
-                "AND (" + branch_filter + ") "
-                "AND (m.session_id IS NULL OR m.session_id=?) "
-                "AND (a.actor_kind!='ambient_ephemeral' OR a.session_id=?) "
-                "AND (m.expires_at IS NULL OR m.expires_at>?) "
-                "AND m.memory_id=e.event_id||':memory' "
-                "AND (SELECT COUNT(*) FROM memory_sources ms WHERE ms.memory_id=m.memory_id)=1 "
-                "AND json_extract(e.data,'$.event_type') IN "
-                "('social.accept','social.refuse','social.continue','social.withdraw',"
-                "'social.quote_delivered') "
-                "AND ((m.provenance='reported' "
-                "AND json_extract(e.data,'$.provenance')='reported' "
-                "AND json_extract(e.data,'$.event_type')='social.quote_delivered' "
-                "AND speaker.event_id IS NOT NULL) "
-                "OR (m.provenance='system_fact' "
-                "AND json_extract(e.data,'$.provenance')='system_fact' "
-                "AND json_extract(e.data,'$.event_type')!='social.quote_delivered')) "
-                "AND NOT EXISTS (SELECT 1 FROM scrub_audit scrub "
-                "WHERE scrub.profile_id=m.profile_id "
-                "AND ((scrub.operation='delete_memory' AND scrub.object_id=m.memory_id) "
-                "OR (scrub.operation='delete_event' "
-                "AND scrub.object_id IN (e.event_id,speaker.event_id)) "
-                "OR (scrub.operation='forget_social_source' "
-                "AND scrub.object_id=json_array(m.actor_id,e.event_id)))) "
-                ") SELECT * FROM candidates WHERE source_rank<=? "
-                "ORDER BY game_datetime,source_order"
-            )
-            parameters = (
-                    profile_id, *owners, protagonist, cutoff,
-                    *(item for pair in lineage.items() for item in pair),
-                    session_id, session_id, stamp, MAX_ANCHORS_PER_OWNER // 2,
-            )
-            # LIMIT bounds returned anchors, not all work needed by a window
-            # query. A connection-local VM budget also bounds dense-history scans.
-            steps = 0
+            sql = _history_sql(len(lineage))
+            branches = tuple(item for pair in lineage.items() for item in pair)
+            budget, steps, windows = self.sql_steps_per_owner * len(owners), 0, {}
 
+            # One connection-local VM budget covers every statement in this read.
             def budget_exhausted():
                 nonlocal steps
                 steps += 1000
-                return steps >= self.sql_step_budget
+                return steps >= budget
 
             self.repo.connection.set_progress_handler(budget_exhausted, 1000)
             try:
-                rows = self.repo.connection.execute(sql, parameters).fetchall()
+                for owner in owners:
+                    if self.repo.connection.execute(
+                        "SELECT 1 FROM actors WHERE profile_id=? AND actor_id=? "
+                        "AND (actor_kind!='ambient_ephemeral' OR session_id=?)",
+                        (profile_id, owner, session_id),
+                    ).fetchone() is None:
+                        continue
+                    for provenance in ("system_fact", "reported"):
+                        windows[owner, provenance] = self.repo.connection.execute(sql, (
+                            profile_id, owner, protagonist, provenance, cutoff, stamp, *branches,
+                            session_id, stamp, MAX_ANCHORS_PER_OWNER // 2,
+                        )).fetchall()
             except sqlite3.OperationalError as exc:
-                if steps >= self.sql_step_budget:
+                if steps >= budget:
                     raise ValueError("social history query exceeded its work budget") from exc
                 raise
             finally:
                 self.repo.connection.set_progress_handler(None, 0)
+                self.last_sql_steps = steps
             decisions = {owner: [] for owner in owners}
             contacts = {owner: {} for owner in owners}
-            for row in rows:
-                source = json.loads(row["data"])
-                payload = source.get("payload", {})
-                owner = row["actor_id"]
-                if not self._private_source(source, payload, owner):
-                    continue
-                age = (current - datetime.fromisoformat(row["game_datetime"])).total_seconds()
-                if age < 0 or not _unit(row["memory_confidence"]):
-                    continue
-                if source.get("event_type") == "social.quote_delivered":
-                    contact = self._contact(row, source, payload, age)
-                    if contact:
-                        peer, item = contact
-                        contacts[owner].setdefault(peer, []).append(item)
-                elif self._decision(row, source, payload):
-                    decisions[owner].append((row, payload, age))
+            for (owner, _), window in windows.items():
+                # Restore canonical event order within each newest-first window.
+                for row in sorted(window, key=itemgetter("game_datetime", "source_order")):
+                    source = json.loads(row["data"])
+                    payload = source.get("payload", {})
+                    if not self._private_source(source, payload, owner):
+                        continue
+                    age = (current - datetime.fromisoformat(row["game_datetime"])).total_seconds()
+                    if age < 0 or not _unit(row["memory_confidence"]):
+                        continue
+                    if source.get("event_type") == "social.quote_delivered":
+                        contact = self._contact(row, source, payload, age)
+                        if contact:
+                            peer, item = contact
+                            contacts[owner].setdefault(peer, []).append(item)
+                    elif self._decision(row, source, payload):
+                        decisions[owner].append((row, payload, age))
             for owner in owners:
                 self._boundaries(result[owner], decisions[owner])
                 result[owner]["peers"] = {

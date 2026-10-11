@@ -81,7 +81,7 @@ def test_reopen_persists_confirmed_writes_wal_fts_and_backup(tmp_path):
         repo.backup(tmp_path / "backup.sqlite3")
     for location in [path, tmp_path / "backup.sqlite3"]:
         with Repository(location) as reopened:
-            assert reopened.connection.execute("PRAGMA user_version").fetchone()[0] == 3
+            assert reopened.connection.execute("PRAGMA user_version").fetchone()[0] == 4
             assert recall(reopened, branch)[0]["memory_id"] == saved["memory_id"]
             assert reopened.get_actor("save-a", "avery")["display_name"] == "Avery"
             assert reopened.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -374,6 +374,35 @@ def test_reopen_rejects_unknown_future_migration(tmp_path):
         connection.execute("PRAGMA user_version=999")
     with pytest.raises(RuntimeError, match="newer"):
         Repository(location)
+
+
+def schema(repo):
+    return sorted(
+        tuple(row)
+        for row in repo.connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master")
+    )
+
+
+def test_schema_v3_migrates_to_v4(tmp_path):
+    with Repository(tmp_path / "fresh.sqlite3") as fresh:
+        expected = schema(fresh)
+    path = tmp_path / "v3.sqlite3"
+    with Repository(path) as repo:
+        repo.register_actor("save-a", {"actor_id": "avery"})
+        branch = repo.open_timeline("save-a", T0)
+        event(repo, branch)
+        saved = memory(repo, branch)
+        repo.connection.executescript(
+            "DROP INDEX scrub_lookup; DROP INDEX memory_social_window; "
+            "DROP INDEX memory_source_event; DROP TABLE memory_derivations; "
+            "PRAGMA user_version=3;"
+        )
+    with Repository(path) as repo:
+        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        # Fresh databases pass through the same migration and gain identical objects.
+        assert schema(repo) == expected
+        assert recall(repo, branch)[0]["memory_id"] == saved["memory_id"]
+        assert repo.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
 def test_an_npc_cannot_copy_another_npcs_observation(repo):

@@ -80,7 +80,7 @@ def test_schema_v1_migrates_without_resetting_profile_data(tmp_path):
     with Repository(path) as repo:
         assert repo.export_profile("preserved")["profile"]["profile_id"] == "preserved"
         assert BudgetLedger(repo).summary(NOW)["foreground"]["requests"] == 0
-        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def reserve(ledger, **changes):

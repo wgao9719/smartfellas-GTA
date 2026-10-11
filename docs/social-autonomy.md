@@ -70,7 +70,9 @@ The probe uses authored fake providers. It makes zero model requests and zero na
 
 ## Lasting social adaptation
 
-The scheduler reads each candidate’s retained private social memories in one bulk query. It accepts at most 128 owners. Each owner contributes at most 64 decision anchors and 64 hearing anchors from the previous 56 game days. A query stops at 4,000,000 SQLite virtual-machine instructions. Read failure starts no worker and reserves no model calls.
+The scheduler reads retained private social memories only for actors in at least one eligible pair. Geometry and cooldowns decide that before the read, so ticks during cooldowns read nothing. An actor that becomes eligible during a read waits for the next tick. Read failure starts no worker and reserves no model calls.
+
+One read accepts at most 128 owners. Each owner contributes at most 64 decision anchors and 64 hearing anchors from the previous 56 game days. Each owner gets two newest-first index walks, one for decisions and one for hearing, and each stops at its limit. Older history, deleted memories, erasure markers, other actors and profiles, other protagonists, action outcomes, and reports add no walk work. A full window costs about 21,000 SQLite virtual-machine instructions. The read stops after 64,000 instructions per owner and fails closed. Anchors on rewound branches cost about ten instructions each to skip, so several thousand of them newer than an owner's visible anchors can exhaust its budget. Schema version 4 adds the supporting indexes.
 
 Every decision anchor references a valid canonical accept, refuse, continue, or withdraw event. Malformed model output closes the attempt without inventing a lasting preference. A valid refusal or withdrawal pauses that owner’s eligibility for 600 game seconds by default. One to three distinct negative scenes in the preceding game hour multiply that pause. A later valid accept or continue clears it. The configurable base interval is 30–3,600 game seconds, and the total pause never exceeds 3,600 game seconds.
 
@@ -78,7 +80,7 @@ Only confirmed listener hearing establishes directed familiarity with the speake
 
 After two retained encounters, the speaker’s current partner can receive one exact prior quote as a topic suggestion. The quote is at most 240 characters and belongs to a previous scene. A retelling cannot become a direct shared topic. The context states who said the words and preserves their source. Other actors receive neither that quote nor the listener’s private decision history.
 
-The read respects protagonist identity, save branches, rewind, expiration, corrections, and memory controls. Persistent actors retain eligible history across service restarts. Edited anchors no longer contribute. Deleted memories, deleted source events, and actor resets suppress old adaptation even if the canonical source is replayed. The service rechecks live authority and safety after storage work before scheduling.
+The read respects protagonist identity, save branches, rewind, expiration, corrections, and memory controls. Persistent actors retain eligible history across service restarts. Edited anchors no longer contribute, and an edit that removes the decision or hearing form also frees that anchor's window slot. Deleted memories, deleted source events, and actor resets suppress old adaptation even if the canonical source is replayed. The service rechecks live authority and safety after storage work before scheduling.
 
 Run the adaptation HTTP simulation:
 

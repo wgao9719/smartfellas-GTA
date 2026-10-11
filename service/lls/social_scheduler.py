@@ -174,24 +174,12 @@ class SocialScheduler:
                 current[actor_id] = actor
         return current
 
-    def _pair(self, state, actors, history, game_datetime):
+    def _pairs(self, state, actors):
+        """Return pairs allowed by current geometry and cooldowns, before private history."""
         now = self.runtime.clock()
-        game_now = datetime.fromisoformat(_date(game_datetime))
-        available = {}
-        for actor_id, actor in actors.items():
-            own = history.get(actor_id, {})
-            boundary = own.get("last_boundary_at")
-            count = max(1, min(3, own.get("recent_boundary_count", 1)))
-            pause = min(3600, self.config.boundary_cooldown_game_seconds * count)
-            if boundary and 0 <= (
-                game_now - datetime.fromisoformat(_date(boundary))
-            ).total_seconds() < pause:
-                continue
-            available[actor_id] = actor
         pairs = []
-        for first, second in combinations(sorted(available), 2):
-            a, b = available[first], available[second]
-            pair = (first, second)
+        for pair in combinations(sorted(actors), 2):
+            a, b = actors[pair[0]], actors[pair[1]]
             if (
                 a["area_id"] != b["area_id"]
                 or a["interior_id"] != b["interior_id"]
@@ -211,6 +199,22 @@ class SocialScheduler:
             ):
                 continue
             pairs.append(pair)
+        return pairs
+
+    def _pair(self, state, actors, history, game_datetime):
+        game_now = datetime.fromisoformat(_date(game_datetime))
+        available = {}
+        for actor_id, actor in actors.items():
+            own = history.get(actor_id, {})
+            boundary = own.get("last_boundary_at")
+            count = max(1, min(3, own.get("recent_boundary_count", 1)))
+            pause = min(3600, self.config.boundary_cooldown_game_seconds * count)
+            if boundary and 0 <= (
+                game_now - datetime.fromisoformat(_date(boundary))
+            ).total_seconds() < pause:
+                continue
+            available[actor_id] = actor
+        pairs = self._pairs(state, available)
         if not pairs:
             return None
 
@@ -322,7 +326,10 @@ class SocialScheduler:
                 }
                 actors = await self.runtime.social_scheduler_candidates(session)
                 actors = self._current_candidates(session, actors, scope, bindings)
-                if len(actors) < 2:
+                # Only actors in a currently eligible pair need private history.
+                # Cooldowns and separated actors therefore cost no storage work.
+                owners = sorted({actor for pair in self._pairs(state, actors) for actor in pair})
+                if not owners:
                     return
                 try:
                     history = await self.runtime.thread_job(
@@ -331,13 +338,20 @@ class SocialScheduler:
                         session.branch_id,
                         session.request.protagonist_id,
                         session.game_datetime,
-                        tuple(sorted(actors)),
+                        tuple(owners),
                         session_id=session.id,
                     )
                 except Exception:
                     state.status, state.reason = "waiting", "social_history_unavailable"
                     return
-                actors = self._current_candidates(session, actors, scope, bindings)
+                # An actor that became eligible during the read waits for the next tick.
+                actors = {
+                    actor_id: actor
+                    for actor_id, actor in self._current_candidates(
+                        session, actors, scope, bindings
+                    ).items()
+                    if actor_id in history
+                }
                 pair = self._pair(state, actors, history, session.game_datetime)
                 if pair is None:
                     return

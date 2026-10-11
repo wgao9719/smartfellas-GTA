@@ -689,6 +689,70 @@ async def test_history_failure_reserves_no_calls_and_bulk_retry_can_recover(auto
     assert after["reserved_model_calls"] == 4
 
 
+async def restart_after_scene(fixture):
+    _, runtime, session, _ = fixture
+    async with session.lock:
+        runtime.cancel(session)
+        await runtime.stop_session_work(session)
+    fresh(fixture, 121)
+
+
+def record_history_reads(fixture, monkeypatch, during=None):
+    scheduler = fixture[1].social_scheduler
+    original, calls = scheduler.adaptation.read, []
+
+    def recorded(*args, **kwargs):
+        calls.append(args[4])
+        if during:
+            during()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler.adaptation, "read", recorded)
+    return calls
+
+
+async def test_scheduler_reads_history_only_for_eligible_pairs(automatic, monkeypatch):
+    _, runtime, session, _ = automatic
+    calls = record_history_reads(automatic, monkeypatch)
+    await tick(automatic)
+    assert calls == [("npc-a", "npc-b", "npc-c")]
+    async with session.lock:
+        runtime.cancel(session)
+        await runtime.stop_session_work(session)
+    # Actor and pair cooldowns leave no eligible pair, so no private history is read.
+    await tick(automatic)
+    assert len(calls) == 1
+    session.actors["npc-c"]["position"] = {"x": 30.0, "y": 0.0, "z": 0.0}
+    fresh(automatic, 121)
+    state = await tick(automatic)
+    assert calls[1:] == [("npc-a", "npc-b")]
+    assert set(runtime.social.get_scene(state["scene_id"])["participant_ids"]) == {
+        "npc-a", "npc-b"
+    }
+
+
+async def test_actor_entering_range_during_read_waits_for_next_tick(automatic, monkeypatch):
+    _, runtime, session, _ = automatic
+    session.actors["npc-c"]["position"] = {"x": 30.0, "y": 0.0, "z": 0.0}
+    await tick(automatic)
+    await restart_after_scene(automatic)
+
+    def arrive():
+        session.actors["npc-c"]["position"] = {"x": 2.0, "y": 0.0, "z": 0.0}
+
+    calls = record_history_reads(automatic, monkeypatch, arrive)
+    second = await tick(automatic)
+    # Pair fairness would favor untried npc-c, but its history was not part of this read.
+    assert calls == [("npc-a", "npc-b")]
+    assert set(runtime.social.get_scene(second["scene_id"])["participant_ids"]) == {
+        "npc-a", "npc-b"
+    }
+    await restart_after_scene(automatic)
+    third = await tick(automatic)
+    assert calls[1:] == [("npc-a", "npc-b", "npc-c")]
+    assert runtime.social.get_scene(third["scene_id"])["participant_ids"] == ["npc-c", "npc-a"]
+
+
 @pytest.mark.parametrize("phase", ["invitation", "participation"])
 async def test_invalid_model_decision_keeps_its_reason_without_creating_a_boundary(
     automatic, phase
