@@ -76,8 +76,8 @@ Receipt history holds bounded transcript and playback text in memory. Ordinary c
 | `LLS_TTS_PROVIDER` | Selects `disabled`, `piper`, or Windows `sapi`. |
 | `LLS_PIPER_EXECUTABLE` | Selects the local Piper executable. |
 | `LLS_PIPER_MODEL` | Selects the voice model with its adjacent `.json` configuration. |
-| `LLS_INPUT_DEVICE` | Selects an input device name or numeric index. Empty selects the default. |
-| `LLS_OUTPUT_DEVICE` | Selects an output device name or numeric index. Empty selects the default. |
+| `LLS_INPUT_DEVICE` | Selects an input device by numeric index, name, or `<host API>:<name>`. Empty selects the default. See [device selection](speech-probes.md#device-selection). |
+| `LLS_OUTPUT_DEVICE` | Selects an output device by numeric index, name, or `<host API>:<name>`. Empty selects the default. See [device selection](speech-probes.md#device-selection). |
 | `LLS_STT_ACTION_CONFIDENCE` | Sets the finite-confidence gate. The default is `0.85`. |
 
 Service startup never opens the microphone. In the game, holding the configured push-to-talk key requests capture. Releasing it stops capture and starts transcription. A disabled or unavailable provider leaves typed input available.
