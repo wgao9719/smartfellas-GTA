@@ -80,9 +80,18 @@ async def test_load_retry_stops_when_rate_gate_never_recovers():
     assert clock.waits == pytest.approx([0.05] * 16)
 
 
-def test_36_npcs_and_200_confirmed_turns_remain_bounded_and_private():
+def test_36_npcs_and_200_confirmed_turns_remain_bounded_and_private(tmp_path):
     root = Path(__file__).resolve().parents[1]
-    environment = {"PATH": os.defpath, "PYTHONPATH": str(root), "PYTHONUTF8": "1"}
+    # Python and Windows SQLite resolve temporary files differently. Give both
+    # a writable scratch directory without inheriting credentials or settings.
+    environment = {
+        "PATH": os.defpath,
+        "PYTHONPATH": str(root),
+        "PYTHONUTF8": "1",
+        "TMPDIR": str(tmp_path),
+        "TEMP": str(tmp_path),
+        "TMP": str(tmp_path),
+    }
     if "SYSTEMROOT" in os.environ:
         environment["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     result = subprocess.run(
