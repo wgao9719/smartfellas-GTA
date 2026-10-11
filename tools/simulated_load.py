@@ -8,6 +8,7 @@ not model latency, game frame time, or real-time throughput.
 import asyncio
 import json
 import math
+import os
 import sys
 import tempfile
 import time
@@ -428,8 +429,17 @@ def main():
             attempts.append(event)
             raise OSError("synthetic load check forbids network access")
 
-    sys.addaudithook(deny_network)
-    report = asyncio.run(run_load())
+    with asyncio.Runner() as runner:
+        # A Windows proactor loop's self-pipe is a loopback socketpair: create it before the guard.
+        runner.get_loop()
+        sys.addaudithook(deny_network)
+        if os.name == "nt":
+            from asyncio.windows_events import IocpProactor
+
+            # Overlapped I/O raises no audit events, so deny the proactor's network calls too.
+            IocpProactor.connect = lambda *args: deny_network("socket.connect", args)
+            IocpProactor.sendto = lambda *args, **kwargs: deny_network("socket.sendto", args)
+        report = runner.run(run_load())
     assert attempts == [], attempts
     report["network_attempts"] = len(attempts)
     print(json.dumps(report, indent=2, sort_keys=True))

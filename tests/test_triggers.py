@@ -116,7 +116,8 @@ def test_pilot_pack_is_valid_original_content_with_all_effect_classes():
         "pack_id: bad\npack_id: shadow\nrules: []\n",
         "pack_id: bad\nrules: &loop [*loop]\n",
         "!!python/object/apply:os.system ['echo forbidden']",
-        "pack_id: bad\nrules: []\n" + "#" * 65536,
+        # pytest exports the node ID as PYTEST_CURRENT_TEST; Windows caps it at 32767 chars.
+        pytest.param("pack_id: bad\nrules: []\n" + "#" * 65536, id="oversize"),
     ],
 )
 def test_yaml_rejects_code_unknown_keys_duplicates_aliases_and_oversize(tmp_path, body):

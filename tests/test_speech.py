@@ -189,6 +189,86 @@ async def test_timeout_kills_descendant_even_when_parent_is_alive(tmp_path):
     assert not marker.exists()
 
 
+def fake_windows_job(pid, *, assigned=True):
+    """A WindowsJob over a recording kernel32 fake, so access rights are checked on any OS."""
+    import ctypes
+    import types
+
+    from service.lls.speech_process import WindowsJob
+
+    class Ctypes:
+        # Pass structures through so the fake can fill THREADENTRY32 fields.
+        byref = staticmethod(lambda value: value)
+
+        def __getattr__(self, name):
+            return getattr(ctypes, name)
+
+    threads = iter([(5, pid + 1), (7, pid)])
+
+    def next_thread(snapshot, entry):
+        entry.thread_id, entry.owner_pid = next(threads, (0, 0))
+        return entry.thread_id != 0
+
+    calls, api = [], types.SimpleNamespace()
+    results = {
+        "OpenProcess": lambda *args: 101,
+        "AssignProcessToJobObject": lambda *args: assigned,
+        "CreateToolhelp32Snapshot": lambda *args: 102,
+        "Thread32First": next_thread,
+        "Thread32Next": next_thread,
+        "OpenThread": lambda *args: 103,
+        "ResumeThread": lambda *args: 1,
+        "TerminateJobObject": lambda *args: True,
+        "CloseHandle": lambda *args: True,
+    }
+    for name, result in results.items():
+        # Plain functions accept the argtypes/restype assignments made for real ctypes calls.
+        def function(*args, name=name, result=result):
+            calls.append((name, *args))
+            return result(*args)
+
+        setattr(api, name, function)
+    job = WindowsJob.__new__(WindowsJob)
+    job.ctypes, job.api, job.handle = Ctypes(), api, 100
+    return job, calls
+
+
+def test_windows_job_requests_assignment_and_resume_rights_and_closes_handles():
+    job, calls = fake_windows_job(42)
+    job.attach_and_resume(42)
+    # AssignProcessToJobObject needs PROCESS_SET_QUOTA | PROCESS_TERMINATE (0x0100 | 0x0001),
+    # and ResumeThread needs THREAD_SUSPEND_RESUME (0x0002).
+    assert ("OpenProcess", 0x0100 | 0x0001, False, 42) in calls
+    assert ("AssignProcessToJobObject", 100, 101) in calls
+    assert ("OpenThread", 0x0002, False, 7) in calls and ("ResumeThread", 103) in calls
+    assert sorted(args[0] for name, *args in calls if name == "CloseHandle") == [101, 102, 103]
+
+
+def test_windows_job_assignment_failure_closes_handle_and_kills_suspended_child():
+    from service.lls.speech_process import ProcessFailure, terminate_tree
+
+    class Suspended:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = 1
+
+    job, calls = fake_windows_job(42, assigned=False)
+    with pytest.raises(ProcessFailure, match="Job Object"):
+        job.attach_and_resume(42)
+    assert [call[0] for call in calls] == [
+        "OpenProcess", "AssignProcessToJobObject", "CloseHandle",
+    ]
+    assert calls[-1] == ("CloseHandle", 101)
+    child = Suspended()
+    terminate_tree(child, job)
+    assert child.returncode == 1 and job.handle is None
+    assert calls[-2:] == [("TerminateJobObject", 100, 1), ("CloseHandle", 100)]
+
+
 @pytest.mark.parametrize("operation", ["stop", "cancel"])
 def test_microphone_device_failure_still_closes_and_clears(operation, tmp_path):
     class FailedDevice:

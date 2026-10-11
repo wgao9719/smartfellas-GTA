@@ -196,7 +196,8 @@ async def test_canceled_thread_joins_before_actor_erasure(bridge, monkeypatch):
     assert snapshot.json()["actors"][0]["status"] == "suppressed"
 
 
-@pytest.mark.parametrize("contents", ["{}", " " * (256 * 1024 + 1)])
+# pytest exports the node ID as PYTEST_CURRENT_TEST; Windows caps it at 32767 chars.
+@pytest.mark.parametrize("contents", ["{}", pytest.param(" " * (256 * 1024 + 1), id="oversize")])
 def test_invalid_authored_pack_fails_startup(tmp_path, contents):
     path = tmp_path / "pack.json"
     path.write_text(contents, encoding="utf-8")

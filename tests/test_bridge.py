@@ -1,6 +1,8 @@
 import asyncio
 import json
+import os
 from datetime import timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -703,6 +705,18 @@ def test_cloud_and_lan_require_explicit_configuration():
         bootstrap_token="test-only",
         allow_sources=["100.64.0.3"],
     )
+
+
+def test_explicit_database_never_resolves_the_profile_directory(tmp_path, monkeypatch):
+    def unavailable(cls):
+        # Windows raises this when a child environment lacks USERPROFILE and HOMEPATH.
+        raise RuntimeError("Could not determine home directory.")
+
+    for name in [name for name in os.environ if name.startswith(("LLS_", "LLM_"))]:
+        monkeypatch.delenv(name)
+    monkeypatch.setattr(Path, "home", classmethod(unavailable))
+    monkeypatch.setenv("LLS_DATABASE", str(tmp_path / "explicit.sqlite3"))
+    assert Settings.from_env().database_path == str(tmp_path / "explicit.sqlite3")
 
 
 @pytest.mark.asyncio

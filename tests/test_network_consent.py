@@ -14,6 +14,8 @@ import re
 import socket
 import subprocess
 import sys
+from asyncio.proactor_events import BaseProactorEventLoop
+from asyncio.selector_events import BaseSelectorEventLoop
 from pathlib import Path
 
 import pytest
@@ -64,9 +66,24 @@ class NetworkProbe:
                 self.events.append({"kind": "unexpected_native_network", "event": event})
                 raise OSError("network consent test blocked native network access")
 
+        async def sock_connect(loop, sock, address):
+            connect(sock, address)
+
+        def native(event):
+            return lambda *args, **kwargs: audit(event, args)
+
         socket.getaddrinfo = resolve
         socket.socket.connect = connect
         socket.socket.connect_ex = connect
+        # Windows' default ProactorEventLoop connects with overlapped ConnectEx and never calls
+        # socket.connect, so intercept the connect step that every asyncio event loop shares.
+        BaseSelectorEventLoop.sock_connect = BaseProactorEventLoop.sock_connect = sock_connect
+        if os.name == "nt":
+            from asyncio.windows_events import IocpProactor
+
+            # Overlapped I/O raises no audit events: backstop raw proactor connects and UDP.
+            IocpProactor.connect = native("socket.connect")
+            IocpProactor.sendto = native("socket.sendto")
         sys.addaudithook(audit)
 
 

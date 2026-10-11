@@ -88,7 +88,7 @@ class WindowsJob:
             raise ProcessFailure("Windows speech process containment is unavailable.")
         limits = ExtendedLimits()
         limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if not api.SetInformationJobObject(
+        if not api.SetInformationJobObject(  # 9: JobObjectExtendedLimitInformation
             self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)
         ):
             self.close()
@@ -98,7 +98,8 @@ class WindowsJob:
         from ctypes import wintypes
 
         c, api = self.ctypes, self.api
-        handle = api.OpenProcess(0x0200 | 0x0001, False, pid)
+        # AssignProcessToJobObject requires PROCESS_SET_QUOTA | PROCESS_TERMINATE.
+        handle = api.OpenProcess(0x0100 | 0x0001, False, pid)
         if not handle:
             raise ProcessFailure("Windows speech child process could not be opened.")
         try:
@@ -137,7 +138,7 @@ class WindowsJob:
             found = api.Thread32First(snapshot, c.byref(entry))
             while found:
                 if entry.owner_pid == pid:
-                    thread = api.OpenThread(0x0002, False, entry.thread_id)
+                    thread = api.OpenThread(0x0002, False, entry.thread_id)  # THREAD_SUSPEND_RESUME
                     if not thread:
                         raise ProcessFailure("Windows speech thread could not be opened.")
                     try:
@@ -202,6 +203,7 @@ async def run_owned(argv, *, stdin=b"", timeout=60, env=None, max_output=2 * 102
                 stderr=err_file,
                 env=env,
                 start_new_session=os.name != "nt",
+                # CREATE_SUSPENDED | CREATE_NO_WINDOW: it joins the Job Object before running.
                 creationflags=(0x00000004 | 0x08000000) if os.name == "nt" else 0,
             )
             if job is not None:

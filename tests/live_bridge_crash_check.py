@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -28,15 +29,20 @@ def main():
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     endpoint = f"http://127.0.0.1:{port}"
-    environment = {
-        "PATH": os.defpath,
-        "PYTHONPATH": str(ROOT),
-        "PYTHONUTF8": "1",
+    environment = {"PATH": os.defpath, "PYTHONPATH": str(ROOT), "PYTHONUTF8": "1"}
+    if "SYSTEMROOT" in os.environ:
+        environment["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    # On Windows dotnet, MSBuild, and NuGet need PATH, the user profile, AppData, and TEMP.
+    # Like live_bridge_check, inherit them while excluding developer service settings.
+    dotnet_environment = {
+        **{
+            name: value
+            for name, value in os.environ.items()
+            if not name.startswith(("LLS_", "LLM_"))
+        },
         "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
         "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
     }
-    if "SYSTEMROOT" in os.environ:
-        environment["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     with tempfile.TemporaryDirectory(prefix="lls-process-death-") as temporary:
         database = Path(temporary) / "probe.sqlite3"
         with (Path(temporary) / "service.log").open("w+") as log:
@@ -74,7 +80,7 @@ def main():
             service = start_service()
             probe = None
             try:
-                subprocess.run(
+                build = subprocess.run(
                     [
                         dotnet,
                         "build",
@@ -83,12 +89,18 @@ def main():
                         "Release",
                     ],
                     cwd=ROOT,
-                    env=environment,
-                    check=True,
+                    env=dotnet_environment,
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     timeout=30,
                 )
+                if build.returncode:
+                    raise RuntimeError(
+                        f"C# probe build failed with exit code {build.returncode}:\n"
+                        + build.stdout
+                        + build.stderr
+                    )
                 probe = subprocess.Popen(
                     [
                         dotnet,
@@ -97,7 +109,7 @@ def main():
                         "--crash",
                     ],
                     cwd=ROOT,
-                    env=environment,
+                    env=dotnet_environment,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -120,7 +132,8 @@ def main():
 
                 checkpoint = message()
                 assert checkpoint["phase"] == "started", checkpoint
-                with sqlite3.connect(database) as connection:
+                # Close explicitly: Windows cannot delete an open database with the temp folder.
+                with closing(sqlite3.connect(database)) as connection:
                     row = connection.execute(
                         "SELECT data FROM events WHERE profile_id=? AND event_id=?",
                         (checkpoint["profile_id"], checkpoint["command_id"] + ":started"),
@@ -136,7 +149,7 @@ def main():
                 result = message()
                 assert result["status"] == "passed", result
                 assert probe.wait(timeout=5) == 0, probe.stderr.read()
-                with sqlite3.connect(database) as connection:
+                with closing(sqlite3.connect(database)) as connection:
                     receipts = connection.execute(
                         "SELECT event_id FROM events WHERE profile_id=? AND event_id LIKE ?",
                         (checkpoint["profile_id"], checkpoint["command_id"] + ":%"),

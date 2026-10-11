@@ -5,6 +5,7 @@ import json
 import sqlite3
 import tempfile
 import time
+from contextlib import closing
 from pathlib import Path
 
 import httpx
@@ -123,7 +124,8 @@ def main():
         with server(directory, autonomous=True) as endpoint:
             retained = asyncio.run(exercise(endpoint, retained=True))
         assert set(trial).isdisjoint(retained)
-        with sqlite3.connect(directory / "skills.sqlite3") as connection:
+        # Close explicitly: Windows cannot delete an open database with the temp folder.
+        with closing(sqlite3.connect(directory / "skills.sqlite3")) as connection:
             versions = connection.execute(
                 "SELECT version FROM skill_records WHERE kind='candidate' ORDER BY version"
             ).fetchall()

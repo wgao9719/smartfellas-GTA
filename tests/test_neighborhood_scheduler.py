@@ -14,13 +14,23 @@ from test_neighborhood_bridge import bridge as bridge
 from service.lls.neighborhood import EmbodimentRequest, NeighborhoodScope
 from service.lls.neighborhood_scheduler import NeighborhoodScheduler, NeighborhoodSchedulerConfig
 from service.lls.protocol import Position
+from service.lls.runtime import Runtime
 from service.lls.settings import Settings
 from service.lls.skill_scheduler import SkillScheduler
 
 
 @pytest.fixture
-def automatic(bridge):
+async def automatic(bridge):
     client, runtime, session, clock = bridge
+    # Lifespan maintenance ticks every wall-clock second, but scheduler pacing uses the frozen
+    # fake clock: on a slow runner an unrequested tick would take the attempt a test drives.
+    (maintenance,) = [
+        task
+        for task in asyncio.all_tasks()
+        if getattr(task.get_coro(), "cr_code", None) is Runtime.maintain.__code__
+    ]
+    maintenance.cancel()
+    await asyncio.gather(maintenance, return_exceptions=True)
     runtime.settings.dev_neighborhood_autonomy = True
     runtime.neighborhood.scheduler = NeighborhoodScheduler(runtime.neighborhood)
     return client, runtime, session, clock
@@ -90,9 +100,14 @@ async def test_runtime_maintenance_advances_without_advance_request(automatic):
     _, runtime, session, _ = automatic
     await initialize(automatic)
     before = event_count(runtime)
-    async with asyncio.timeout(3):
-        while event_count(runtime) == before:
-            await asyncio.sleep(0.01)
+    maintenance = asyncio.create_task(runtime.maintain())
+    try:
+        async with asyncio.timeout(3):
+            while event_count(runtime) == before:
+                await asyncio.sleep(0.01)
+    finally:
+        maintenance.cancel()
+        await asyncio.gather(maintenance, return_exceptions=True)
     assert runtime.neighborhood.scheduler.diagnostics(session.id)["attempts"] == 1
     assert not session.commands
 

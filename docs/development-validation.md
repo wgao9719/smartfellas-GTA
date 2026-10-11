@@ -128,3 +128,5 @@ Grounded native observations remain disabled. Native action capabilities remain 
 Real provider performance and billing comparison remain unverified. Service authorization outcomes and acknowledged action outcomes persist as distinct canonical events and private memories. These events do not establish native acceptance.
 
 The workflow in `.github/workflows/ci.yml` defines Windows and macOS checks. No GitHub Actions run has been observed for this working tree.
+
+The first Windows CI run of the committed foundation exposed two product defects. Speech processes opened their suspended child with `PROCESS_SET_INFORMATION` instead of `PROCESS_SET_QUOTA`, so every Job Object assignment failed and no speech executable could run on Windows. `Settings.from_env()` also resolved the user profile when `LLS_DATABASE` was explicit, which raises on Windows without `USERPROFILE` and `HOMEPATH`. Both are fixed with macOS-runnable regressions; a Windows CI run must still confirm them.

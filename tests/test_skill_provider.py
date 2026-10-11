@@ -110,7 +110,8 @@ async def test_candidate_denial_dispatches_no_http(monkeypatch, denial):
         (SOURCE, "length"),
         ({**SOURCE, "steps": [{"op": "shell", "command": "whoami"}]}, "stop"),
         (json.dumps(SOURCE).replace('"version": 1', '"version": 0, "version": 1'), "stop"),
-        ("x" * 16385, "stop"),
+        # pytest exports the node ID as PYTEST_CURRENT_TEST; Windows caps it at 32767 chars.
+        pytest.param("x" * 16385, "stop", id="oversize-stop"),
     ],
 )
 async def test_invalid_or_incomplete_candidate_keeps_reservation(monkeypatch, content, finish):

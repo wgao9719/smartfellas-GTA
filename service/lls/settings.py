@@ -137,10 +137,15 @@ class Settings(StrictModel):
 
     @classmethod
     def from_env(cls):
-        if os.name == "nt":
-            base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "LivingLosSantos"
-        else:
-            base = Path.home() / "Library" / "Application Support" / "LivingLosSantos"
+        database = os.environ.get("LLS_DATABASE")
+        if database is None:
+            # Resolve the profile only when needed: on Windows, Path.home() raises if the
+            # environment lacks USERPROFILE and HOMEPATH.
+            if os.name == "nt":
+                base = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LivingLosSantos"
+            else:
+                base = Path.home() / "Library" / "Application Support" / "LivingLosSantos"
+            database = str(base / "lls.sqlite3")
         return cls(
             bootstrap_token=os.environ.get("LLS_BRIDGE_TOKEN", ""),
             host=os.environ.get("LLS_HOST", "127.0.0.1"),
@@ -158,7 +163,7 @@ class Settings(StrictModel):
             ),
             neighborhood_pack_path=os.environ.get("LLS_NEIGHBORHOOD_PACK", ""),
             allow_sources=[x for x in os.environ.get("LLS_ALLOW_SOURCES", "").split(",") if x],
-            database_path=os.environ.get("LLS_DATABASE", str(base / "lls.sqlite3")),
+            database_path=database,
             provider=os.environ.get("LLS_PROVIDER", "disabled"),
             cloud_opt_in=os.environ.get("LLS_CLOUD_OPT_IN", "0") == "1",
             dialogue_model=os.environ.get("LLM_DIALOGUE_MODEL", ""),
