@@ -2,6 +2,8 @@
 
 import argparse
 import asyncio
+import math
+import struct
 import sys
 import wave
 from pathlib import Path
@@ -16,12 +18,14 @@ from service.lls.speech import Transcript, inspect_wav  # noqa: E402
 from service.lls.speech_coordinator import SpeechConfig, SpeechCoordinator  # noqa: E402
 
 
-def silent_wav(path):
+def fixture_wav(path, amplitude=0):
+    # The microphone records a quiet tone, because the silence gate refuses digital silence.
+    samples = (round(amplitude * math.sin(n / 3)) for n in range(4800))
     with wave.open(str(path), "wb") as stream:
         stream.setnchannels(1)
         stream.setsampwidth(2)
         stream.setframerate(16000)
-        stream.writeframes(bytes(9600))
+        stream.writeframes(struct.pack("<4800h", *samples))
     return inspect_wav(path)
 
 
@@ -37,7 +41,7 @@ class FixtureMicrophone:
         if not self.active:
             raise RuntimeError("fixture microphone was never opened")
         self.active = False
-        return silent_wav(path)
+        return fixture_wav(path, 1000)
 
     def cancel(self):
         self.active = False
@@ -53,7 +57,7 @@ class FixtureSynthesizer:
     async def synthesize(self, text, path):
         if not text.strip():
             raise ValueError("fixture synthesis requires text")
-        return silent_wav(path)
+        return fixture_wav(path)
 
 
 async def fixture_playback(path, *, on_started):

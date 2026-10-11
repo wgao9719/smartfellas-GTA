@@ -10,12 +10,15 @@ import argparse
 import asyncio
 import json
 import math
+import operator
 import os
 import re
+import sys
 import tempfile
 import threading
 import time
 import wave
+from array import array
 from dataclasses import asdict, dataclass
 from pathlib import Path, PureWindowsPath
 
@@ -77,6 +80,21 @@ def inspect_wav(path: str | Path) -> AudioInfo:
     except (wave.Error, EOFError) as exc:
         raise SpeechUnavailable("Invalid WAV audio.") from exc
     return AudioInfo(rate, channels, frames, frames / rate)
+
+
+def audio_level(path: str | Path) -> tuple[float, float]:
+    """RMS and peak dBFS of 16-bit PCM. Digital silence is -inf. No audio is kept or logged."""
+    info = inspect_wav(path)
+    with wave.open(str(path), "rb") as source:
+        samples = array("h", source.readframes(info.frames))
+    if sys.byteorder == "big":
+        samples.byteswap()
+
+    def dbfs(value):
+        return 20 * math.log10(value / 32768) if value else -math.inf
+
+    rms = math.sqrt(sum(map(operator.mul, samples, samples)) / len(samples))
+    return dbfs(rms), dbfs(max(map(abs, samples)))
 
 
 def is_speech(text: str) -> bool:

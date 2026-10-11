@@ -190,6 +190,10 @@ class Settings(StrictModel):
                 minimum_action_confidence=float(
                     os.environ.get("LLS_STT_ACTION_CONFIDENCE", "0.85")
                 ),
+                minimum_dialogue_confidence=float(
+                    os.environ.get("LLS_STT_DIALOGUE_CONFIDENCE", "0.3")
+                ),
+                silence_dbfs=float(os.environ.get("LLS_STT_SILENCE_DBFS", "-60")),
             ),
         )
 

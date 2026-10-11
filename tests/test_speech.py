@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import random
 import shutil
@@ -20,6 +21,22 @@ def wav(path, *, rate=16000, seconds=0.1):
         target.setframerate(rate)
         target.writeframes(b"\x00\x00" * int(rate * seconds))
     return path
+
+
+def test_audio_level_reports_rms_and_peak_dbfs(tmp_path):
+    def level(name, samples):
+        with wave.open(str(tmp_path / name), "wb") as target:
+            target.setnchannels(1)
+            target.setsampwidth(2)
+            target.setframerate(16000)
+            target.writeframes(struct.pack(f"<{len(samples)}h", *samples))
+        return speech.audio_level(tmp_path / name)
+
+    assert level("silence.wav", [0] * 1600) == (float("-inf"), float("-inf"))
+    assert level("full.wav", [32767, -32768] * 800) == pytest.approx((0, 0), abs=0.001)
+    rms, peak = level("tone.wav", [round(1000 * math.sin(n / 3)) for n in range(1600)])
+    assert rms == pytest.approx(-33.3, abs=0.1) and peak == pytest.approx(-30.3, abs=0.1)
+    assert level("click.wav", [0] * 1599 + [-3277]) == pytest.approx((-52.04, -20.0), abs=0.01)
 
 
 def test_reject_malformed_and_oversized_audio(tmp_path):
@@ -234,6 +251,10 @@ async def test_installed_whisper_cli_full_json(tmp_path):
         )
     quiet = await whisper.transcribe(tmp_path / "hiss.wav")
     assert not set(quiet.text) & set("[]()")
+    wav(tmp_path / "silence.wav", seconds=2)
+    # Whisper hears "You" in digital silence. The coordinator gate never runs it.
+    assert await gated_capture(whisper, tmp_path / "silence.wav") == ("failed", "", 0)
+    assert await gated_capture(whisper, tmp_path / "hiss.wav") == ("failed", "", 0)
     if shutil.which("say") and shutil.which("afconvert"):
         voice = str(tmp_path / "voice.aiff")
         subprocess.run(["say", "-o", voice, "Please look at me."], check=True)
@@ -244,6 +265,43 @@ async def test_installed_whisper_cli_full_json(tmp_path):
         spoken = await whisper.transcribe(tmp_path / "voice.wav")
         assert "look at me" in spoken.text.lower()
         assert spoken.confidence is not None and 0 < spoken.confidence <= 1
+        state, text, calls = await gated_capture(whisper, tmp_path / "voice.wav")
+        assert (state, calls) == ("completed", 1) and "look at me" in text.lower()
+
+
+async def gated_capture(transcriber, recording):
+    """Run a recorded file through the real coordinator gates and the given recognizer."""
+    from service.lls.speech_coordinator import SpeechConfig, SpeechCoordinator, SpeechIdentity
+
+    identity = SpeechIdentity("session", 1, "scene", "actor", 0, "instance")
+    calls = []
+
+    class Recorded:
+        def start(self):
+            pass
+
+        def stop(self, destination):
+            shutil.copyfile(recording, destination)
+            return speech.inspect_wav(destination)
+
+        def cancel(self):
+            pass
+
+    class Counted:
+        async def transcribe(self, audio):
+            calls.append(audio)
+            return await transcriber.transcribe(audio)
+
+    coordinator = SpeechCoordinator(
+        SpeechConfig(enabled=True),
+        is_current=lambda current: current == identity,
+        microphone=Recorded(),
+        transcriber=Counted(),
+    )
+    await coordinator.start_capture(identity)
+    result = await coordinator.finish_capture(identity)
+    await coordinator.close()
+    return result.state, result.text, len(calls)
 
 
 @pytest.mark.asyncio
