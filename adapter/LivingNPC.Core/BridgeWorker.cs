@@ -29,7 +29,7 @@ namespace LivingNPC.Core
         public readonly BoundedQueue<EventEnvelope> Controls = new BoundedQueue<EventEnvelope>(128);
         public readonly BoundedQueue<EventEnvelope> Events = new BoundedQueue<EventEnvelope>(128);
         public readonly BoundedQueue<EventEnvelope> Snapshots = new BoundedQueue<EventEnvelope>(36);
-        public readonly BoundedQueue<Command> Commands = new BoundedQueue<Command>(64);
+        public readonly BoundedQueue<Command> Commands = new BoundedQueue<Command>(BridgeLimits.MaxCommands);
         public readonly BoundedQueue<Ack> Acks = new BoundedQueue<Ack>(512);
         public SessionResponse? Session => session;
         public bool Online => online;
@@ -55,7 +55,7 @@ namespace LivingNPC.Core
                 if (body != null)
                 {
                     var json = Wire.Encode(body);
-                    if (Encoding.UTF8.GetByteCount(json) > 256 * 1024) throw new InvalidDataException("bridge_body_too_large");
+                    if (Encoding.UTF8.GetByteCount(json) > BridgeLimits.MaxBodyBytes) throw new InvalidDataException("bridge_body_too_large");
                     message.Content = new StringContent(json, Encoding.UTF8, "application/json");
                 }
                 using (var response = await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false))
@@ -69,7 +69,7 @@ namespace LivingNPC.Core
                         var buffer = new byte[8192]; int count;
                         while ((count = await stream.ReadAsync(buffer, 0, buffer.Length, deadline.Token).ConfigureAwait(false)) > 0)
                         {
-                            if (output.Length + count > 256 * 1024) throw new InvalidDataException("bridge_response_too_large");
+                            if (output.Length + count > BridgeLimits.MaxBodyBytes) throw new InvalidDataException("bridge_response_too_large");
                             output.Write(buffer, 0, count);
                         }
                         return Encoding.UTF8.GetString(output.ToArray());
@@ -91,7 +91,7 @@ namespace LivingNPC.Core
                 catch (PermanentFailure e) { LastFailure = "session_rejected_" + e.Status; Notices.ReplaceOldest(LastFailure); return; }
                 catch (Exception e) { Fail(e); await Delay(1000).ConfigureAwait(false); }
             }
-            if (session != null) await Task.WhenAll(ControlLoop(), EventLoop(), PollLoop()).ConfigureAwait(false);
+            if (session != null) await Task.WhenAll(ControlLoop(), EventLoop(), PollLoop(), HeartbeatLoop()).ConfigureAwait(false);
         }
         private void Fail(Exception error)
         {
@@ -114,7 +114,6 @@ namespace LivingNPC.Core
         }
         private async Task EventLoop()
         {
-            var heartbeatAt = DateTimeOffset.UtcNow;
             while (!stop.IsCancellationRequested)
             {
                 try
@@ -133,12 +132,20 @@ namespace LivingNPC.Core
                         catch (PermanentFailure e) { queue.TryRemove(item); LastFailure = "event_rejected_" + e.Status; Notices.ReplaceOldest(LastFailure); continue; }
                         item.Accepted = true; queue.TryRemove(item); Success(); continue;
                     }
-                    if (DateTimeOffset.UtcNow >= heartbeatAt)
-                    {
-                        await Send(eventClient, HttpMethod.Post, "/v1/bridge/heartbeat", new { session_id = session!.SessionId, runtime_generation = request.RuntimeGeneration, queue_depth = Commands.Count, fps = Fps, actor_count = ActorCount }, session.Token).ConfigureAwait(false);
-                        heartbeatAt = DateTimeOffset.UtcNow.AddSeconds(3); Success();
-                    }
                     await Delay(15).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
+                catch (Exception e) { Fail(e); await Delay(300).ConfigureAwait(false); }
+            }
+        }
+        private async Task HeartbeatLoop()
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                try
+                {
+                    await Send(eventClient, HttpMethod.Post, "/v1/bridge/heartbeat", new { session_id = session!.SessionId, runtime_generation = request.RuntimeGeneration, queue_depth = Commands.Count, fps = Fps, actor_count = ActorCount }, session.Token).ConfigureAwait(false);
+                    Success(); await Delay(3000).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
                 catch (Exception e) { Fail(e); await Delay(300).ConfigureAwait(false); }
@@ -148,7 +155,7 @@ namespace LivingNPC.Core
         {
             while (!stop.IsCancellationRequested)
             {
-                if (Commands.Remaining < 32 || Acks.Remaining < 128) { await Delay(30).ConfigureAwait(false); continue; }
+                if (Commands.Remaining < BridgeLimits.MaxCommands || Acks.Remaining < 128) { await Delay(30).ConfigureAwait(false); continue; }
                 try
                 {
                     var batch = Wire.Decode<CommandBatch>(await Send(pollClient, HttpMethod.Get, "/v1/bridge/commands?session_id=" + Uri.EscapeDataString(session!.SessionId) + "&after=" + cursor, null, session.Token).ConfigureAwait(false));

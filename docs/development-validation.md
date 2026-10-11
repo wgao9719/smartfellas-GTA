@@ -268,3 +268,41 @@ uv run --frozen pytest -W error
 ```
 
 Result: **1,312 passed, 10 skipped, 1 failed in 140.61 seconds** (exit 1). The load test passed. The sole failure was the separately owned `tools/tests/test_deploy_adapter.py::test_windows_deploy_script_rejects_corrupt_upload_and_rolls_back_locked_dll`: `DID NOT RAISE CalledProcessError`, with the script reporting "Deployed adapter" after the corrupt upload. Deployment code was not changed. No CI, GTA, or native performance checks were run for this fix, and the earlier CI runner's temporary-directory permissions were not inspected.
+
+### Bounded command polls and independent heartbeats
+
+On 2026-10-11, TOWER-PENGU reproduced audit `b-sections-6-11.md` finding 4 in the `win/fix-command-pagination` worktree with its own `.venv`. Four new Python regressions failed before implementation: a poll returned 80 commands; 80 ASCII dialogue chunks produced 354,086 bytes and the UTF-8 case produced 994,086 bytes; a single oversized status command was accepted. Three new C# regression cases also failed: blocked event and acknowledgment requests delayed heartbeats, and the worker requested another page with only 32 free command slots. The heartbeat defect was starvation behind traffic; idle heartbeats already existed.
+
+The service now returns an ordered prefix bounded by both limits in `data/bridge_limits.json`: 262,144 UTF-8 bytes and 64 commands. C# embeds the same file in `LivingNPC.Core.dll`; both language suites check its values. The byte budget includes JSON escaping, separators, envelope, and cursor. Commands are never split or removed by polling; `after` advances only to the last returned sequence, retries return the same pending page, and acknowledgments retain their existing meaning. Terminal and expired commands are still filtered.
+
+A command that cannot fit alone is rejected with HTTP 413 before enqueueing or allocating its sequence. The poll route also reports 413 if an invalid in-memory mutation makes a queued command oversized, without silently skipping that command. The worker waits for capacity for a full page before polling. Heartbeats run in a separate cancellable worker loop, every three seconds after a successful send, independently of event/ACK traffic and long polls. HTTP work remains off the game tick (SPECS.md sections 6.2, 7.1, 7.3, and 12).
+
+Regression coverage includes complete backlog draining, stable retries, order and sequence preservation, UTF-8 byte counting, an exactly full response at a cursor digit boundary, a one-byte overflow, explicit oversized-command handling, blocked-traffic heartbeats, and adapter queue backpressure. No GTA process, physical audio device, or game installation was used; native lifecycle and performance acceptance remain pending.
+
+The live action-outcome check initially passed its assertions but exited 1 while removing `service.log` (`WinError 32`). It still used plain `TemporaryDirectory`, unlike the other service probes. It now uses `live_cleanup.temporary_directory`, which retries the documented Windows launcher/interpreter shutdown race for up to 15 seconds and still raises if cleanup cannot finish. Its rerun exited 0. Automatic approval review rejected removing the failed run's leftover folder, `C:\Users\Public\Documents\Wondershare\CreatorTemp\lls-action-outcomes-jqywr2eg`; it was left in place. A process check found no Python process for that fixture.
+
+Validation used uv 0.12.17, Python 3.12.14, .NET 10.0.401, and PowerShell 5.1. The pinned SHVDN compile reference was copied from the main clone after verifying SHA-256 `f328a36445c1d3e282e70b2791efc0d516ae3009d0d1461bf076893805a01cd9`; no loader was installed. Process-local settings:
+
+```powershell
+$env:PATH = 'C:\Users\Brian\.lls-tools\uv;' + $env:PATH
+$env:LLS_DOTNET = 'C:\Users\Brian\Documents\Github\smartfellas-GTA\.dotnet\dotnet.exe'
+$env:RestoreSources = 'https://api.nuget.org/v3/index.json'
+```
+
+| Command | Observed result |
+|---|---|
+| `uv sync --frozen --group dev --python C:\Users\Brian\AppData\Roaming\uv\python\cpython-3.12.14-windows-x86_64-none\python.exe` | Created this worktree's `.venv` |
+| `uv run --frozen pytest -W error tests/test_bridge.py -k 'command_backlog or oversized_single_command' -q` | Before fix: 4 failed; after fix: 4 passed |
+| `uv run --frozen pytest -W error tests/test_bridge.py -q` | 74 passed |
+| `uv run --frozen ruff check service tests tools` | Passed |
+| `uv run --frozen pytest -W error` | 1,352 passed, 1 skipped in 173.22 seconds; final rerun after the cleanup fix: 1,352 passed, 1 skipped in 171.94 seconds. Skip is opt-in real whisper.cpp. |
+| `& $env:LLS_DOTNET test adapter/LivingNPC.Core.Tests/LivingNPC.Core.Tests.csproj --configuration Release` | 303 passed, 0 failed, 0 skipped |
+| `& $env:LLS_DOTNET build adapter/LivingNPC.GameAdapter/LivingNPC.GameAdapter.csproj --configuration Release` | 0 warnings, 0 errors |
+| `& $env:LLS_DOTNET build adapter/LivingNPC.GameAdapter/LivingNPC.GameAdapter.csproj --configuration Debug` | 0 warnings, 0 errors |
+| `uv run --frozen python tests/live_bridge_check.py` | Passed |
+| `uv run --frozen python tests/live_bridge_check.py --speech` | Passed |
+| `uv run --frozen python tests/live_bridge_check.py --whisper` | Passed |
+| `uv run --frozen python tests/live_bridge_check.py --speech --whisper` | Passed |
+| `uv run --frozen python tests/live_bridge_check.py --pin` | Passed, including durable identity after session close |
+| `uv run --frozen python tests/live_bridge_crash_check.py` | Passed: reconnect, withdrawal, stale-action rejection, no invented completion |
+| `uv run --frozen python tests/live_action_outcome_check.py` | Passed after cleanup fix: 2 outcomes and 2 private memories after restart, late completion rejected |

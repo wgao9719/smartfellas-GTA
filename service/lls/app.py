@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from . import __version__
 from .actions import POLICY_VERSION
 from .admin import create_admin_router
+from .bridge_limits import MAX_BODY_BYTES, MAX_COMMANDS
 from .build_identity import source_identity
 from .neighborhood_bridge import create_neighborhood_router
 from .perception_bridge import PerceptionBatch
@@ -72,7 +73,7 @@ class BoundaryMiddleware:
             if message["type"] == "http.disconnect":
                 return
             body.extend(message.get("body", b""))
-            if len(body) > 256 * 1024:
+            if len(body) > MAX_BODY_BYTES:
                 return await self.reject(scope, receive, send, 413, "request body exceeds 256 KiB")
             if not message.get("more_body", False):
                 break
@@ -243,15 +244,25 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
                 runtime.expire_commands(session)
                 await runtime.flush_outcomes(session)
                 output = []
+                command_bytes = 0
                 for command in session.commands.values():
                     if command["seq"] > after and command["state"] not in TERMINAL:
-                        output.append(
-                            {
-                                k: v
-                                for k, v in command.items()
-                                if k not in {"state", "reason"} and not k.startswith("_")
-                            }
-                        )
+                        wire = {
+                            k: v
+                            for k, v in command.items()
+                            if k not in {"state", "reason"} and not k.startswith("_")
+                        }
+                        size = len(JSONResponse(wire).body)
+                        envelope = len(JSONResponse({"commands": [], "cursor": wire["seq"]}).body)
+                        # Count UTF-8 bytes, commas, and the actual cursor/envelope.
+                        if envelope + command_bytes + size + len(output) > MAX_BODY_BYTES:
+                            if not output:
+                                raise HTTPException(413, "single command exceeds bridge body limit")
+                            break
+                        output.append(wire)
+                        command_bytes += size
+                        if len(output) == MAX_COMMANDS:
+                            break
                 return output
 
         session.changed.clear()
@@ -262,7 +273,7 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
             except TimeoutError:
                 pass
             output = await available()
-        return {"commands": output, "cursor": max([after] + [c["seq"] for c in output])}
+        return JSONResponse({"commands": output, "cursor": output[-1]["seq"] if output else after})
 
     @app.post("/v1/bridge/commands/{command_id}/ack")
     async def ack(command_id: str, body: Ack, token=Depends(bearer)):

@@ -1,0 +1,4 @@
+{
+  "max_body_bytes": 262144,
+  "max_commands": 64
+}
