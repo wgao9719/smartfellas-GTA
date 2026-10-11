@@ -88,6 +88,8 @@ The adapter displays `Recording` only after a bound service status confirms capt
 
 Audio subtitles arrive when software playback starts. A later audio chunk can replace an earlier audio subtitle. The adapter acknowledges only text that it rendered. The backend owns playback completion receipts and prevents duplicate memory records across audio and subtitle delivery.
 
+Speech synthesis receives the same display-rule text as the audio subtitle. Markup never reaches the voice, the subtitle, or a delivery receipt. The [display rule](g0-toolchain.md#implemented-boundaries) describes the normalization.
+
 ## Simulated bridge acceptance
 
 1. Run the typed-input bridge check.

@@ -172,15 +172,15 @@ namespace LivingNPC.GameAdapter
             tasks.Remove(command.Id);
         }
         public void Reset() { OnScriptThread(); bindings.Clear(); tasks.Clear(); SelectedActorId = null; Recording = false; ClearSubtitle(); }
-        public void ShowSubtitle(string speaker, string text) { OnScriptThread(); SubtitleRendered = false; subtitle = Clean(speaker + ": " + text); subtitleUntil = DateTimeOffset.UtcNow.AddSeconds(30); }
+        // Dialogue renders verbatim. Unsafe text never renders, so it never earns a subtitle receipt.
+        public void ShowSubtitle(string speaker, string text) { OnScriptThread(); SubtitleRendered = false; subtitle = DisplayText.IsSafe(speaker) && DisplayText.IsSafe(text) ? speaker + ": " + text : ""; subtitleUntil = DateTimeOffset.UtcNow.AddSeconds(30); }
         public void ClearSubtitle() { OnScriptThread(); subtitle = ""; SubtitleRendered = false; }
-        public void ShowStatus(string state, string message) { OnScriptThread(); Recording = state == "recording"; status = Clean(message); }
-        private static string Clean(string text) => text.Replace("~", "").Replace("<", "").Replace(">", "");
+        public void ShowStatus(string state, string message) { OnScriptThread(); Recording = state == "recording"; status = DisplayText.Clean(message); }
         public void Render(string? typed)
         {
             OnScriptThread();
             if (Game.IsPaused) return;
-            if (typed != null) GTA.UI.Screen.ShowSubtitle("You: " + Clean(typed) + "_", 100);
+            if (typed != null) GTA.UI.Screen.ShowSubtitle("You: " + DisplayText.Clean(typed) + "_", 100);
             else if (subtitle.Length > 0 && DateTimeOffset.UtcNow < subtitleUntil) { GTA.UI.Screen.ShowSubtitle(subtitle, 100); SubtitleRendered = true; }
             if (Recording) GTA.UI.Screen.ShowHelpTextThisFrame("Living Los Santos: Recording");
             else if (status.Length > 0) GTA.UI.Screen.ShowHelpTextThisFrame(status);

@@ -12,7 +12,7 @@ public sealed class FakeGame : IGameAdapter
     public ActorState Actor = new() { ActorId = "npc", RuntimeInstanceId = "instance-1", Generation = 7, Exists = true, Alive = true, Distance = 3, Ownership = Ownership.Ambient, Policy = ControlPolicy.Ambient, CanMove = true };
     public int Starts, Releases, Subtitles;
     public int SubtitleClears;
-    public string LastSubtitle = "";
+    public string LastSubtitle = "", LastSpeaker = "";
     public bool SubtitleRendered { get; set; } = true;
     public void Forget(Command command) { }
     public string Status = "";
@@ -22,7 +22,7 @@ public sealed class FakeGame : IGameAdapter
     public bool Start(Command command, ActorState actor, string actionId, JObject arguments) { Starts++; return true; }
     public EffectObservation Observe(Command command, ActorState actor, string actionId) => Observation;
     public void Release(Command command, ActorState actor, string actionId) => Releases++;
-    public void ShowSubtitle(string speaker, string text) { Subtitles++; LastSubtitle = text; }
+    public void ShowSubtitle(string speaker, string text) { Subtitles++; LastSpeaker = speaker; LastSubtitle = text; }
     public void ClearSubtitle() { SubtitleClears++; LastSubtitle = ""; }
     public void ShowStatus(string state, string message) => Status = state;
 }
@@ -141,6 +141,24 @@ public class ControllerTests
         Assert.Equal(1, game.Subtitles);
         game.SubtitleRendered = false; controller.Tick(Now.AddSeconds(3)); Assert.Equal(2, game.Subtitles); Assert.Empty(Drain(controller));
         controller.Cancel("scene-1"); Assert.Equal("canceled", Assert.Single(Drain(controller)).Status);
+    }
+    private static Command Line(string text, string speaker = "Resident") { var command = Action("line"); command.Kind = "dialogue.chunk"; command.Payload = JObject.FromObject(new { text, speaker, turn_id = "turn", chunk_index = 0, scene_id = "scene-1", final = false }); return command; }
+    [Theory]
+    [InlineData("text", "Meet me at ~r~the docks~s~.")][InlineData("text", "<C>Now</C>!")][InlineData("text", "Line\nbreak")][InlineData("text", "bidi \u202Eevil")][InlineData("speaker", "Resident<C>")]
+    public void UnsafeDialogueIsRejectedNotRewritten(string field, string value)
+    {
+        var game = new FakeGame(); var controller = Controller(game); var command = Line("Safe words.");
+        command.Payload[field] = value; controller.Commands.TryAdd(command); controller.Tick(Now); controller.Tick(Now.AddSeconds(1));
+        var ack = Assert.Single(Drain(controller));
+        Assert.Equal(0, game.Subtitles); Assert.Equal("rejected", ack.Status); Assert.Equal("unsafe_display_text", ack.Reason); Assert.Null(ack.Observed);
+    }
+    [Fact] public void SubtitleAckReportsExactlyTheRenderedText()
+    {
+        var game = new FakeGame(); var controller = Controller(game);
+        controller.Commands.TryAdd(Line(" Meet me at the docks. ", "Probe Neighbor")); controller.Tick(Now); controller.Tick(Now.AddMilliseconds(100));
+        var ack = Assert.Single(Drain(controller));
+        Assert.Equal(("Probe Neighbor", " Meet me at the docks. "), (game.LastSpeaker, game.LastSubtitle));
+        Assert.Equal(game.LastSubtitle, ack.Observed!["text"]); Assert.Equal("subtitle", ack.Observed["delivery"]); Assert.Equal(DisplayText.Rule, ack.Observed["display_rule"]);
     }
     [Fact] public void LongSubtitleQueueCompletesWithinSeparateSpeechWindow()
     {

@@ -169,6 +169,25 @@ async def test_simulated_social_delivery_requires_separate_listener_evidence(soc
     assert not any(c["kind"] == "action.execute" for c in session.commands.values())
 
 
+async def test_social_markup_turn_delivers_the_quote_shown_as_subtitle(social_scene):
+    client, runtime, session, clock = social_scene
+    actor = runtime.repo.get_actor(session.request.profile_id, "npc-a")
+    actor["persona"]["social"]["opinion"] = "I like ~g~quiet~s~ streets.<br>~n~"
+    runtime.repo.register_actor(session.request.profile_id, actor)
+    assert (await invite(client, session)).status_code == 200
+    reply = await turn(client, session)
+    command = session.commands[reply["command_id"]]
+    assert command["payload"]["text"] == "I like quiet streets. "
+    await acknowledge(client, session, command)
+    delivery = envelope(session, command_id=command["id"], witnesses=[listener(session, clock)])
+    response = await client.post("/v1/bridge/social/delivery", json=delivery)
+    assert response.status_code == 200, response.text
+    assert response.json()["heard"]["npc-b"]["text"] == command["payload"]["text"]
+    assert [m["text"] for m in heard_memories(runtime, session, "npc-b")] == [
+        "npc-a told me: I like quiet streets."
+    ]
+
+
 @pytest.mark.parametrize("change", ["unknown_hearing", "binding", "stale"])
 async def test_social_rejects_unproved_listener_knowledge(social_scene, change):
     client, runtime, session, clock = social_scene

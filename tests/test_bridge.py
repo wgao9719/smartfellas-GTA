@@ -4,9 +4,11 @@ from datetime import timedelta
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from service.lls.__main__ import fixture_event, fixture_session
 from service.lls.app import create_app
+from service.lls.display import is_display_safe
 from service.lls.protocol import ActionProposal, Event
 from service.lls.providers import FakeProvider
 from service.lls.runtime import now
@@ -813,6 +815,87 @@ async def test_delivery_memory_requires_actual_ack(client):
     )
     spoken = [m["text"] for m in memories if m["text"].startswith("I said:")]
     assert spoken == ["I said: " + prefix]
+
+
+class MarkupProvider(FakeProvider):
+    def __init__(self, *parts):
+        self.parts = parts
+
+    async def dialogue(self, context):
+        for part in self.parts:
+            yield part
+
+
+def delivered_event(client, command):
+    row = client.app.state.repository.connection.execute(
+        "SELECT data FROM events WHERE profile_id=? AND event_id=?",
+        ("fake-demo", command["id"] + ":delivered"),
+    ).fetchone()
+    return json.loads(row["data"])["payload"]
+
+
+async def test_markup_reply_delivers_display_text_to_subtitles_memory_and_receipts(client):
+    sid, _ = await open_ready(client, actor_overrides={"name": "~r~Neighbor<C>"})
+    runtime = client.app.state.runtime
+    runtime.provider = MarkupProvider("Meet me at ~r~the docks~s~. <C>Now</C>!")
+    session = runtime.sessions[sid]
+    await utterance(client, sid)
+    await session.task
+    chunks = [c for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+    assert [c["payload"]["text"] for c in chunks] == ["Meet me at the docks. ", "Now!", ""]
+    assert {c["payload"]["speaker"] for c in chunks} == {"Neighbor"}
+    raw = {"session_id": sid, "runtime_generation": 1, "status": "completed"}
+    raw["observed"] = {"delivery": "subtitle", "text": "Meet me at ~r~the docks~s~. "}
+    response = await client.post(f"/v1/bridge/commands/{chunks[0]['id']}/ack", json=raw)
+    assert response.status_code == 422
+    for command in chunks:
+        await delivery_ack(client, session, command)
+    for command in chunks[:2]:
+        payload = delivered_event(client, command)
+        assert payload["text"] == command["payload"]["text"] and is_display_safe(payload["text"])
+        assert payload["speaker"] == "Neighbor" and payload["display_rule"] == 1
+        assert session.delivered_utterances[command["id"] + ":delivered"].text == payload["text"]
+    spoken = client.app.state.repository.retrieve_memories(
+        "fake-demo", session.branch_id, "npc-1", "franklin", session.game_datetime, "docks",
+        session_id=sid,
+    )
+    said = sorted(m["text"] for m in spoken if m["text"].startswith("I said:"))
+    assert said == ["I said: Meet me at the docks.", "I said: Now!"]
+
+
+async def test_markup_only_chunk_is_skipped_without_breaking_the_turn(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    runtime.provider = MarkupProvider("Hello there. ", "<C></C>~s~")
+    session = runtime.sessions[sid]
+    await utterance(client, sid)
+    await session.task
+    chunks = [c["payload"] for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+    assert [(c["text"], c["chunk_index"], c["final"]) for c in chunks] == [
+        ("Hello there. ", 0, False),
+        ("", 1, True),
+    ]
+
+
+async def test_runtime_command_normalizes_presentation_fields_but_not_dialogue(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    status = runtime.command(session, "status", None, {"state": "x", "message": "~r~Alert~s~\nnow"})
+    assert status["payload"]["message"] == "Alert now"
+    payload = {
+        "text": "Plain words.",
+        "speaker": "Nei<b>ghbor</b>",
+        "scene_id": "scene",
+        "turn_id": "turn",
+        "chunk_index": 0,
+        "final": True,
+    }
+    assert runtime.command(session, "dialogue.chunk", "npc-1", payload)["payload"]["speaker"] == (
+        "Neighbor"
+    )
+    with pytest.raises(ValidationError):
+        runtime.command(session, "dialogue.chunk", "npc-1", {**payload, "text": "Hi ~r~there"})
 
 
 @pytest.mark.asyncio

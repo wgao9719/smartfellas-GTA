@@ -24,7 +24,7 @@ var controller = new CommandController(game, bridge.Session.SessionId, generatio
 long seq = 0;
 EventEnvelope Envelope(string kind, string? actorId, object payload) => new() { SessionId = bridge.Session.SessionId, Seq = ++seq, Kind = kind, ActorId = actorId, ProtagonistId = "franklin", GameDatetime = request.GameDatetime, RuntimeGeneration = generation, Payload = payload };
 var worldPayload = new { online = false, mission_active = false, cutscene_active = false, random_event_active = false, paused = false, protagonist_id = "franklin" };
-var actorPayload = new { runtime_handle = 42, runtime_instance_id = "probe-instance", ownership = "ambient", control_policy = "ambient", exists = true, alive = true, distance = 2, mission_entity = false, busy = false, position = new { x = 0, y = 0, z = 0 }, name = "Probe Neighbor" };
+var actorPayload = new { runtime_handle = 42, runtime_instance_id = "probe-instance", ownership = "ambient", control_policy = "ambient", exists = true, alive = true, distance = 2, mission_entity = false, busy = false, position = new { x = 0, y = 0, z = 0 }, name = "Probe ~r~Neighbor<C>" };
 bridge.Events.TryAdd(Envelope("world.snapshot", null, worldPayload));
 var actorSnapshot = Envelope("actor.snapshot", "probe-npc", actorPayload);
 bridge.Events.TryAdd(actorSnapshot);
@@ -114,14 +114,19 @@ var subtitleAcks = acks.Count(a => a.Status == "completed" && a.Reason == "subti
 if (!completedAction || !allDialogueCompleted || finalMarker == null || expectedText < 2 || game.Subtitles != expectedText || game.Starts != 1) throw new InvalidOperationException("Cross-language round trip failed: " + Wire.Encode(new { game.Starts, game.Subtitles, bridge.LastFailure, acks }));
 if (speechMode && (!pttStarted || !pttStopped || !states.Contains("recording") || !states.Contains("transcribing") || audioChunks != expectedText || subtitleAcks != expectedText))
     throw new InvalidOperationException("Speech bridge round trip failed: " + Wire.Encode(new { pttStarted, pttStopped, states, audioChunks, expectedText, subtitleAcks, bridge.LastFailure }));
+// The service sanitized the markup name. The adapter renders verbatim, and each receipt quotes the rendered text.
+var renderedAcks = acks.Where(a => a.Reason == "subtitle_rendered").Select(a => ((string)a.Observed!["text"], Convert.ToInt32(a.Observed["display_rule"]))).ToList();
+if (game.Rendered.Any(r => !DisplayText.IsSafe(r.Speaker) || !DisplayText.IsSafe(r.Text) || r.Speaker != "Probe Neighbor") || !renderedAcks.SequenceEqual(game.Rendered.Select(r => (r.Text, DisplayText.Rule))))
+    throw new InvalidOperationException("Display-safe subtitle round trip failed: " + Wire.Encode(new { game.Rendered, renderedAcks }));
 var close = new StringContent(Wire.Encode(new { runtime_generation = generation }), System.Text.Encoding.UTF8, "application/json");
 (await http.PostAsync("/v1/bridge/sessions/" + bridge.Session.SessionId + "/close", close)).EnsureSuccessStatusCode();
-Console.WriteLine(Wire.Encode(new { status = "passed", mode = speechMode ? "simulated_game_speech" : "simulated_game", game_verified = false, audio_hardware_verified = false, subtitles = game.Subtitles, expected_text_chunks = expectedText, final_marker_acknowledged = true, native_simulations = game.Starts, acks = acks.Count, ptt_recording_confirmed = states.Contains("recording"), ptt_stop_sent = pttStopped, audio_text_chunks = audioChunks, subtitle_delivery_acks = subtitleAcks }));
+Console.WriteLine(Wire.Encode(new { status = "passed", mode = speechMode ? "simulated_game_speech" : "simulated_game", game_verified = false, audio_hardware_verified = false, subtitles = game.Subtitles, expected_text_chunks = expectedText, final_marker_acknowledged = true, native_simulations = game.Starts, acks = acks.Count, display_rule = DisplayText.Rule, display_safe_subtitles = game.Rendered.Count, ptt_recording_confirmed = states.Contains("recording"), ptt_stop_sent = pttStopped, audio_text_chunks = audioChunks, subtitle_delivery_acks = subtitleAcks }));
 
 sealed class FakeGame : IGameAdapter
 {
     private readonly ActorState actor;
     public int Starts, Subtitles, Releases;
+    public readonly List<(string Speaker, string Text)> Rendered = new();
     public bool HoldAction;
     public string Status = "";
     public bool SubtitleRendered => true;
@@ -132,7 +137,7 @@ sealed class FakeGame : IGameAdapter
     public bool Start(Command command, ActorState state, string action, JObject arguments) { Starts++; return true; }
     public EffectObservation Observe(Command command, ActorState state, string action) => HoldAction ? new() { Status = EffectStatus.Running } : new() { Status = EffectStatus.Completed, Reason = "simulated_heading_observed", Facts = new() { ["simulated"] = true } };
     public void Release(Command command, ActorState state, string action) { Releases++; }
-    public void ShowSubtitle(string speaker, string text) => Subtitles++;
+    public void ShowSubtitle(string speaker, string text) { Subtitles++; Rendered.Add((speaker, text)); }
     public void ClearSubtitle() { }
     public void ShowStatus(string state, string message) { Status = state; }
 }

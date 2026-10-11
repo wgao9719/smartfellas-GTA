@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from service.lls.__main__ import fixture_event, fixture_session
 from service.lls.app import create_app
+from service.lls.display import DISPLAY_MAX_CHARS, is_display_safe
 from service.lls.perception_bridge import DEVELOPMENT_PERCEPTION_CAPABILITY
 from service.lls.providers import DisabledProvider
 from service.lls.settings import Settings
@@ -337,6 +338,28 @@ async def test_trigger_effects_keep_private_scope_and_reauthorize_actions(scene)
     diagnostic = (await client.get("/v1/diagnostics")).json()
     assert diagnostic["triggers"]["native_perception_verified"] is False
     assert diagnostic["perception"]["native_verified"] is False
+
+
+@pytest.mark.parametrize(
+    ("template", "evidence", "expected"),
+    [
+        (
+            "Look: {evidence} ~r~Wow~s~<br>",
+            "Rain <b>began</b>~n~near the shop.",
+            "Look: Rain began near the shop. Wow",
+        ),
+        ("{evidence}", "word " * 199 + "end.", ("word " * 100).strip()),
+    ],
+)
+async def test_trigger_remarks_are_display_safe_and_bounded(scene, template, evidence, expected):
+    client, runtime, session, clock = scene
+    runtime.trigger_engine = engine(clock, {"type": "speak_to_player", "template": template})
+    body = batch(session, clock)
+    body["incident"]["text"] = evidence
+    assert (await client.post("/v1/bridge/perception", json=body)).status_code == 200
+    remark = next(c for c in session.commands.values() if c.get("_autonomous"))["payload"]
+    assert remark["text"] == expected and is_display_safe(expected)
+    assert len(expected) <= DISPLAY_MAX_CHARS
 
 
 async def test_foreground_speech_suppresses_automatic_remark(scene):

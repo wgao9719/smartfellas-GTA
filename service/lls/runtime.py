@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
 from .context import build_context
+from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
 from .memory_index import MemoryIndex
 from .neighborhood_bridge import NeighborhoodBridge
 from .outbound import AIControlOwner
@@ -349,6 +350,9 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     503, "command queue full; acknowledge or cancel pending commands"
                 )
             del session.commands[terminal]
+        presented = {"dialogue.chunk": "speaker", "status": "message"}.get(kind)
+        if presented and isinstance(payload.get(presented), str):
+            payload = {**payload, presented: display_text(payload[presented])}
         session.command_seq += 1
         command = {
             "id": self.id_factory("cmd"),
@@ -833,6 +837,9 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     or not self.conversation_policy.check(actor, session.world).allowed
                 ):
                     continue
+                text = display_text(effect.text, DISPLAY_MAX_CHARS)
+                if not text.strip():
+                    continue
                 turn_id = self.id_factory("trigger")
                 # Authored speech is still only a queued command until its delivery acknowledgment.
                 command = self.command(
@@ -840,7 +847,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     "dialogue.chunk",
                     effect.actor_id,
                     {
-                        "text": effect.text[:1000],
+                        "text": text,
                         "speaker": actor["name"],
                         "scene_id": effect.scene_id,
                         "turn_id": turn_id,
@@ -1231,6 +1238,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     chunk = chunk[: self.settings.max_reply_chars - len(text)]
                     if not chunk:
                         break
+                    # Subtitles, speech, receipts, and memories all use the displayed text.
+                    chunk = display_text(chunk)
+                    if not chunk.strip():
+                        continue
                     duration = max(3, min(15, len(chunk) / 12))
                     if index >= 20 or delivery_seconds + duration > 100:
                         break
@@ -1435,7 +1446,12 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
                     "game_datetime": command["_game_datetime"],
                     "protagonist_id": session.request.protagonist_id,
                     "event_type": "dialogue.delivered",
-                    "payload": {"text": actual, "turn_id": command["payload"]["turn_id"]},
+                    "payload": {
+                        "text": actual,
+                        "turn_id": command["payload"]["turn_id"],
+                        "speaker": command["payload"]["speaker"],
+                        "display_rule": DISPLAY_RULE,
+                    },
                     "provenance": "directly_observed",
                     "confidence": 1,
                     "observer_ids": [command["actor_id"]],

@@ -22,7 +22,7 @@ Each accepted witness gets a separate canonical event and private memory. Other 
 
 ## Delivered reports
 
-Reported speech requires a matching delivery receipt from the service's acknowledgment path. The teller identity, current instance, exact words, and quote event identifier must match. The listener must also pass the hearing checks.
+Reported speech requires a matching delivery receipt from the service's acknowledgment path. The teller identity, current instance, exact words, and quote event identifier must match. The listener must also pass the hearing checks. Receipts quote the display-rule text that the subtitle showed, including the `speaker` and `display_rule` fields of `dialogue.delivered`.
 
 The confirmed source is the delivered quote. `reported_event_id` preserves the claimed topic identifier. It does not verify the original incident. Canonical report records explicitly set `reported_lineage_verified=false`.
 

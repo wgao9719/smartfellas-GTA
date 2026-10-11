@@ -3,9 +3,10 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .action_registry import validate_arguments
+from .display import is_display_safe
 
 Identifier = Annotated[str, Field(min_length=1, max_length=128)]
 Protagonist = Literal["michael", "franklin", "trevor"]
@@ -19,6 +20,16 @@ ActionId = Literal[
     "flee_from_threat",
     "play_verified_gesture",
 ]
+
+
+def display_safe(value):
+    # Producers normalize with display_text. Validation catches a producer that did not.
+    if not is_display_safe(value):
+        raise ValueError("text must already follow the display rule")
+    return value
+
+
+DisplayText = Annotated[str, AfterValidator(display_safe)]
 
 
 class StrictModel(BaseModel):
@@ -239,8 +250,8 @@ class SessionResponse(StrictModel):
 
 
 class DialogueChunk(StrictModel):
-    text: str = Field(max_length=4000)
-    speaker: str
+    text: DisplayText = Field(max_length=4000)
+    speaker: DisplayText
     scene_id: Identifier
     turn_id: Identifier
     chunk_index: int = Field(ge=0)
@@ -260,7 +271,7 @@ class ActionCommand(StrictModel):
 
 class StatusMessage(StrictModel):
     state: str
-    message: str
+    message: DisplayText
     scene_id: Identifier | None = None
 
 

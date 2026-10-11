@@ -8,6 +8,7 @@ import pytest
 
 from service.lls.__main__ import fixture_event, fixture_session
 from service.lls.app import create_app
+from service.lls.display import is_display_safe
 from service.lls.protocol import ActionProposal
 from service.lls.providers import FakeProvider
 from service.lls.settings import Settings
@@ -76,8 +77,10 @@ class Synthesizer:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.release.set()
+        self.texts = []
 
     async def synthesize(self, text, destination):
+        self.texts.append(text)
         self.started.set()
         await self.release.wait()
         return wav(destination)
@@ -103,10 +106,11 @@ class Provider(FakeProvider):
     def __init__(self):
         self.contexts = []
         self.actions = 0
+        self.reply = "Hello there."
 
     async def dialogue(self, context):
         self.contexts.append(context)
-        yield "Hello there."
+        yield self.reply
 
     async def action(self, context, utterance, eligible):
         self.actions += 1
@@ -370,6 +374,21 @@ async def test_audio_subtitle_appears_only_at_playback_start_and_memory_is_once(
         assert (
             len([m for m in memories(runtime, session) if m["text"] == "I said: Hello there."]) == 1
         )
+
+
+async def test_speech_and_audio_subtitles_use_identical_display_text(speech_scene):
+    async with speech_scene() as values:
+        client, runtime, session, microphone, transcriber, synthesizer, playback, provider = values
+        provider.reply = "Hi ~r~there~s~. <C>Now</C>!"
+        assert (await say(client, session)).status_code == 200
+        await session.task
+        audio = [
+            c["payload"]["text"]
+            for c in session.commands.values()
+            if c["kind"] == "dialogue.chunk" and c["payload"].get("delivery_mode") == "audio"
+        ]
+        assert audio == synthesizer.texts == ["Hi there. ", "Now!"]
+        assert all(is_display_safe(text) for text in audio)
 
 
 async def test_completed_audio_keeps_subtitle_command_available_until_render_ack(speech_scene):
