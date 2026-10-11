@@ -114,7 +114,7 @@ The demo uses a temporary database and the fake provider. It makes no cloud call
 
 Both integration checks start an isolated temporary service. They verify serialized events, commands, subtitles, action acknowledgments, and session closure. Speech mode uses synthetic audio and mocked playback. It verifies push-to-talk states and delivery ordering without opening audio devices. Both checks detect a task-local `.dotnet` installation automatically.
 
-The process-death check kills its owned temporary service during a fake C# action. It verifies withdrawal, reconnect, stale-action rejection, and preservation of the incomplete outcome.
+The process-death check kills its owned temporary service during a fake C# action. It verifies withdrawal, reconnect, stale-action rejection, and preservation of the canonical started receipt without inventing completion. The receipt remains visible in the admin profile export; the unpinned ambient actor's session-only memories are purged during recovery, just as on normal close.
 
 ```sh
 uv run --frozen python tests/live_bridge_crash_check.py
