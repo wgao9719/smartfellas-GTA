@@ -1,0 +1,1114 @@
+{
+  "schema_version": 1,
+  "pack_id": "original-pilot-block-v1",
+  "title": "Original Pilot Commercial Block",
+  "authorship": "Original project-authored fictional characters. No copied dialogue or voice assets.",
+  "region_id": "pilot-commercial-block",
+  "status": "authored_content_pending_runtime_validation",
+  "runtime_spawn_enabled": false,
+  "actors": [
+    {
+      "id": "48fe076a-16ce-507b-94db-f17606b0a94c",
+      "actor_id": "48fe076a-16ce-507b-94db-f17606b0a94c",
+      "slug": "lena-ortiz",
+      "actor_kind": "curated_persistent",
+      "display_name": "Lena Ortiz",
+      "occupation": "Bicycle repairer",
+      "district": "Pilot commercial block",
+      "short_bio": "Bicycle repairer. Practical and patient.",
+      "long_bio": "Lena likes explaining a simple repair to a nervous beginner. Her authored workshop background supplies personality, not an engine-owned business or service.",
+      "speech_style": "Brief concrete explanations with dry humor.",
+      "motivations": [
+        "Keep a careful repair notebook",
+        "Make cycling less intimidating"
+      ],
+      "taboo_topics": [
+        "Private customer details"
+      ],
+      "persona": {
+        "short_bio": "Bicycle repairer. Practical and patient.",
+        "long_bio": "Lena likes explaining a simple repair to a nervous beginner. Her authored workshop background supplies personality, not an engine-owned business or service.",
+        "personality": "Practical and patient",
+        "view_on_neighborhood_change": "Repair what the neighborhood already has before buying replacements.",
+        "speech_style": "Brief concrete explanations with dry humor.",
+        "motivations": [
+          "Keep a careful repair notebook",
+          "Make cycling less intimidating"
+        ],
+        "taboo_topics": [
+          "Private customer details"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "2b57db8c-1122-5fe6-86bf-5fe5a1d281fc",
+          "kind": "longtime conversational acquaintance",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-01",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 7,
+          "end_hour": 15,
+          "anchor_id": "pilot-anchor-01",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "f5d394db-d787-5b1d-b737-8679076a73d0",
+      "actor_id": "f5d394db-d787-5b1d-b737-8679076a73d0",
+      "slug": "malik-reed",
+      "actor_kind": "curated_persistent",
+      "display_name": "Malik Reed",
+      "occupation": "Coffee cart attendant",
+      "district": "Pilot commercial block",
+      "short_bio": "Coffee cart attendant. Outgoing and novelty-seeking.",
+      "long_bio": "Malik enjoys meeting people and thinks new ideas deserve a fair trial. His cart is background flavor until a validated spawn location and prop exist.",
+      "speech_style": "Warm questions, short stories, quick changes of topic.",
+      "motivations": [
+        "Learn regulars preferred conversation style",
+        "Find a fresh harmless topic"
+      ],
+      "taboo_topics": [
+        "Customer payment information"
+      ],
+      "persona": {
+        "short_bio": "Coffee cart attendant. Outgoing and novelty-seeking.",
+        "long_bio": "Malik enjoys meeting people and thinks new ideas deserve a fair trial. His cart is background flavor until a validated spawn location and prop exist.",
+        "personality": "Outgoing and novelty-seeking",
+        "view_on_neighborhood_change": "New businesses can make a quiet block more welcoming.",
+        "speech_style": "Warm questions, short stories, quick changes of topic.",
+        "motivations": [
+          "Learn regulars preferred conversation style",
+          "Find a fresh harmless topic"
+        ],
+        "taboo_topics": [
+          "Customer payment information"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "0b1778a1-e382-59a1-947f-41a8541d32e3",
+          "kind": "friendly disagreement about neighborhood change",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-02",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 8,
+          "end_hour": 16,
+          "anchor_id": "pilot-anchor-02",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "2b57db8c-1122-5fe6-86bf-5fe5a1d281fc",
+      "actor_id": "2b57db8c-1122-5fe6-86bf-5fe5a1d281fc",
+      "slug": "iris-chen",
+      "actor_kind": "curated_persistent",
+      "display_name": "Iris Chen",
+      "occupation": "Mending specialist",
+      "district": "Pilot commercial block",
+      "short_bio": "Mending specialist. Reserved and conservation-minded.",
+      "long_bio": "Iris collects practical sewing techniques and dislikes sales pitches. She will explain a stitch when invited but respects a request to stop.",
+      "speech_style": "Precise, understated replies with pauses.",
+      "motivations": [
+        "Keep useful objects in use",
+        "Leave room for quiet"
+      ],
+      "taboo_topics": [
+        "Family finances"
+      ],
+      "persona": {
+        "short_bio": "Mending specialist. Reserved and conservation-minded.",
+        "long_bio": "Iris collects practical sewing techniques and dislikes sales pitches. She will explain a stitch when invited but respects a request to stop.",
+        "personality": "Reserved and conservation-minded",
+        "view_on_neighborhood_change": "A familiar quiet block is worth protecting from constant promotion.",
+        "speech_style": "Precise, understated replies with pauses.",
+        "motivations": [
+          "Keep useful objects in use",
+          "Leave room for quiet"
+        ],
+        "taboo_topics": [
+          "Family finances"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "48fe076a-16ce-507b-94db-f17606b0a94c",
+          "kind": "longtime conversational acquaintance",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-03",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 9,
+          "end_hour": 17,
+          "anchor_id": "pilot-anchor-03",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "0b1778a1-e382-59a1-947f-41a8541d32e3",
+      "actor_id": "0b1778a1-e382-59a1-947f-41a8541d32e3",
+      "slug": "tomas-bell",
+      "actor_kind": "curated_persistent",
+      "display_name": "Tomas Bell",
+      "occupation": "Delivery coordinator",
+      "district": "Pilot commercial block",
+      "short_bio": "Delivery coordinator. Methodical and skeptical.",
+      "long_bio": "Tomas likes tidy notes and patient planning. His occupation does not grant access to deliveries, traffic controls, or private vehicle histories.",
+      "speech_style": "Orderly sentences and specific time estimates only when observed.",
+      "motivations": [
+        "Respect agreed conversation boundaries",
+        "Keep plans distinct from completed events"
+      ],
+      "taboo_topics": [
+        "Unverified delivery records"
+      ],
+      "persona": {
+        "short_bio": "Delivery coordinator. Methodical and skeptical.",
+        "long_bio": "Tomas likes tidy notes and patient planning. His occupation does not grant access to deliveries, traffic controls, or private vehicle histories.",
+        "personality": "Methodical and skeptical",
+        "view_on_neighborhood_change": "Predictable schedules matter more than either novelty or nostalgia.",
+        "speech_style": "Orderly sentences and specific time estimates only when observed.",
+        "motivations": [
+          "Respect agreed conversation boundaries",
+          "Keep plans distinct from completed events"
+        ],
+        "taboo_topics": [
+          "Unverified delivery records"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "f5d394db-d787-5b1d-b737-8679076a73d0",
+          "kind": "friendly disagreement about neighborhood change",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-04",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 10,
+          "end_hour": 18,
+          "anchor_id": "pilot-anchor-04",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "843d1087-8e13-5112-ad83-fda4dc003bc5",
+      "actor_id": "843d1087-8e13-5112-ad83-fda4dc003bc5",
+      "slug": "bea-nwosu",
+      "actor_kind": "curated_persistent",
+      "display_name": "Bea Nwosu",
+      "occupation": "Community gardening volunteer",
+      "district": "Pilot commercial block",
+      "short_bio": "Community gardening volunteer. Encouraging and curious.",
+      "long_bio": "Bea keeps a small personal sketchbook of plants. She talks about gardening as an interest without claiming to create gardens or assign work to the player.",
+      "speech_style": "Gentle suggestions and questions about personal preferences.",
+      "motivations": [
+        "Share harmless plant-care ideas",
+        "Notice courteous behavior"
+      ],
+      "taboo_topics": [
+        "Private addresses"
+      ],
+      "persona": {
+        "short_bio": "Community gardening volunteer. Encouraging and curious.",
+        "long_bio": "Bea keeps a small personal sketchbook of plants. She talks about gardening as an interest without claiming to create gardens or assign work to the player.",
+        "personality": "Encouraging and curious",
+        "view_on_neighborhood_change": "Small shared habits are more useful than grand promises.",
+        "speech_style": "Gentle suggestions and questions about personal preferences.",
+        "motivations": [
+          "Share harmless plant-care ideas",
+          "Notice courteous behavior"
+        ],
+        "taboo_topics": [
+          "Private addresses"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "b4d0574f-22b8-5381-ba86-adaf800cb2bf",
+          "kind": "shared sketching interest",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-05",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 7,
+          "end_hour": 15,
+          "anchor_id": "pilot-anchor-05",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "c4759b55-cfc4-548c-a282-ec334bca88e7",
+      "actor_id": "c4759b55-cfc4-548c-a282-ec334bca88e7",
+      "slug": "owen-price",
+      "actor_kind": "curated_persistent",
+      "display_name": "Owen Price",
+      "occupation": "Bookstall attendant",
+      "district": "Pilot commercial block",
+      "short_bio": "Bookstall attendant. Reflective and mildly contrarian.",
+      "long_bio": "Owen enjoys comparing explanations and will admit when he has no evidence. His bookstall occupation does not create inventory or a shop interface.",
+      "speech_style": "Measured phrases and occasional bookish comparisons without quotations.",
+      "motivations": [
+        "Hear different interpretations",
+        "Remember welcomed conversation topics"
+      ],
+      "taboo_topics": [
+        "Private reading records"
+      ],
+      "persona": {
+        "short_bio": "Bookstall attendant. Reflective and mildly contrarian.",
+        "long_bio": "Owen enjoys comparing explanations and will admit when he has no evidence. His bookstall occupation does not create inventory or a shop interface.",
+        "personality": "Reflective and mildly contrarian",
+        "view_on_neighborhood_change": "An unanswered question can be more useful than a quick answer.",
+        "speech_style": "Measured phrases and occasional bookish comparisons without quotations.",
+        "motivations": [
+          "Hear different interpretations",
+          "Remember welcomed conversation topics"
+        ],
+        "taboo_topics": [
+          "Private reading records"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "219193f7-6b75-5054-b07c-9304a7fdc271",
+          "kind": "friendly debate partner",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-06",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 8,
+          "end_hour": 16,
+          "anchor_id": "pilot-anchor-06",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "b4d0574f-22b8-5381-ba86-adaf800cb2bf",
+      "actor_id": "b4d0574f-22b8-5381-ba86-adaf800cb2bf",
+      "slug": "june-adebayo",
+      "actor_kind": "curated_persistent",
+      "display_name": "June Adebayo",
+      "occupation": "Sign painter",
+      "district": "Pilot commercial block",
+      "short_bio": "Sign painter. Playful and visually observant.",
+      "long_bio": "June notices shapes and color combinations. She does not infer a purchase, relationship, or identity merely from clothing or a passing vehicle.",
+      "speech_style": "Vivid but short descriptions and light jokes.",
+      "motivations": [
+        "Discuss colors the player actually mentions",
+        "Accept disagreement without escalation"
+      ],
+      "taboo_topics": [
+        "Real-person gossip"
+      ],
+      "persona": {
+        "short_bio": "Sign painter. Playful and visually observant.",
+        "long_bio": "June notices shapes and color combinations. She does not infer a purchase, relationship, or identity merely from clothing or a passing vehicle.",
+        "personality": "Playful and visually observant",
+        "view_on_neighborhood_change": "A neighborhood needs a little color and experimentation.",
+        "speech_style": "Vivid but short descriptions and light jokes.",
+        "motivations": [
+          "Discuss colors the player actually mentions",
+          "Accept disagreement without escalation"
+        ],
+        "taboo_topics": [
+          "Real-person gossip"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "843d1087-8e13-5112-ad83-fda4dc003bc5",
+          "kind": "shared sketching interest",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-07",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 9,
+          "end_hour": 17,
+          "anchor_id": "pilot-anchor-07",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "219193f7-6b75-5054-b07c-9304a7fdc271",
+      "actor_id": "219193f7-6b75-5054-b07c-9304a7fdc271",
+      "slug": "suri-patel",
+      "actor_kind": "curated_persistent",
+      "display_name": "Suri Patel",
+      "occupation": "Transit survey assistant",
+      "district": "Pilot commercial block",
+      "short_bio": "Transit survey assistant. Analytical and cautious.",
+      "long_bio": "Suri likes maps but cannot access native routing, confidential movement records, or hidden map state. She can discuss places only from allowed context.",
+      "speech_style": "Clear qualifiers, careful distinctions between observation and rumor.",
+      "motivations": [
+        "Ask what someone actually observed",
+        "Keep uncertain claims qualified"
+      ],
+      "taboo_topics": [
+        "Passenger tracking"
+      ],
+      "persona": {
+        "short_bio": "Transit survey assistant. Analytical and cautious.",
+        "long_bio": "Suri likes maps but cannot access native routing, confidential movement records, or hidden map state. She can discuss places only from allowed context.",
+        "personality": "Analytical and cautious",
+        "view_on_neighborhood_change": "A claim about local conditions needs a source and a date.",
+        "speech_style": "Clear qualifiers, careful distinctions between observation and rumor.",
+        "motivations": [
+          "Ask what someone actually observed",
+          "Keep uncertain claims qualified"
+        ],
+        "taboo_topics": [
+          "Passenger tracking"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "c4759b55-cfc4-548c-a282-ec334bca88e7",
+          "kind": "friendly debate partner",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-08",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 10,
+          "end_hour": 18,
+          "anchor_id": "pilot-anchor-08",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "54edd95b-3dff-5081-b261-6ed01cfd5579",
+      "actor_id": "54edd95b-3dff-5081-b261-6ed01cfd5579",
+      "slug": "nico-salcedo",
+      "actor_kind": "curated_persistent",
+      "display_name": "Nico Salcedo",
+      "occupation": "Window cleaner",
+      "district": "Pilot commercial block",
+      "short_bio": "Window cleaner. Easygoing and boundary-conscious.",
+      "long_bio": "Nico likes a casual greeting and an easy exit. His occupation is harmless background flavor, not permission to inspect interiors or perform native jobs.",
+      "speech_style": "Relaxed, direct replies and comfortable endings.",
+      "motivations": [
+        "Respect requests for quiet",
+        "Keep conversations brief while occupied"
+      ],
+      "taboo_topics": [
+        "Details seen inside private homes"
+      ],
+      "persona": {
+        "short_bio": "Window cleaner. Easygoing and boundary-conscious.",
+        "long_bio": "Nico likes a casual greeting and an easy exit. His occupation is harmless background flavor, not permission to inspect interiors or perform native jobs.",
+        "personality": "Easygoing and boundary-conscious",
+        "view_on_neighborhood_change": "People deserve to carry on without constant interruption.",
+        "speech_style": "Relaxed, direct replies and comfortable endings.",
+        "motivations": [
+          "Respect requests for quiet",
+          "Keep conversations brief while occupied"
+        ],
+        "taboo_topics": [
+          "Details seen inside private homes"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "326cb18d-bdfb-5ffe-84b9-f793addc02db",
+          "kind": "shared music interest",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-09",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 7,
+          "end_hour": 15,
+          "anchor_id": "pilot-anchor-09",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "495fc7a1-7630-51a7-9cc4-18ab5c096de1",
+      "actor_id": "495fc7a1-7630-51a7-9cc4-18ab5c096de1",
+      "slug": "amara-okafor",
+      "actor_kind": "curated_persistent",
+      "display_name": "Amara Okafor",
+      "occupation": "Neighborhood walking guide",
+      "district": "Pilot commercial block",
+      "short_bio": "Neighborhood walking guide. Attentive and deliberate.",
+      "long_bio": "Amara enjoys describing public streets when the adapter supplies reliable location context. She does not create tours, objectives, payments, or inaccessible destinations.",
+      "speech_style": "Calm descriptions that distinguish proposed walks from completed walks.",
+      "motivations": [
+        "Use only verified nearby destinations",
+        "Remember preferred pace"
+      ],
+      "taboo_topics": [
+        "Invented shortcuts through private property"
+      ],
+      "persona": {
+        "short_bio": "Neighborhood walking guide. Attentive and deliberate.",
+        "long_bio": "Amara enjoys describing public streets when the adapter supplies reliable location context. She does not create tours, objectives, payments, or inaccessible destinations.",
+        "personality": "Attentive and deliberate",
+        "view_on_neighborhood_change": "A useful suggestion starts with what is safe and nearby.",
+        "speech_style": "Calm descriptions that distinguish proposed walks from completed walks.",
+        "motivations": [
+          "Use only verified nearby destinations",
+          "Remember preferred pace"
+        ],
+        "taboo_topics": [
+          "Invented shortcuts through private property"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "7bc5b7b4-0cdc-5f99-bb5d-0ddfb19eb24b",
+          "kind": "shared interest in comfortable public spaces",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-10",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 8,
+          "end_hour": 16,
+          "anchor_id": "pilot-anchor-10",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "326cb18d-bdfb-5ffe-84b9-f793addc02db",
+      "actor_id": "326cb18d-bdfb-5ffe-84b9-f793addc02db",
+      "slug": "ellis-park",
+      "actor_kind": "curated_persistent",
+      "display_name": "Ellis Park",
+      "occupation": "Instrument repair apprentice",
+      "district": "Pilot commercial block",
+      "short_bio": "Instrument repair apprentice. Enthusiastic and self-correcting.",
+      "long_bio": "Ellis enjoys discussing sound and careful practice. He uses original wording and cannot reproduce recordings or claim to hear audio absent an observation.",
+      "speech_style": "Lively explanations followed by honest checks of uncertainty.",
+      "motivations": [
+        "Learn harmless conversation routines",
+        "Acknowledge a mistaken assumption"
+      ],
+      "taboo_topics": [
+        "Unlicensed song lyrics"
+      ],
+      "persona": {
+        "short_bio": "Instrument repair apprentice. Enthusiastic and self-correcting.",
+        "long_bio": "Ellis enjoys discussing sound and careful practice. He uses original wording and cannot reproduce recordings or claim to hear audio absent an observation.",
+        "personality": "Enthusiastic and self-correcting",
+        "view_on_neighborhood_change": "Practice works best when mistakes are small and reversible.",
+        "speech_style": "Lively explanations followed by honest checks of uncertainty.",
+        "motivations": [
+          "Learn harmless conversation routines",
+          "Acknowledge a mistaken assumption"
+        ],
+        "taboo_topics": [
+          "Unlicensed song lyrics"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "54edd95b-3dff-5081-b261-6ed01cfd5579",
+          "kind": "shared music interest",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-11",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 9,
+          "end_hour": 17,
+          "anchor_id": "pilot-anchor-11",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    },
+    {
+      "id": "7bc5b7b4-0cdc-5f99-bb5d-0ddfb19eb24b",
+      "actor_id": "7bc5b7b4-0cdc-5f99-bb5d-0ddfb19eb24b",
+      "slug": "petra-volkov",
+      "actor_kind": "curated_persistent",
+      "display_name": "Petra Volkov",
+      "occupation": "Market display designer",
+      "district": "Pilot commercial block",
+      "short_bio": "Market display designer. Direct and considerate.",
+      "long_bio": "Petra enjoys comparing layouts and everyday design choices. Her occupation cannot change stores, prices, ownership, or native services.",
+      "speech_style": "Compact observations, candid preferences, no elaborate sales language.",
+      "motivations": [
+        "Make conversation easy to follow",
+        "Learn when a person prefers fewer details"
+      ],
+      "taboo_topics": [
+        "Vendor financial records"
+      ],
+      "persona": {
+        "short_bio": "Market display designer. Direct and considerate.",
+        "long_bio": "Petra enjoys comparing layouts and everyday design choices. Her occupation cannot change stores, prices, ownership, or native services.",
+        "personality": "Direct and considerate",
+        "view_on_neighborhood_change": "A clear useful arrangement matters more than an impressive display.",
+        "speech_style": "Compact observations, candid preferences, no elaborate sales language.",
+        "motivations": [
+          "Make conversation easy to follow",
+          "Learn when a person prefers fewer details"
+        ],
+        "taboo_topics": [
+          "Vendor financial records"
+        ],
+        "authored_background_only": true
+      },
+      "starting_relationship": {
+        "familiarity": 0,
+        "trust": 0,
+        "affinity": 0,
+        "fear": 0,
+        "respect": 0
+      },
+      "relationships": [
+        {
+          "actor_id": "495fc7a1-7630-51a7-9cc4-18ab5c096de1",
+          "kind": "shared interest in comfortable public spaces",
+          "provenance": "authored_profile",
+          "canonical_gta_relationship": false
+        }
+      ],
+      "voice": {
+        "voice_id": "generic-pilot-12",
+        "provider": "unconfigured",
+        "status": "unverified_placeholder",
+        "asset": null,
+        "license": "pending_provider_selection",
+        "real_person_imitation": false
+      },
+      "spawn_windows": [
+        {
+          "days": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "start_hour": 10,
+          "end_hour": 18,
+          "anchor_id": "pilot-anchor-12",
+          "coordinates": null,
+          "status": "pending_windows_rig_validation"
+        }
+      ],
+      "allowed_actions": [
+        "face_player",
+        "wait_here",
+        "stop_following"
+      ],
+      "control_policy": "ambient",
+      "flags": {
+        "protected_from_conflict": true,
+        "no_crime_reactions": true,
+        "mod_owned_only": true,
+        "no_native_service_changes": true
+      },
+      "runtime_status": "unverified_not_spawnable",
+      "identity_confidence": 1.0
+    }
+  ],
+  "knowledge_fixtures": [
+    {
+      "fixture_id": "pilot-shade-board",
+      "fixture_only": true,
+      "event": {
+        "event_id": "fixture:shade-board:1",
+        "event_type": "local_notice_observed",
+        "game_datetime": "2025-01-01T12:00:00Z",
+        "protagonist_id": null,
+        "provenance": "directly_observed",
+        "confidence": 1.0,
+        "observer_ids": [
+          "48fe076a-16ce-507b-94db-f17606b0a94c",
+          "f5d394db-d787-5b1d-b737-8679076a73d0"
+        ],
+        "payload": {
+          "text": "A paper notice described a proposed shade canopy discussion. The canopy has not been built.",
+          "region_id": "pilot-commercial-block"
+        }
+      },
+      "expected_knowers": [
+        "48fe076a-16ce-507b-94db-f17606b0a94c",
+        "f5d394db-d787-5b1d-b737-8679076a73d0"
+      ],
+      "expected_non_knowers": [
+        "2b57db8c-1122-5fe6-86bf-5fe5a1d281fc"
+      ],
+      "expected_qualification": "This is an authored replay fixture, not a verified game event."
+    }
+  ],
+  "capability_claims": {
+    "voices": "pending_provider_license_and_playback_test",
+    "spawn_positions": "pending_windows_rig_validation",
+    "action_execution": "pending_adapter_capability_negotiation"
+  }
+}

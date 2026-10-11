@@ -1,0 +1,30 @@
+; Install as scripts/LivingNPC/LivingNPC.ini. Logs use the same directory.
+
+[Service]
+URL=http://127.0.0.1:8765
+ProfileId=default
+; Set only when selecting an existing save lineage explicitly.
+ParentBranchId=
+DevLAN=false
+; Prefer LLS_BRIDGE_TOKEN in the game process environment.
+BootstrapToken=
+
+[Input]
+TargetKey=F6
+TextKey=F7
+PttKey=N
+; Hold to whisper. Verify on the rig that B does not conflict with a game binding.
+WhisperKey=B
+CancelKey=Back
+; Press twice within 5 seconds to pin the selected pedestrian. Check for key conflicts on the rig.
+PinKey=F8
+
+[Compatibility]
+ScriptHookVBuild=UNVERIFIED
+ServiceOS=windows
+
+[Development]
+; Debug builds only. This enables unverified G0 face/wait primitives for rig testing.
+EnableUnverifiedActions=false
+; Debug builds only. Keeps pinned peds from despawning through an unverified persistence call.
+EnableUnverifiedPinPersistence=false

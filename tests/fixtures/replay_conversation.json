@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "sanitized": true,
+  "start_utc": "2026-01-01T00:00:00+00:00",
+  "session": {
+    "profile_id": "fake-demo",
+    "protagonist_id": "franklin",
+    "runtime_generation": 1,
+    "game_datetime": "2013-09-17T12:00:00",
+    "capabilities": [
+      "face_player",
+      "wait_here"
+    ],
+    "manifest": {
+      "game_edition": "legacy",
+      "story_mode": true,
+      "gta_build": "fake",
+      "scripthookv_build": "fake",
+      "shvdn_build": "fake",
+      "adapter_version": "fake",
+      "game_os_version": "fake",
+      "service_os": "fake",
+      "capability_flags": [
+        "fake_game"
+      ]
+    }
+  },
+  "turns": [
+    {
+      "chunks": [
+        "I can face you. ",
+        "Let me try."
+      ],
+      "action": {
+        "action_id": "face_player"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "event",
+      "event": {
+        "event_id": "demo-1",
+        "session_id": "recorded-session",
+        "seq": 1,
+        "kind": "world.snapshot",
+        "occurred_at_utc": "2026-01-01T00:00:00+00:00",
+        "game_datetime": "2013-09-17T12:00:00",
+        "protagonist_id": "franklin",
+        "runtime_generation": 1,
+        "actor_id": null,
+        "payload": {
+          "online": false,
+          "mission_active": false,
+          "cutscene_active": false,
+          "random_event_active": false,
+          "paused": false,
+          "protagonist_id": "franklin"
+        }
+      }
+    },
+    {
+      "type": "event",
+      "event": {
+        "event_id": "demo-2",
+        "session_id": "recorded-session",
+        "seq": 2,
+        "kind": "actor.snapshot",
+        "occurred_at_utc": "2026-01-01T00:00:00+00:00",
+        "game_datetime": "2013-09-17T12:00:00",
+        "protagonist_id": "franklin",
+        "runtime_generation": 1,
+        "actor_id": "fixture-npc",
+        "payload": {
+          "runtime_handle": 42,
+          "runtime_instance_id": "fixture-ped",
+          "ownership": "ambient",
+          "control_policy": "ambient",
+          "exists": true,
+          "alive": true,
+          "distance": 2,
+          "mission_entity": false,
+          "busy": false,
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "name": "Fixture Neighbor",
+          "role_class": "civilian",
+          "role_reason": "civilian_evidence",
+          "ped_facts": {
+            "model_hash": -912318012,
+            "ped_type": 4,
+            "relationship_group_hash": 45677184,
+            "human": true,
+            "animal_model": false,
+            "cuffed": false,
+            "in_police_vehicle": false,
+            "player_group": false,
+            "mission_entity": false,
+            "in_mod_registry": false,
+            "took_persistence": false,
+            "belongs_to_mod_script": false
+          }
+        }
+      }
+    },
+    {
+      "type": "event",
+      "event": {
+        "event_id": "demo-3",
+        "session_id": "recorded-session",
+        "seq": 3,
+        "kind": "player.utterance_text",
+        "occurred_at_utc": "2026-01-01T00:00:00+00:00",
+        "game_datetime": "2013-09-17T12:00:00",
+        "protagonist_id": "franklin",
+        "runtime_generation": 1,
+        "actor_id": "fixture-npc",
+        "payload": {
+          "text": "Please look at me.",
+          "scene_id": "fixture-scene"
+        }
+      }
+    },
+    {
+      "type": "wait_turn"
+    },
+    {
+      "type": "ack",
+      "command_seq": 1,
+      "status": "completed",
+      "observed": {
+        "text": "I can face you. "
+      }
+    },
+    {
+      "type": "ack",
+      "command_seq": 2,
+      "status": "completed",
+      "observed": {
+        "text": "Let me try."
+      }
+    },
+    {
+      "type": "ack",
+      "command_seq": 3,
+      "status": "completed",
+      "observed": {
+        "text": ""
+      }
+    },
+    {
+      "type": "ack",
+      "command_seq": 4,
+      "status": "started"
+    },
+    {
+      "type": "ack",
+      "command_seq": 4,
+      "status": "completed"
+    }
+  ]
+}

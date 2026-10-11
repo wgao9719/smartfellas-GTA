@@ -1,0 +1,61 @@
+schema_version: 1
+recorded_at: 2026-10-10
+product: Living Los Santos
+status: UNVERIFIED
+g0_passed: false
+runtime:
+  edition: GTA V Legacy
+  mode: Story Mode only
+  storefront: UNVERIFIED
+  gta_build: UNVERIFIED
+  scripthookv_build: UNVERIFIED
+  shvdn_runtime_release: UNVERIFIED
+  expected_loaded_asis: [ScriptHookVDotNet.asi]
+  os: UNVERIFIED
+  cpu: UNVERIFIED
+  gpu: UNVERIFIED
+  gpu_driver: UNVERIFIED
+  dotnet_framework: '4.8'
+  vc_runtime: UNVERIFIED
+compile_reference:
+  shvdn_release: v3.6.0
+  source: https://github.com/scripthookvdotnet/scripthookvdotnet/releases/tag/v3.6.0
+  dll_sha256: f328a36445c1d3e282e70b2791efc0d516ae3009d0d1461bf076893805a01cd9
+  runtime_compatibility: UNVERIFIED
+mac_toolchain:
+  dotnet_sdk: 10.0.100
+  target: net48
+  core_target: netstandard2.0
+  test_target: net10.0
+  python: '3.11+'
+  second_mac_build_and_tests: PASSED_LOCAL  # 2026-10-11, Apple M4, macOS 15.3.1, .NET SDK 10.0.401
+  second_mac_reproduction: UNVERIFIED  # G0-7 also needs deploy and Reload() on the rig
+network:
+  release: loopback only
+  development: explicit private IPv4 or Tailscale CGNAT address with bootstrap token and peer allowlist
+  windows_tailscale_peer: UNVERIFIED
+  latency_acceptance: local Windows service only
+actions:
+  face_player: UNVERIFIED
+  wait_here: UNVERIFIED
+  follow_player: NOT_IMPLEMENTED
+  stop_following: NOT_IMPLEMENTED
+  go_to_safe_point: NOT_IMPLEMENTED
+  wander_nearby: NOT_IMPLEMENTED
+  flee_from_threat: NOT_IMPLEMENTED
+  play_verified_gesture: NOT_IMPLEMENTED
+adapter_features:
+  ped_role_classifier: UNVERIFIED  # docs/actions/ped-classification-and-pin.md
+  actor_pin: UNVERIFIED
+  pin_persistence: DEV_ONLY_UNVERIFIED
+  whisper_key: UNVERIFIED
+  display_rule: 1
+acceptance:
+  baseline_five_minutes: UNVERIFIED
+  mac_dll_loaded_on_rig: UNVERIFIED
+  reload_and_redeploy: UNVERIFIED
+  twenty_interactions: UNVERIFIED
+  twenty_minute_soak: UNVERIFIED
+  service_restart_recovery: UNVERIFIED
+  typed_ptt_audio_subtitles: UNVERIFIED
+  game_save_rewind: UNVERIFIED

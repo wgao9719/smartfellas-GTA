@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../LivingNPC.Core/LivingNPC.Core.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../../tests/fixtures/display_text.json" LogicalName="LivingNPC.Tests.display_text.json" /></ItemGroup>
+  <ItemGroup>
+    <None Include="../../tests/fixtures/ped_role_vectors.json" Link="ped_role_vectors.json" CopyToOutputDirectory="PreserveNewest" />
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"><_Parameter1>ShvdnReference</_Parameter1><_Parameter2>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../vendor-refs/ScriptHookVDotNet3.dll'))</_Parameter2></AssemblyAttribute>
+  </ItemGroup>
+</Project>

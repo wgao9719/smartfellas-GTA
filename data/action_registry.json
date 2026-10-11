@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "registry_version": "1",
+  "grants_capabilities": false,
+  "actions": [
+    {
+      "id": "face_player",
+      "description": "Turn toward the player.",
+      "risk_tier": "A",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 30
+          }
+        },
+        "required": []
+      },
+      "executor": {
+        "id": "face_player",
+        "implementation": "g0_debug_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+    },
+    {
+      "id": "follow_player",
+      "description": "Follow nearby with explicit consent.",
+      "risk_tier": "B",
+      "cooldown_seconds": 5,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "max_follow_meters": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 30
+          }
+        },
+        "required": []
+      },
+      "executor": {
+        "id": "follow_player",
+        "implementation": "not_implemented",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+    },
+    {
+      "id": "stop_following",
+      "description": "Stop a mod-owned follow task.",
+      "risk_tier": "A",
+      "cooldown_seconds": 0,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "executor": {
+        "id": "stop_following",
+        "implementation": "not_implemented",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+    },
+    {
+      "id": "go_to_safe_point",
+      "description": "Walk to a validated nearby safe point.",
+      "risk_tier": "B",
+      "cooldown_seconds": 5,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "point": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              },
+              "y": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              },
+              "z": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "z"
+            ]
+          }
+        },
+        "required": [
+          "point"
+        ]
+      },
+      "executor": {
+        "id": "go_to_safe_point",
+        "implementation": "not_implemented",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+    },
+    {
+      "id": "wait_here",
+      "description": "Wait briefly in the current area.",
+      "risk_tier": "A",
+      "cooldown_seconds": 2,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 30
+          }
+        },
+        "required": []
+      },
+      "executor": {
+        "id": "wait_here",
+        "implementation": "g0_debug_only",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+    },
+    {
+      "id": "wander_nearby",
+      "description": "Walk within a small approved area.",
+      "risk_tier": "B",
+      "cooldown_seconds": 5,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "radius": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": []
+      },
+      "executor": {
+        "id": "wander_nearby",
+        "implementation": "not_implemented",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+    },
+    {
+      "id": "flee_from_threat",
+      "description": "Leave an observed threat.",
+      "risk_tier": "B",
+      "cooldown_seconds": 5,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "threat_actor_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": []
+      },
+      "executor": {
+        "id": "flee_from_threat",
+        "implementation": "not_implemented",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+    },
+    {
+      "id": "play_verified_gesture",
+      "description": "Play an explicitly verified gesture.",
+      "risk_tier": "A",
+      "cooldown_seconds": 5,
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "gesture_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "gesture_id"
+        ]
+      },
+      "executor": {
+        "id": "play_verified_gesture",
+        "implementation": "not_implemented",
+        "validation": "unverified",
+        "verified_game_builds": []
+      },
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+    }
+  ]
+}

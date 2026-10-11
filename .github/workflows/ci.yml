@@ -1,0 +1,63 @@
+name: Backend and adapter checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        python: ['3.11', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.17'
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --frozen --group dev
+      - run: uv run --frozen ruff check service tests tools
+      - run: uv run --frozen pytest -W error
+      - run: uv run --frozen python tests/live_action_outcome_check.py
+      - run: uv run --frozen python tests/live_social_check.py
+      - run: uv run --frozen python tests/live_social_check.py --autonomous
+      - run: uv run --frozen python tests/live_social_adaptation_check.py
+      - run: uv run --frozen python tools/learn_skill.py --demo
+      - run: uv run --frozen python tests/live_skill_check.py
+      - run: uv run --frozen python tests/live_skill_autonomy_check.py
+      - run: uv run --frozen python tools/neighborhood_demo.py
+      - run: uv run --frozen python tests/live_neighborhood_check.py
+      - run: uv run --frozen python tests/live_neighborhood_autonomy_check.py
+
+  adapter:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.17'
+          python-version: '3.12'
+      - run: uv sync --frozen --group dev
+      # The core tests read the reference to check role-table model names.
+      - run: uv run python tools/fetch_shvdn_reference.py
+      - run: dotnet test adapter/LivingNPC.Core.Tests/LivingNPC.Core.Tests.csproj --configuration Release
+      - run: dotnet build adapter/LivingNPC.GameAdapter/LivingNPC.GameAdapter.csproj --configuration Release
+      - run: uv run python tests/live_bridge_check.py
+      - run: uv run python tests/live_bridge_check.py --speech
+      - run: uv run python tests/live_bridge_check.py --pin
+      - run: uv run --frozen python tests/live_bridge_crash_check.py
