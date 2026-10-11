@@ -32,6 +32,18 @@ namespace LivingNPC.Core
             return handle != 0 && handle != playerHandle && exists && alive && Finite(distance) && distance >= 0 && distance <= MaximumDistance;
         }
 
+        public static bool CanBind(RoleClassification? classification, bool existingBinding)
+        {
+            return classification != null && classification.Role == PedRole.Civilian && classification.Policy == ControlPolicy.Ambient &&
+                (classification.Ownership == Ownership.Ambient || existingBinding && classification.Ownership == Ownership.ModOwned);
+        }
+
+        public static bool HasCameraGeometry(TargetVector cameraPosition, TargetVector lookDirection)
+        {
+            var lookLength = Math.Sqrt(lookDirection.X * lookDirection.X + lookDirection.Y * lookDirection.Y + lookDirection.Z * lookDirection.Z);
+            return Finite(cameraPosition.X) && Finite(cameraPosition.Y) && Finite(cameraPosition.Z) && Finite(lookLength) && lookLength > 0;
+        }
+
         public static IEnumerable<TargetCandidate> Rank(IEnumerable<TargetCandidate> candidates, TargetVector cameraPosition, TargetVector lookDirection)
         {
             return candidates.Select(candidate => new { Candidate = candidate, Score = Score(candidate, cameraPosition, lookDirection) })

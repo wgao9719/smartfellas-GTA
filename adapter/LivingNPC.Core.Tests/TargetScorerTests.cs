@@ -32,6 +32,47 @@ public sealed class TargetScorerTests
         Assert.True(TargetScorer.IsCandidate(-2, 1, true, true, 4));
     }
 
+    [Fact] public void AmbientCivilianCanBindAndExistingPinnedCivilianCanBeSelectedAgain()
+    {
+        var facts = ClassifierTests.Civilian();
+        Assert.True(TargetScorer.CanBind(PedClassifier.Classify(facts), false));
+        facts.InModRegistry = true;
+        Assert.True(TargetScorer.CanBind(PedClassifier.Classify(facts), true));
+        Assert.False(TargetScorer.CanBind(PedClassifier.Classify(facts), false));
+    }
+
+    [Fact] public void EveryRefusedRoleStaysIneligibleEvenWithAmbientPolicyAndAnExistingBinding()
+    {
+        foreach (var role in PedRoleTable.Roles.Where(role => role != PedRole.Civilian))
+            Assert.False(TargetScorer.CanBind(new RoleClassification { Role = role, Ownership = Ownership.Ambient, Policy = ControlPolicy.Ambient }, true));
+    }
+
+    [Theory][InlineData(Ownership.Unknown)][InlineData(Ownership.GameScriptOwned)]
+    public void RefusedOwnershipCannotUseAnExistingBinding(Ownership ownership)
+    {
+        var classification = new RoleClassification { Role = PedRole.Civilian, Ownership = ownership, Policy = ControlPolicy.Ambient };
+        Assert.False(TargetScorer.CanBind(classification, false));
+        Assert.False(TargetScorer.CanBind(classification, true));
+    }
+
+    [Theory][InlineData(ControlPolicy.Protected)][InlineData(ControlPolicy.ServiceLimited)]
+    public void RestrictivePolicyCannotUseAnExistingBinding(ControlPolicy policy)
+    {
+        Assert.False(TargetScorer.CanBind(new RoleClassification { Role = PedRole.Civilian, Ownership = Ownership.ModOwned, Policy = policy }, true));
+    }
+
+    [Theory][InlineData("model")][InlineData("ped_type")][InlineData("relationship_group")][InlineData("missing")]
+    public void MissingCivilianEvidenceIsNotEligible(string missing)
+    {
+        PedFacts? facts = ClassifierTests.Civilian();
+        if (missing == "model") facts.ModelHash = 0;
+        if (missing == "ped_type") facts.PedType = -1;
+        if (missing == "relationship_group") facts.RelationshipGroupHash = 0;
+        if (missing == "missing") facts = null;
+        Assert.False(TargetScorer.CanBind(PedClassifier.Classify(facts), false));
+        Assert.False(TargetScorer.CanBind(null, true));
+    }
+
     [Fact] public void FartherLookedAtPedBeatsNearerPedBehindPlayer()
     {
         var behind = new TargetCandidate(1, 2, new TargetVector(0, -2, 0));
@@ -95,6 +136,31 @@ public sealed class TargetScorerTests
     {
         Assert.Null(TargetScorer.Score(AtAngle(1, 3, 0), Origin, Origin));
         Assert.Null(TargetScorer.Score(new TargetCandidate(1, 3, Origin), Origin, Forward));
+    }
+
+    [Fact] public void CameraFailureCanBeDistinguishedFromAnEmptyCone()
+    {
+        var behind = new[] { AtAngle(1, 2, 180) };
+        Assert.Empty(TargetScorer.Rank(behind, Origin, Forward));
+        Assert.True(TargetScorer.HasCameraGeometry(Origin, Forward));
+        Assert.Empty(TargetScorer.Rank(behind, Origin, Origin));
+        Assert.False(TargetScorer.HasCameraGeometry(Origin, Origin));
+    }
+
+    [Theory][InlineData(double.NaN)][InlineData(double.PositiveInfinity)][InlineData(double.NegativeInfinity)]
+    public void CameraGeometryRejectsEveryMissingCoordinate(double value)
+    {
+        foreach (var invalid in new[] { new TargetVector(value, 1, 1), new TargetVector(1, value, 1), new TargetVector(1, 1, value) })
+        {
+            Assert.False(TargetScorer.HasCameraGeometry(invalid, Forward));
+            Assert.False(TargetScorer.HasCameraGeometry(Origin, invalid));
+        }
+    }
+
+    [Fact] public void CameraGeometryAcceptsNonUnitDirectionButFailsClosedOnOverflow()
+    {
+        Assert.True(TargetScorer.HasCameraGeometry(new TargetVector(100, -20, 10), new TargetVector(0, 3, 0)));
+        Assert.False(TargetScorer.HasCameraGeometry(Origin, new TargetVector(double.MaxValue, 1, 0)));
     }
 
     [Fact] public void ConeIncludesItsBoundaryAndUsesVerticalAngle()

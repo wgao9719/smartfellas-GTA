@@ -47,12 +47,14 @@ identifies source commit `4afee05937377d33d87930821e922bb2d3987dae`:
 - [ScriptDomain.cs, lines 1066–1154](https://github.com/scripthookvdotnet/scripthookvdotnet/blob/4afee05937377d33d87930821e922bb2d3987dae/source/core/ScriptDomain.cs#L1066)
   constructs scripts on its domain thread. [NativeFunc.cs, lines 246–256](https://github.com/scripthookvdotnet/scripthookvdotnet/blob/4afee05937377d33d87930821e922bb2d3987dae/source/core/NativeFunc.cs#L246)
   and [ScriptDomain.cs, lines 1493–1564](https://github.com/scripthookvdotnet/scripthookvdotnet/blob/4afee05937377d33d87930821e922bb2d3987dae/source/core/ScriptDomain.cs#L1493)
-  support native calls in that context. Constructor decorator registration is
-  therefore retained; there is no demonstrated thread defect in those calls.
+  support native calls in that context. This historical review retained
+  constructor decorator registration; the later QA crash supersedes that
+  decision. All binding decorator code has now been removed; see the
+  [current binding guard](actions/ped-classification-and-pin.md).
 
 No other constructor Game/World calls were found. The bridge and log workers
 use HTTP, queues, and files; they do not call game methods. Remaining rig risks
-include decorator registration and identity, player validity during loads,
+include continuity-based identity, player validity during loads,
 load-boundary detection, native task completion/withdrawal, pin persistence,
 and cleanup during domain-thread abort or AppDomain unload. Off-thread abort
 cannot guarantee native cleanup. Compilation still uses the pinned v3.6.0

@@ -114,7 +114,7 @@ namespace LivingNPC.GameAdapter
         }
         private string[] CapabilityFlags()
         {
-            var flags = new List<string> { "typed_input", "ptt_control", "subtitles", "runtime_decorator_binding", "role_classifier_v1", "role_table_" + PedRoleTable.Default.Version, "actor_pin" };
+            var flags = new List<string> { "typed_input", "ptt_control", "subtitles", "runtime_continuity_binding", "role_classifier_v1", "role_table_" + PedRoleTable.Default.Version, "actor_pin" };
             if (game.PinPersistence) flags.Add("pin_persistence_unverified");
             return flags.ToArray();
         }
@@ -153,6 +153,8 @@ namespace LivingNPC.GameAdapter
                 game.Render(null); return;
             }
             if (bridge == null) Connect(world);
+            PruneAndPublish();
+            if (bridge == null) { game.Render(typing); return; }
             if (input.Bound && !input.IsCurrent(game.Resolve(input.ActorId!), world, generation)) CancelInput();
             if (bridge!.Session != null && controller == null) controller = new CommandController(game, bridge.Session.SessionId, generation, bridge.Session.PolicyVersion, bridge.Session.Capabilities);
             if (bridge.ProtocolFault) controller?.StopForProtocolFault();
@@ -189,8 +191,6 @@ namespace LivingNPC.GameAdapter
             bridge.Fps = Game.FPS; bridge.ActorCount = game.SelectedActorId == null ? 0 : 1;
             if (DateTimeOffset.UtcNow >= nextSample && bridge.Online)
             {
-                PruneAndPublish();
-                if (bridge == null) { game.Render(typing); return; }
                 var pending = pinConfirmation.PendingActorId; pinConfirmation.Expire(DateTimeOffset.UtcNow);
                 if (pending != null && game.Resolve(pending) is var pinned && (pinned == null || pinned.Ownership == Ownership.ModOwned)) pinConfirmation.Complete(pending);
                 bridge.Snapshots.ReplaceOldest(Event("world.snapshot", null, new { online = world.Online, mission_active = world.MissionActive, cutscene_active = world.CutsceneActive, random_event_active = world.RandomEventActive, paused = world.Paused, protagonist_id = world.ProtagonistId }));
