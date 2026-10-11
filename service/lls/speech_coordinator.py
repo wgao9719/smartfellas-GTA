@@ -14,7 +14,8 @@ import tempfile
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Callable, Literal
@@ -122,6 +123,7 @@ class SpeechReceipt:
     playback_started: bool = False
     audio_duration_ms: int | None = None
     reason: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -234,6 +236,11 @@ class SpeechCoordinator:
     @property
     def receipts(self):
         return tuple(self._receipts)
+
+    def expire_receipts(self, cutoff):
+        retained = [receipt for receipt in self._receipts if receipt.created_at >= cutoff]
+        self._receipts.clear()
+        self._receipts.extend(retained)
 
     def _check(self, operation):
         if self._closed or operation.canceled or not self._identity_current(operation.identity):

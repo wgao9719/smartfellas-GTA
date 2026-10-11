@@ -28,7 +28,7 @@ namespace LivingNPC.Core
             var error = ActionRegistry.Default.ValidateArguments(action, args);
             if (error != null) return error;
             if (consent.Contains(action) && !hasConsent) return "consent_required";
-            if (Duration(action, args) > (action == "face_player" || action == "wait_here" ? 5000 : 10000)) return "invalid_duration";
+            if (!LocalActionController.Supported(action) && Duration(action, args) > (action == "face_player" || action == "wait_here" ? 5000 : 10000)) return "invalid_duration";
             if (IsVehicle(action))
             {
                 if (!actor.InVehicle) return "not_in_vehicle";
@@ -38,11 +38,10 @@ namespace LivingNPC.Core
             else if (actor.InVehicle) return "actor_in_vehicle";
             if ((action == "follow_player" || action == "wander_nearby" || action == "flee_from_threat" ||
                 action == "go_to_safe_point" || action == "run_to_point" || action == "enter_vehicle" || IsCombat(action)) && !actor.CanMove) return "actor_cannot_move";
-            if (action == "stop_following" && !actor.ModFollowing) return "no_mod_follow_task";
             if (action == "shoot_at_target" && !actor.HasFirearm) return "no_equipped_firearm";
-            if (action == "play_verified_gesture" && (string?)args["gesture_id"] != "wave") return "unknown_gesture";
+            if (action == "flee_from_threat" && !hasConsent && !actor.ObservedThreat) return "consent_required";
             if (action == "enter_vehicle" && (string?)args["seat"] != "driver" && (string?)args["seat"] != "passenger") return "invalid_seat";
-            if (IsPoint(action))
+            if (IsPoint(action) && args["point"] is JObject)
             {
                 var point = (JObject)args["point"]!;
                 var dx = (double)point["x"]! - actor.X; var dy = (double)point["y"]! - actor.Y; var dz = (double)point["z"]! - actor.Z;

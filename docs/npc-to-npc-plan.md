@@ -2,14 +2,14 @@
 
 Date: 2026-10-11. Status: service/bridge slice and Debug native integration implemented; GTA verification pending.
 
-## Integration prerequisite for GTA testing
+## Integration with main
 
-This feature checkpoint was validated on base `77086c8`. When pushing it, remote `main`
-was at `ee464d3` and included newer Windows runtime fixes and game test reports. Integrate
-those changes before deploying this branch to GTA, particularly per-tick ped binding
-continuity (which replaced decorators), script-thread initialization, bridge negotiation,
-and cancellation. Reconcile the overlapping native action implementations as well.
-The Mac simulation results below do not validate the integrated Windows build.
+This branch merges `main` at `ee464d3`, including Windows runtime fixes and GTA test reports.
+The social scanner uses the newer read-only per-tick ped binding guard. Script-thread
+initialization, profile confirmation, protocol negotiation, cancellation safeguards,
+retention rules, and Claude providers are retained. Overlapping P0 actions use main's
+bounded local-navigation implementation; the additional actions retain separate executors.
+The combined build still needs an in-game NPC-to-NPC test.
 
 The goal is a street that feels lively. Pedestrians should visibly stop and talk to each other, the player should be able to overhear them, and what they say should reach the player later. This plan builds on the existing development social protocol described in [social scenes](social-development.md) and [the social scheduler](social-autonomy.md). It follows the post-v1 milestone in `references/SPECS.md` §19 and the behavior design in `references/SPECS_agentdesign.md`.
 
@@ -17,8 +17,8 @@ The goal is a street that feels lively. Pedestrians should visibly stop and talk
 
 The service accepts session-scoped ambient pedestrians. Their invitation and continuation
 decisions are deterministic and owned by each recipient; curated and pinned actors retain
-model decisions. A four-line ambient scene reserves four dialogue calls, excluding optional
-semantic-memory HTTP work. Hearing is still required before every subsequent turn.
+model decisions. A four-line ambient scene reserves four dialogue calls. Optional grounding-classifier
+and semantic-memory HTTP work also consumes the chatter budget. Hearing is still required before every subsequent turn.
 
 Social generation has a dedicated system prompt, observable partner appearance/activity,
 and optional observed weather plus the session's game time. It does not share a partner's

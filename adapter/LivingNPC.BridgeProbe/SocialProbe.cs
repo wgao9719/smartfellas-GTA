@@ -22,10 +22,11 @@ static class SocialProbe
             return JObject.Parse(text);
         }
         var generation = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var request = new SessionRequest { ProfileId = "csharp-social-" + Guid.NewGuid().ToString("N"), ProtagonistId = "franklin", RuntimeGeneration = generation, GameDatetime = "2013-09-17T12:00:00", Capabilities = Array.Empty<string>(), Manifest = new Dictionary<string, object> {
+        var request = new SessionRequest { ProfileId = "csharp-social-" + Guid.NewGuid().ToString("N"), SaveSlot = "social-probe", ProfileConfirmed = true, ProtagonistId = "franklin", RuntimeGeneration = generation, GameDatetime = "2013-09-17T12:00:00", Capabilities = Array.Empty<string>(), Manifest = new Dictionary<string, object> {
             ["game_edition"] = "legacy", ["story_mode"] = true, ["gta_build"] = "simulated", ["scripthookv_build"] = "simulated", ["shvdn_build"] = "simulated", ["adapter_version"] = "bridge-probe", ["game_os_version"] = "simulated", ["service_os"] = "macos", ["service_host_mode"] = "local", ["compat_layer"] = "none", ["arch"] = "arm64", ["capability_flags"] = new[] { "fake_game", "development:social:v1" } } };
         if (embodied) request.Manifest["capability_flags"] = new[] { "fake_game", "development:social:v1", "development:social-embodiment:v1" };
         var opened = await Post("/v1/bridge/sessions", request);
+        if (embodied && !opened["capability_flags"]!.Values<string>().Contains("development:social-embodiment:v1")) throw new InvalidOperationException("Social embodiment was not negotiated.");
         var sid = (string)opened["session_id"]!;
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", (string)opened["token"]!);
         var game = new Street(generation);

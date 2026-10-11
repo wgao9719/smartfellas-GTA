@@ -58,7 +58,6 @@ def test_parameterized_native_actions_are_offered_and_authorized(action, argumen
     ("look_at", {"target_id": "car"}, {}, "target_unavailable"),
     ("flee_from_threat", {"threat_actor_id": "car"}, {}, "target_unavailable"),
     ("go_to_safe_point", {"point": {"x": 16, "y": 0, "z": 0}}, {}, "point_outside_local_area"),
-    ("play_verified_gesture", {"gesture_id": "unknown"}, {}, "unknown_gesture"),
     ("follow_player", {}, {"can_move": False}, "actor_cannot_move"),
     ("follow_player", {}, {"distance": 16}, "actor_out_of_range"),
     ("follow_player", {}, {"_sampled_at": 94}, "stale_actor"),
@@ -216,3 +215,10 @@ async def test_new_action_crosses_authenticated_service_boundary(tmp_path):
             assert commands[0]["payload"]["action_id"] == "enter_vehicle"
             assert commands[0]["payload"]["arguments"]["target_id"] == "car-1"
             assert commands[0]["payload"]["consent"] is True
+
+
+def test_gesture_unknown_name_rejected_by_shared_registry():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="allowlisted"):
+        ActionProposal(action_id="play_verified_gesture", arguments={"gesture_id": "unknown"})

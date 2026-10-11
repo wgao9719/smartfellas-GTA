@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from service.lls.__main__ import fixture_event, fixture_role_fields, fixture_session
 from service.lls.app import create_app
+from service.lls.grounding import NEUTRAL_FALLBACK
 from service.lls.settings import Settings
 from service.lls.social import FakeSocialProvider
 from service.lls.social_bridge import DEVELOPMENT_SOCIAL_CAPABILITY
@@ -188,6 +189,83 @@ async def test_social_markup_turn_delivers_the_quote_shown_as_subtitle(social_sc
     assert [m["text"] for m in heard_memories(runtime, session, "npc-b")] == [
         "npc-a told me: I like quiet streets."
     ]
+
+
+@pytest.mark.parametrize("claim", [
+    "Lester has a new mission for you.",
+    "Your next objective is to steal the car.",
+    "Michael is secretly working for the FIB.",
+    "I repaired your car.",
+    "Your haircut costs fifty dollars.",
+    "You earned a cash reward and a permanent shop discount.",
+    "I unlocked the shop for you.",
+    "Trevor is now your trusted ally.",
+    "I already moved the car for you.",
+])
+async def test_social_grounding_removes_only_unbacked_claim_sentences(social_scene, claim):
+    client, runtime, session, clock = social_scene
+    actor = runtime.repo.get_actor(session.request.profile_id, "npc-a")
+    actor["persona"]["social"]["opinion"] = claim + " Nice weather today."
+    runtime.repo.register_actor(session.request.profile_id, actor)
+    assert (await invite(client, session)).status_code == 200
+    command = session.commands[(await turn(client, session))["command_id"]]
+    assert command["payload"]["text"].strip() == "Nice weather today."
+    await acknowledge(client, session, command)
+    response = await client.post("/v1/bridge/social/delivery", json=envelope(
+        session, command_id=command["id"], witnesses=[listener(session, clock)]
+    ))
+    assert response.status_code == 200, response.text
+    assert response.json()["heard"]["npc-b"]["text"].strip() == "Nice weather today."
+    assert claim not in str(heard_memories(runtime, session, "npc-b"))
+
+
+@pytest.mark.parametrize("text", ["I work at the docks", "Nice weather today", "I already ate"])
+async def test_social_grounding_preserves_ordinary_small_talk(social_scene, text):
+    client, runtime, session, clock = social_scene
+    actor = runtime.repo.get_actor(session.request.profile_id, "npc-a")
+    actor["persona"]["social"]["opinion"] = text
+    runtime.repo.register_actor(session.request.profile_id, actor)
+    assert (await invite(client, session)).status_code == 200
+    command = session.commands[(await turn(client, session))["command_id"]]
+    assert command["payload"]["text"] == text
+
+
+async def test_social_grounding_uses_neutral_fallback_when_no_safe_sentence_remains(social_scene):
+    client, runtime, session, clock = social_scene
+    actor = runtime.repo.get_actor(session.request.profile_id, "npc-a")
+    actor["persona"]["social"]["opinion"] = "Lester has a mission for you. I repaired your car."
+    runtime.repo.register_actor(session.request.profile_id, actor)
+    assert (await invite(client, session)).status_code == 200
+    command = session.commands[(await turn(client, session))["command_id"]]
+    assert command["payload"]["text"] == NEUTRAL_FALLBACK
+    await acknowledge(client, session, command)
+    response = await client.post("/v1/bridge/social/delivery", json=envelope(
+        session, command_id=command["id"], witnesses=[listener(session, clock)]
+    ))
+    assert response.status_code == 200, response.text
+    assert response.json()["heard"]["npc-b"]["text"] == NEUTRAL_FALLBACK
+
+
+@pytest.mark.parametrize("safe_sentence", ["", " Nice weather today."])
+async def test_social_grounding_checks_full_sentence_before_display_clipping(
+    social_scene, safe_sentence,
+):
+    client, runtime, session, clock = social_scene
+    runtime.social.config.max_text_characters = 1000
+
+    class LongReply(FakeSocialProvider):
+        async def dialogue(self, context):
+            if context.get("social", {}).get("phase") == "turn":
+                yield "word " * 110
+                yield "and you earned a cash reward." + safe_sentence
+            else:
+                async for part in super().dialogue(context):
+                    yield part
+
+    runtime.provider.primary = LongReply()
+    assert (await invite(client, session)).status_code == 200
+    command = session.commands[(await turn(client, session))["command_id"]]
+    assert command["payload"]["text"] == (safe_sentence.strip() or NEUTRAL_FALLBACK)
 
 
 @pytest.mark.parametrize("change", ["unknown_hearing", "binding", "stale"])

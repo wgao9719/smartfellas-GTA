@@ -311,6 +311,156 @@ async def test_complete_authenticated_learning_and_later_execution(skill_scene):
     assert "_skill" not in diagnostics.text
 
 
+async def test_manual_trial_preflights_late_guard_before_any_bridge_dispatch(skill_scene):
+    client, runtime, session, _ = skill_scene
+    original = await generate(client, session)
+    source = json.loads(original["source"])
+    source["version"] = 2
+    source["steps"] = [*source["steps"][1:], source["steps"][0]]
+    candidate = runtime.skill_store.register_candidate(
+        session.skill_run["identity"], session.game_datetime, source, ["need"]
+    )
+    session.actors["npc"]["mod_following"] = False
+    task = start_trial(client, session, candidate)
+    try:
+        for _ in range(200):
+            if task.done() or any(
+                command["kind"] == "action.execute" for command in session.commands.values()
+            ):
+                break
+            await asyncio.sleep(0.005)
+        assert not any(
+            command["kind"] == "action.execute" for command in session.commands.values()
+        ), "manual trial dispatched before its failing simulated preflight"
+        response = await asyncio.wait_for(task, 1)
+        assert response.status_code == 200, response.text
+        trial = response.json()["result"]
+        assert trial["result"]["status"] == "refused"
+        assert trial["result"]["reason"] == "precondition_mod_following"
+        assert trial["result"]["verification"] == "simulated"
+        assert trial["fingerprint"] == candidate["fingerprint"]
+        session.actors["npc"]["mod_following"] = True
+        completed, commands = await complete(
+            client, session, start_trial(client, session, candidate)
+        )
+        assert completed["result"]["result"]["verification"] == "bridge_acknowledged"
+        assert len(commands) == 2
+    finally:
+        await runtime.close_session(session)
+        await task
+
+
+@pytest.mark.parametrize("change_after_preflight", [False, True])
+async def test_manual_trial_requires_revalidation_after_dependency_change(
+    skill_scene, monkeypatch, change_after_preflight
+):
+    client, runtime, session, _ = skill_scene
+    dependency = await generate(client, session)
+    identity = session.skill_run["identity"]
+    source = json.loads(dependency["source"])
+    source["skill_id"] = "composed"
+    source["steps"] = [{"op": "call", "skill_id": "courtesy", "version": 1}]
+    candidate = runtime.skill_store.register_candidate(
+        identity, session.game_datetime, source, ["need"]
+    )
+    preflight = runtime.preflight_skill
+    validated = await preflight(session, candidate["record_id"])
+    assert validated["result"]["status"] == "completed"
+    changed = json.loads(dependency["source"])
+    changed["steps"][1]["proposal"]["arguments"]["duration_seconds"] = 0.25
+
+    def change_dependency():
+        # Versions are immutable through the API; emulate a stale dependency on disk.
+        with runtime.repo._lock, runtime.repo.connection:
+            runtime.repo.connection.execute(
+                "UPDATE skill_versions SET source=? WHERE profile_id=? AND skill_id=?",
+                (json.dumps(changed), identity.profile_id, "courtesy"),
+            )
+
+    if change_after_preflight:
+
+        async def stale_preflight(session, candidate_id):
+            result = await preflight(session, candidate_id)
+            change_dependency()
+            return result
+
+        monkeypatch.setattr(runtime, "preflight_skill", stale_preflight)
+    else:
+        change_dependency()
+    response = await start_trial(client, session, candidate)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "invalid stored state or timeline input"
+    assert not any(c["kind"] == "action.execute" for c in session.commands.values())
+
+    monkeypatch.setattr(runtime, "preflight_skill", preflight)
+    changed["version"] = 2
+    runtime.skill_store.register_candidate(identity, session.game_datetime, changed, ["need"])
+    source["version"] = 2
+    source["steps"][0]["version"] = 2
+    revised = runtime.skill_store.register_candidate(
+        identity, session.game_datetime, source, ["need"], revises=candidate["record_id"]
+    )
+    assert revised["fingerprint"] != validated["fingerprint"]
+    completed, commands = await complete(client, session, start_trial(client, session, revised))
+    assert completed["result"]["result"]["verification"] == "bridge_acknowledged"
+    assert len(commands) == 2
+    with runtime.repo._lock:
+        _, stamp = runtime.skill_store._scope(identity, session.game_datetime)
+        persisted = runtime.skill_store._record(
+            runtime.skill_store._owned(
+                identity, stamp, session.skill_run["program"]["preflight_id"], {"trial"}
+            )
+        )
+    assert persisted["parent_id"] == revised["record_id"]
+    assert persisted["fingerprint"] == revised["fingerprint"]
+    assert persisted["result"]["fingerprint"] == revised["fingerprint"]
+    assert persisted["result"]["status"] == "completed"
+    assert persisted["result"]["verification"] == "simulated"
+
+
+@pytest.mark.parametrize("mismatch", ["candidate", "record_fingerprint", "result_fingerprint"])
+async def test_manual_trial_rejects_mismatched_persisted_preflight(
+    skill_scene, monkeypatch, mismatch
+):
+    client, runtime, session, _ = skill_scene
+    candidate = await generate(client, session)
+    identity = session.skill_run["identity"]
+    source = json.loads(candidate["source"])
+    source["version"] = 2
+    other = runtime.skill_store.register_candidate(
+        identity, session.game_datetime, source, ["need"]
+    )
+    preflight = runtime.preflight_skill
+
+    async def mismatched_preflight(session, candidate_id):
+        result = await preflight(session, candidate_id)
+        with runtime.repo._lock, runtime.repo.connection:
+            if mismatch == "result_fingerprint":
+                row = runtime.repo.connection.execute(
+                    "SELECT data FROM skill_records WHERE record_id=?", (result["record_id"],)
+                ).fetchone()
+                data = json.loads(row["data"])
+                data["result"]["fingerprint"] = other["fingerprint"]
+                runtime.repo.connection.execute(
+                    "UPDATE skill_records SET data=? WHERE record_id=?",
+                    (json.dumps(data), result["record_id"]),
+                )
+            else:
+                column = "parent_id" if mismatch == "candidate" else "fingerprint"
+                value = other["record_id"] if mismatch == "candidate" else other["fingerprint"]
+                runtime.repo.connection.execute(
+                    f"UPDATE skill_records SET {column}=? WHERE record_id=?",
+                    (value, result["record_id"]),
+                )
+        return result
+
+    monkeypatch.setattr(runtime, "preflight_skill", mismatched_preflight)
+    response = await start_trial(client, session, candidate)
+    assert response.status_code == 409, response.text
+    assert "matching passing preflight" in response.text
+    assert not any(c["kind"] == "action.execute" for c in session.commands.values())
+
+
 async def test_refused_trial_revised_code_and_retention(skill_scene):
     client, _, session, _ = skill_scene
     session.actors["npc"]["mod_following"] = False
@@ -401,6 +551,11 @@ async def test_lifecycle_joins_without_lock_or_ack_deadlock(skill_scene, operati
     candidate = await generate(client, session)
     task = start_trial(client, session, candidate)
     command = await command_for(session, task)
+    preflights = runtime.repo.connection.execute(
+        "SELECT * FROM skill_records WHERE kind='trial'"
+    ).fetchall()
+    assert len(preflights) == 1
+    assert json.loads(preflights[0]["data"])["result"]["verification"] == "simulated"
     if operation == "close":
         await asyncio.wait_for(runtime.close_session(session), 1)
     elif operation == "provider":
@@ -437,9 +592,9 @@ async def test_lifecycle_joins_without_lock_or_ack_deadlock(skill_scene, operati
     assert session.skill_task is None
     assert (
         runtime.repo.connection.execute(
-            "SELECT COUNT(*) FROM skill_records WHERE kind='trial'"
-        ).fetchone()[0]
-        == 0
+            "SELECT * FROM skill_records WHERE kind='trial'"
+        ).fetchall()
+        == ([] if operation == "reset" else preflights)
     )
 
 
@@ -663,6 +818,31 @@ async def test_current_capability_is_checked_before_each_operation(skill_scene):
     assert result.status_code == 200, result.text
     assert result.json()["result"]["result"]["reason"] == "capability_unavailable"
     assert len([c for c in session.commands.values() if c["kind"] == "action.execute"]) == 1
+
+
+@pytest.mark.parametrize("change", ["stored_policy", "skill_capability"])
+async def test_queued_skill_is_reauthorized_at_bridge_delivery(skill_scene, change):
+    client, runtime, session, _ = skill_scene
+    candidate = await generate(client, session)
+    task = start_trial(client, session, candidate)
+    command = await command_for(session, task)
+    if change == "stored_policy":
+        actor = runtime.repo.get_actor(session.request.profile_id, "npc")
+        runtime.repo.register_actor(session.request.profile_id, {
+            **actor, "control_policy": "protected",
+        })
+    else:
+        session.request.manifest.capability_flags.remove(DEVELOPMENT_SKILLS_CAPABILITY)
+    response = await client.get(
+        "/v1/bridge/commands", params={"session_id": session.id, "wait_seconds": 0}
+    )
+    assert response.status_code == 200, response.text
+    assert not any(c["id"] == command["id"] for c in response.json()["commands"])
+    assert command["state"] == "canceled"
+    assert command["reason"] in {"actor_policy_changed", "skill_authorization_changed"}
+    assert (await asyncio.wait_for(task, 1)).status_code == 409
+    assert not runtime.skill_owners
+    assert session.skill_task is None
 
 
 async def test_selected_retirement_revokes_execution_before_next_operation(skill_scene):

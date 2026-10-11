@@ -28,6 +28,7 @@ namespace LivingNPC.Core
             using (var reader = new StreamReader(stream)) return new ActionRegistry(JObject.Parse(reader.ReadToEnd()));
         }
         public JObject Metadata(string actionId) => actions.TryGetValue(actionId, out var item) ? (JObject)item.DeepClone() : throw new ArgumentException("Unknown action");
+        public double Cooldown(string actionId) => (double)actions[actionId]["cooldown_seconds"]!;
         public string? ValidateArguments(string actionId, JObject arguments)
         {
             if (!actions.TryGetValue(actionId, out var item)) return "unknown_action";
@@ -57,6 +58,7 @@ namespace LivingNPC.Core
                     var length = text.Length;
                     for (var i = 0; i + 1 < text.Length; i++) if (char.IsHighSurrogate(text[i]) && char.IsLowSurrogate(text[i + 1])) { length--; i++; }
                     if (length < (int)schema["minLength"]! || length > (int)schema["maxLength"]!) return "argument_out_of_range";
+                    if (schema["enum"] is JArray choices && !choices.Any(choice => (string?)choice == text)) return "argument_out_of_range";
                     return null;
                 default: return "unsupported_argument_schema";
             }

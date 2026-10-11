@@ -69,6 +69,8 @@ def _validate(schema, value, path):
             or not schema["minLength"] <= len(value) <= schema["maxLength"]
         ):
             raise ValueError(f"{path} must be a bounded string")
+        if "enum" in schema and value not in schema["enum"]:
+            raise ValueError(f"{path} must be an allowlisted value")
     else:
         raise ValueError("Unsupported registry schema primitive")
 

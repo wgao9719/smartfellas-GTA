@@ -30,7 +30,33 @@ For example, a local endpoint can be `http://127.0.0.1:1234/v1`. The service ref
 
 Saving configuration always revokes cloud consent. Enabling cloud sends selected character context, relevant memories, and dialogue to the saved endpoint. The consent request binds the full saved configuration, including models, prices, and budgets. A stale dashboard cannot approve a changed configuration.
 
+Every hosted model request passes a shared scrubber immediately before HTTP dispatch. It replaces recognizable API keys/tokens, configured bridge and provider credential values, authorization strings, private-key blocks, e-mail addresses, telephone and card-like numbers, IP addresses, Windows user-profile paths, and associated usernames with `[REDACTED]`. Filtering includes nested persona/context JSON, action-repair messages, social dialogue, skill candidates, and embeddings. Request bodies are not logged; HTTP failures retain the filtered request. The provider credential is still sent in its required authentication header.
+
+The filter preserves ordinary game dialogue and leaves local inference and stored memories unchanged. It recognizes patterns and configured values; it is not a guarantee of anonymity or detection of every personal fact, encoding, or novel secret format. Cloud consent is still required.
+
 Select **Revoke cloud consent** to stop remote requests. The runtime cancels active turns and speech, joins cleanup, and persists revoked consent. This state survives restart even when `LLS_CLOUD_OPT_IN=1` remains in the environment. Ordinary shutdown does not revoke stored consent.
+
+## Claude
+
+The **Claude (Anthropic Messages API)** provider (`LLS_PROVIDER=anthropic`) calls `https://api.anthropic.com/v1/messages` directly rather than through Anthropic's OpenAI-compatibility layer. That layer ignores `response_format`, rejects `temperature` below 1 on current models, and cannot set effort. The consent, reservation, scrubber, redirect and fallback rules above apply unchanged. `LLM_API_KEY` holds the Anthropic key, which is sent only in the `x-api-key` header. When that variable is unset, `python -m service.lls` loads it at startup from the git-ignored `secrets/LLM_API_KEY.txt`, or from `LLS_API_KEY_FILE`. With a hosted provider selected and no key anywhere, it creates that file as a commented template and names it in the startup error. See `secrets/README.md`.
+
+- **Effort.** Every request sets `output_config.effort` from `LLS_ANTHROPIC_EFFORT` (default `medium`). Current Claude models think adaptively; Claude Opus 5.5 cannot turn it off. Thinking is never spoken or stored, but it counts toward each request's output limit and is billed as output, so give dialogue and action limits room for it. `tools/windows-rig/claude-gateway.json` uses 2,048 and 1,024 tokens. Set the variable to an empty value for a model without effort support.
+- **Actions.** The action stage uses structured outputs. The JSON grammar cannot express numeric or string bounds, so the request schema omits `minimum`, `maximum`, `minLength` and `maxLength`. The prompt still states them, and the service validates every proposal against the full registry schema. A refusal or an exhausted output limit selects no action.
+- **Grounding checks.** The sentence classifier returns a `yes`/`no` enum through structured outputs, sends no `temperature`, and has 512 output tokens and a 3-second deadline. A timeout or invalid verdict withholds the sentence, as for other providers.
+- **Usage.** Streamed `message_start` and `message_delta` counts settle each reservation. Input includes any cache reads and writes, at the configured input price.
+- **Configuration without the dashboard.** `LLS_AI_GATEWAY_FILE` loads prices and limits from a JSON `GatewayConfig`. Saved dashboard settings still override the environment and this file. The rig's `start-service.ps1 -Provider claude` uses Claude Sonnet 5 (`claude-sonnet-5`) and `claude-gateway.json`. That file lists Anthropic's published prices per million tokens: $2 input and $10 output for Sonnet 5 and 5.5, $4 and $20 for Opus 5.5. The ledger uses them as estimates, not invoices.
+
+### Claude through the Claude Code CLI
+
+`LLS_PROVIDER=claude_cli` sends the same requests through the **Claude Code CLI you are signed in to** (`claude auth login` once on the service computer) instead of an API key. It is meant for development and demos on a machine that already uses Claude Code. The prompts, consent, reservations, scrubber and response parsing are the Messages API provider's. Only the transport differs:
+
+- Each request runs `claude -p` once in an empty temporary folder with `--tools ""`, `--strict-mcp-config` and `--no-session-persistence`, so the CLI can't use tools, MCP servers or project instructions, and it keeps no transcript. Requests travel on stdin and replies return as `stream-json`; the prompt is never on the command line. Dialogue streams with `--include-partial-messages`, and grounding and action checks use `--json-schema`. Model names must be ones the CLI's route accepts; through a proxy that can mean dated IDs such as `claude-sonnet-4-5-20250929`.
+- The child process gets the service's environment minus every `ANTHROPIC_*`, `CLAUDE_*`, `CLAUDECODE`, `LLM_*` and `LLS_*` variable, so a surrounding Claude Code session can't lend it a token and service secrets never reach it. No API key is read.
+- The CLI takes about a second to start, so one process per prompt shape (dialogue, grounding) is started ahead of time and waits for its single request. Who is speaking travels with the request: the system prompt holds the constant rules, and the character's identity starts the user message.
+- User settings stay loaded, because they can hold how the CLI signs in (for example a local proxy), but `--settings` turns off every hook and always-on thinking. The CLI still adds a short environment note (working folder, OS and today's real date) to the system prompt; no user memory, CLAUDE.md or project files reach the model.
+- Grounding checks get 8 seconds instead of 3, because even a warm CLI adds about a second before the model starts.
+- A signed-out CLI fails the turn with its own message (for example "Not logged in"), which appears in the provider's last failure.
+- `LLS_CLAUDE_CLI` names the executable; by default the service uses `claude` on `PATH`, then `~/.local/bin/claude(.exe)`. Prices in `tools/windows-rig/claude-cli-gateway.json` are zero because a subscription isn't billed per token. The request limits still apply.
 
 ## Reservations and estimates
 

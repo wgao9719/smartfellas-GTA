@@ -8,11 +8,14 @@ from contextlib import asynccontextmanager
 from time import monotonic
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from . import __version__
 from .actions import POLICY_VERSION
 from .admin import create_admin_router
+from .bridge_limits import MAX_BODY_BYTES, MAX_COMMANDS
 from .build_identity import source_identity
 from .neighborhood_bridge import create_neighborhood_router
 from .perception_bridge import PerceptionBatch
@@ -72,7 +75,7 @@ class BoundaryMiddleware:
             if message["type"] == "http.disconnect":
                 return
             body.extend(message.get("body", b""))
-            if len(body) > 256 * 1024:
+            if len(body) > MAX_BODY_BYTES:
                 return await self.reject(scope, receive, send, 413, "request body exceeds 256 KiB")
             if not message.get("more_body", False):
                 break
@@ -105,12 +108,15 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
 
     @asynccontextmanager
     async def lifespan(app):
-        maintenance = asyncio.create_task(runtime.maintain())
+        maintenance = None
         try:
+            await runtime.expire_sessions()
+            maintenance = asyncio.create_task(runtime.maintain())
             yield
         finally:
-            maintenance.cancel()
-            await asyncio.gather(maintenance, return_exceptions=True)
+            if maintenance is not None:
+                maintenance.cancel()
+                await asyncio.gather(maintenance, return_exceptions=True)
             try:
                 await runtime.shutdown()
             finally:
@@ -124,13 +130,33 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
     @app.exception_handler(TimelineAmbiguityError)
     async def ambiguous_timeline(request, exc):
         return JSONResponse(
-            {"detail": "Choose the save timeline explicitly", "branch_candidates": exc.candidates},
+            {
+                "reason_code": "timeline_ambiguous",
+                "detail": "Choose this save's history in the Living Los Santos dashboard",
+                "branch_candidates": exc.candidates,
+            },
             status_code=409,
         )
 
     @app.exception_handler(ValueError)
     async def invalid_state(request, exc):
         return JSONResponse({"detail": "invalid stored state or timeline input"}, status_code=409)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request, exc):
+        if request.url.path == "/v1/bridge/sessions":
+            for error in exc.errors():
+                version = error.get("input")
+                if error["loc"] == ("body", "schema_version") and type(version) is int:
+                    return JSONResponse(
+                        {
+                            "detail": f"Protocol schema version {version} is unsupported; "
+                            "this service requires version 1. Update the Living Los Santos "
+                            "adapter and service together, then reload the adapter."
+                        },
+                        status_code=426,
+                    )
+        return await request_validation_exception_handler(request, exc)
 
     def bearer(authorization: str = Header(default="")):
         if not authorization.startswith("Bearer "):
@@ -164,7 +190,8 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
             "token": session.token,
             "policy_version": POLICY_VERSION,
             "schema_version": 1,
-            "capabilities": body.capabilities,
+            "capabilities": session.request.capabilities,
+            "capability_flags": session.request.manifest.capability_flags,
             "branch_id": session.branch_id,
         }
 
@@ -240,18 +267,32 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
 
         async def available():
             async with session.lock:
-                runtime.expire_commands(session)
-                await runtime.flush_outcomes(session)
+                while True:
+                    runtime.expire_commands(session)
+                    runtime.reauthorize_commands(session)
+                    if not session.outcome_pending:
+                        break
+                    await runtime.flush_outcomes(session)
                 output = []
+                command_bytes = 0
                 for command in session.commands.values():
                     if command["seq"] > after and command["state"] not in TERMINAL:
-                        output.append(
-                            {
-                                k: v
-                                for k, v in command.items()
-                                if k not in {"state", "reason"} and not k.startswith("_")
-                            }
-                        )
+                        wire = {
+                            k: v
+                            for k, v in command.items()
+                            if k not in {"state", "reason"} and not k.startswith("_")
+                        }
+                        size = len(JSONResponse(wire).body)
+                        envelope = len(JSONResponse({"commands": [], "cursor": wire["seq"]}).body)
+                        # Count UTF-8 bytes, commas, and the actual cursor/envelope.
+                        if envelope + command_bytes + size + len(output) > MAX_BODY_BYTES:
+                            if not output:
+                                raise HTTPException(413, "single command exceeds bridge body limit")
+                            break
+                        output.append(wire)
+                        command_bytes += size
+                        if len(output) == MAX_COMMANDS:
+                            break
                 return output
 
         session.changed.clear()
@@ -262,7 +303,7 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
             except TimeoutError:
                 pass
             output = await available()
-        return {"commands": output, "cursor": max([after] + [c["seq"] for c in output])}
+        return JSONResponse({"commands": output, "cursor": output[-1]["seq"] if output else after})
 
     @app.post("/v1/bridge/commands/{command_id}/ack")
     async def ack(command_id: str, body: Ack, token=Depends(bearer)):

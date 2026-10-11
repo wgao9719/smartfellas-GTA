@@ -13,6 +13,16 @@ namespace LivingNPC.Core
         public static string Configuration(string scriptsDirectory) => Path.Combine(DataDirectory(scriptsDirectory), "LivingNPC.ini");
     }
 
+    public static class TaskReleaseGuard
+    {
+        public static void Run(Action release, Action forget, AdapterLog log)
+        {
+            try { release(); }
+            catch (Exception) { log.Write("task_release_failed"); }
+            finally { forget(); }
+        }
+    }
+
     // Disk writes occur on one worker. Script-thread calls never wait for disk.
     // Callers supply operational codes only, never dialogue, URLs, or tokens.
     public sealed class AdapterLog : IDisposable

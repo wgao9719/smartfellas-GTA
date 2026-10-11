@@ -36,6 +36,6 @@ namespace LivingNPC.Core
             if (cooldowns.TryGetValue(actor.ActorId + ":" + action, out var until) && now < until) return "cooldown";
             return null;
         }
-        public void Started(string actorId, string action, DateTimeOffset now) { cooldowns[actorId + ":" + action] = now.AddSeconds(2); }
+        public void Started(string actorId, string action, DateTimeOffset now) { cooldowns[actorId + ":" + action] = now.AddSeconds(ActionRegistry.Default.Cooldown(action)); }
     }
 }

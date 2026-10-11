@@ -237,6 +237,16 @@ class SocialStore:
         ]
         topics.sort(key=lambda quote: (quote["game_datetime"], quote["event_id"]), reverse=True)
         topic = topics[0] if topics else None
+        retained_heard = []
+        for item in heard[-4:]:
+            try:
+                source = self.retelling_source(
+                    start, actor_id, item["event_id"], environment.game_datetime
+                )
+            except ValueError:
+                continue
+            if item["text"] == source["text"]:
+                retained_heard.append(item)
         social = {
             "phase": phase,
             "scene_id": start.scene_id,
@@ -256,7 +266,7 @@ class SocialStore:
                 }
                 for other in start.participant_bindings if other != actor_id
             ],
-            "heard": list(heard[-4:]),
+            "heard": retained_heard,
             "retell_text": retelling["text"] if retelling else None,
             "retell_source_id": retelling["event_id"] if retelling else None,
             "experience": {
@@ -340,12 +350,70 @@ class SocialStore:
         with self.repo._lock:
             return self._delivered_locked(start, utterance, receipt, evidence, game_datetime)
 
+    def _retained_hearing(self, start, utterance, receipt, evidence, game_datetime):
+        """An erased speaker's proof can only replay already retained hearing."""
+        heard = {}
+        listeners = {item.actor_id for item in evidence}
+        for actor_id in start.participant_bindings:
+            if actor_id == utterance.actor_id:
+                continue
+            identifier = self.event_id(start.session_id, receipt.event_id, actor_id)
+            row = self.repo.connection.execute(
+                "SELECT branch_id,data FROM events WHERE profile_id=? AND event_id=?",
+                (start.profile_id, identifier),
+            ).fetchone()
+            if row is None:
+                continue
+            event = json.loads(row["data"])
+            if event.get("content_redacted"):
+                continue
+            payload = event.get("payload", {})
+            expected = {
+                "text": receipt.text,
+                "scene_id": start.scene_id,
+                "session_id": start.session_id,
+                "utterance_id": utterance.utterance_id,
+                "delivery_receipt_id": receipt.event_id,
+                "teller_id": utterance.actor_id,
+                "sampled_at": receipt.sampled_at.isoformat(),
+            }
+            if (
+                row["branch_id"] != start.branch_id
+                or event["game_datetime"] != _date(game_datetime.isoformat())
+                or any(payload.get(key) != value for key, value in expected.items())
+            ):
+                raise ValueError("canonical events are immutable")
+            if (
+                actor_id not in listeners
+                or self._projection_suppressed(start.profile_id, actor_id, identifier)
+                or self.repo.get_memory(start.profile_id, identifier + ":memory") is None
+            ):
+                continue
+            heard[actor_id] = {
+                "event_id": identifier,
+                "text": payload["text"],
+                "teller_id": payload["teller_id"],
+                "provenance": "reported",
+                "confidence": event["confidence"],
+                "game_datetime": event["game_datetime"],
+            }
+        return heard
+
     def _delivered_locked(self, start, utterance, receipt, evidence, game_datetime):
         speaker_event = self.event_id(start.session_id, receipt.event_id, utterance.actor_id)
         # Deleting shared receipt proof invalidates every replay. A speaker's
         # private reset/deletion below affects only that speaker's own projection.
         if self._source_deleted(start.profile_id, speaker_event):
             return {}
+        speaker_suppressed = self._projection_suppressed(
+            start.profile_id, utterance.actor_id, speaker_event
+        )
+        source = self.repo.connection.execute(
+            "SELECT data FROM events WHERE profile_id=? AND event_id=?",
+            (start.profile_id, speaker_event),
+        ).fetchone()
+        if speaker_suppressed or (source and json.loads(source["data"]).get("content_redacted")):
+            return self._retained_hearing(start, utterance, receipt, evidence, game_datetime)
         retelling = (
             self.retelling_source(
                 start, utterance.actor_id, utterance.retell_event_id, game_datetime
@@ -373,20 +441,10 @@ class SocialStore:
             "reported_event_id": utterance.retell_event_id,
             "sampled_at": receipt.sampled_at.isoformat(),
         }
-        speaker_suppressed = self._projection_suppressed(
-            start.profile_id, utterance.actor_id, speaker_event
-        )
-        if speaker_suppressed and self.repo.connection.execute(
-            "SELECT 1 FROM events WHERE profile_id=? AND event_id=?",
-            (start.profile_id, speaker_event),
-        ).fetchone() is None:
-            return {}
         self.link_turn(
             start.profile_id, start.session_id, utterance.actor_id, receipt.event_id,
             utterance.carrier_event_ids,
         )
-        # Validate retained canonical proof even when its owner's memory is
-        # suppressed. A changed replay must not seed a contradictory listener fact.
         self.repo.record_event(
             start.profile_id,
             start.branch_id,
@@ -400,19 +458,18 @@ class SocialStore:
                 },
             },
         )
-        if not speaker_suppressed:
-            self.repo.add_memory(
-                start.profile_id,
-                start.branch_id,
-                utterance.actor_id,
-                start.protagonist_id,
-                game_datetime.isoformat(),
-                "I said: " + receipt.text,
-                [speaker_event],
-                "directly_observed",
-                memory_id=speaker_event + ":memory",
-                session_id=start.session_id,
-            )
+        self.repo.add_memory(
+            start.profile_id,
+            start.branch_id,
+            utterance.actor_id,
+            start.protagonist_id,
+            game_datetime.isoformat(),
+            "I said: " + receipt.text,
+            [speaker_event],
+            "directly_observed",
+            memory_id=speaker_event + ":memory",
+            session_id=start.session_id,
+        )
         heard = {}
         for item in evidence:
             if item.actor_id == utterance.actor_id:

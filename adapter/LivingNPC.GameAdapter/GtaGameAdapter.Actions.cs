@@ -14,7 +14,9 @@ namespace LivingNPC.GameAdapter
         private sealed class VehicleBinding
         {
             public Vehicle Vehicle = null!;
-            public int Model, Marker;
+            public int Model;
+            public Vector3 Position;
+            public double SampledAt;
         }
         private readonly Dictionary<string, VehicleBinding> vehicles = new Dictionary<string, VehicleBinding>();
         private const string WaveDictionary = "friends@frj@ig_1", WaveAnimation = "wave_a";
@@ -25,9 +27,18 @@ namespace LivingNPC.GameAdapter
         }
         private bool HasOwnedTask(string actorId, string action) => tasks.Values.Any(t => t.ActorId == actorId && t.Action == action &&
             bindings.TryGetValue(actorId, out var b) && Valid(b) && ActiveTask(b.Ped, t.Hash));
-        private bool ValidVehicle(VehicleBinding b) => b.Vehicle.Exists() && b.Vehicle.Model.Hash == b.Model &&
-            !b.Vehicle.IsPersistent && b.Vehicle.Model.IsCar && !b.Vehicle.IsDead &&
-            Function.Call<bool>(Hash.DECOR_EXIST_ON, b.Vehicle.Handle, Decorator) && Function.Call<int>(Hash.DECOR_GET_INT, b.Vehicle.Handle, Decorator) == b.Marker;
+        private bool ValidVehicle(VehicleBinding b)
+        {
+            var now = MonotonicMilliseconds();
+            if (!b.Vehicle.Exists() || b.Vehicle.Model.Hash != b.Model || b.Vehicle.IsPersistent || !b.Vehicle.Model.IsCar || b.Vehicle.IsDead || now - b.SampledAt > 250) return false;
+            var position = b.Vehicle.Position;
+            if (position.DistanceTo(b.Position) > 2 + Math.Max(0, now - b.SampledAt) * 0.1) return false;
+            b.Position = position; b.SampledAt = now; return true;
+        }
+        private void SampleVehicles()
+        {
+            foreach (var entry in vehicles.ToArray()) if (!ValidVehicle(entry.Value)) vehicles.Remove(entry.Key);
+        }
         private string? RegisterVehicle(Vehicle vehicle)
         {
             foreach (var entry in vehicles.ToArray())
@@ -36,15 +47,13 @@ namespace LivingNPC.GameAdapter
             var existing = vehicles.FirstOrDefault(v => v.Value.Vehicle.Handle == vehicle.Handle);
             if (existing.Key != null) return existing.Key;
             if (vehicles.Count >= 8 || !vehicle.Exists() || vehicle.IsPersistent || !vehicle.Model.IsCar || vehicle.IsDead) return null;
-            var marker = new Random(Guid.NewGuid().GetHashCode()).Next(1, int.MaxValue);
-            if (!Function.Call<bool>(Hash.DECOR_SET_INT, vehicle.Handle, Decorator, marker)) return null;
             var id = Guid.NewGuid().ToString("N");
-            vehicles[id] = new VehicleBinding { Vehicle = vehicle, Model = vehicle.Model.Hash, Marker = marker };
+            vehicles[id] = new VehicleBinding { Vehicle = vehicle, Model = vehicle.Model.Hash, Position = vehicle.Position, SampledAt = MonotonicMilliseconds() };
             return id;
         }
         private Ped? TargetPed(string id, Ped actor)
         {
-            Ped? target = id == "player" ? Game.Player.Character : bindings.Values.FirstOrDefault(b => b.Instance == id && Valid(b) &&
+            Ped? target = id == "player" ? Game.Player.Character : bindings.Values.FirstOrDefault(b => (b.Instance == id || b.ActorId == id) && Valid(b) &&
                 PedClassifier.Classify(Sample(b.Ped, b)).Policy == ControlPolicy.Ambient)?.Ped;
             return target != null && target.Exists() && !target.IsDead && target.Handle != actor.Handle &&
                 target.Position.DistanceTo(actor.Position) <= 15f && Function.Call<bool>(Hash.HAS_ENTITY_CLEAR_LOS_TO_ENTITY, actor.Handle, target.Handle, 17) ? target : null;
@@ -110,6 +119,8 @@ namespace LivingNPC.GameAdapter
             OnScriptThread();
             if (IsSocialActor(actor.ActorId) || !bindings.TryGetValue(actor.ActorId, out var binding) || !Valid(binding) || binding.Instance != actor.RuntimeInstanceId ||
                 NativeActions.Check(actionId, arguments, actor, (bool?)command.Payload["consent"] == true) != null) return false;
+            if (binding.Instance != command.RuntimeInstanceId || binding.Generation != command.RuntimeGeneration) return false;
+            if (LocalActionController.Supported(actionId)) return StartLocal(command, actor, binding, actionId, arguments);
             var ped = binding.Ped;
             if (!TryPosition(ped, out var origin)) return false;
             var record = new TaskRecord { ActorId = actor.ActorId, Action = actionId, Duration = NativeActions.Duration(actionId, arguments),
@@ -182,7 +193,7 @@ namespace LivingNPC.GameAdapter
         public EffectObservation Observe(Command command, ActorState actor, string actionId)
         {
             OnScriptThread();
-            if (actionId == "face_player" || actionId == "wait_here") return ObserveG0(command, actor, actionId);
+            if (LocalActionController.Supported(actionId) || actionId == "face_player" || actionId == "wait_here") return ObserveG0(command, actor, actionId);
             if (!tasks.TryGetValue(command.Id, out var task) || !bindings.TryGetValue(actor.ActorId, out var binding) || !Valid(binding)) return Result(EffectStatus.Failed, "binding_lost");
             var ped = binding.Ped;
             if (!TryPosition(ped, out var position) || !task.Motion.TrySample(MonotonicMilliseconds(), position.X, position.Y, position.Z, out var motion))
@@ -242,21 +253,29 @@ namespace LivingNPC.GameAdapter
         public void Release(Command command, ActorState actor, string actionId)
         {
             OnScriptThread();
-            if (!tasks.TryGetValue(command.Id, out var task) || !bindings.TryGetValue(actor.ActorId, out var binding) ||
-                !Valid(binding) || binding.Instance != actor.RuntimeInstanceId || !ReadWorld().Safe) return;
-            var current = PedClassifier.Classify(Sample(binding.Ped, binding));
-            if (current.Policy != ControlPolicy.Ambient || (current.Ownership != Ownership.Ambient && current.Ownership != Ownership.ModOwned)) return;
-            var ped = binding.Ped;
-            if (actionId == "look_at")
+            if (LocalActionController.Supported(actionId) || actionId == "face_player" || actionId == "wait_here") { ReleaseLocalAndG0(command, actor, actionId); return; }
+            TaskReleaseGuard.Run(() =>
             {
-                var target = TargetPed(task.TargetId, ped);
-                if (target != null && Function.Call<bool>(Hash.IS_PED_HEADTRACKING_PED, ped.Handle, target.Handle)) Function.Call(Hash.TASK_CLEAR_LOOK_AT, ped.Handle);
-            }
-            else if (actionId == "play_verified_gesture")
-            {
-                if (Function.Call<bool>(Hash.IS_ENTITY_PLAYING_ANIM, ped.Handle, WaveDictionary, WaveAnimation, 3)) Function.Call(Hash.STOP_ANIM_TASK, ped.Handle, WaveDictionary, WaveAnimation, -4f);
-            }
-            else if (actionId != "stop_following" && ActiveTask(ped, task.Hash)) ped.Task.ClearAll();
+                if (!tasks.TryGetValue(command.Id, out var task) || !bindings.TryGetValue(actor.ActorId, out var binding) ||
+                    binding.Instance != actor.RuntimeInstanceId || binding.Instance != command.RuntimeInstanceId ||
+                    binding.Generation != actor.Generation || binding.Generation != command.RuntimeGeneration ||
+                    command.ActorId != actor.ActorId || !ReadWorld().Safe) return;
+                binding.Facts = null;
+                if (!Valid(binding)) return;
+                var current = PedClassifier.Classify(Sample(binding.Ped, binding));
+                if (current.Policy != ControlPolicy.Ambient || (current.Ownership != Ownership.Ambient && current.Ownership != Ownership.ModOwned)) return;
+                var ped = binding.Ped;
+                if (actionId == "look_at")
+                {
+                    var target = TargetPed(task.TargetId, ped);
+                    if (target != null && Function.Call<bool>(Hash.IS_PED_HEADTRACKING_PED, ped.Handle, target.Handle)) Function.Call(Hash.TASK_CLEAR_LOOK_AT, ped.Handle);
+                }
+                else if (actionId == "play_verified_gesture")
+                {
+                    if (Function.Call<bool>(Hash.IS_ENTITY_PLAYING_ANIM, ped.Handle, WaveDictionary, WaveAnimation, 3)) Function.Call(Hash.STOP_ANIM_TASK, ped.Handle, WaveDictionary, WaveAnimation, -4f);
+                }
+                else if (actionId != "stop_following" && ActiveTask(ped, task.Hash)) ped.Task.ClearAll();
+            }, () => Forget(command), log);
         }
     }
 }

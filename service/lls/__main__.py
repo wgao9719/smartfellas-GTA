@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import json
+import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,8 @@ import httpx
 import uvicorn
 
 from .app import create_app
+from .credentials import load_api_key
+from .gateway_config import KEYED_PROVIDERS
 from .roles import joaat
 from .settings import Settings
 
@@ -18,6 +21,8 @@ from .settings import Settings
 def fixture_session():
     return {
         "profile_id": "fake-demo",
+        "save_slot": "fake-slot",
+        "profile_confirmed": True,
         "protagonist_id": "franklin",
         "runtime_generation": 1,
         "game_datetime": "2013-09-17T12:00:00",
@@ -215,6 +220,7 @@ def main():
     if args.demo or args.replay:
         asyncio.run(fake_demo(args.replay))
         return
+    load_api_key(hosted=os.environ.get("LLS_PROVIDER", "disabled") in KEYED_PROVIDERS)
     settings = Settings.from_env()
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, access_log=False)
 

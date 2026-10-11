@@ -18,7 +18,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import Field, ValidationError, field_validator
 
 from .embeddings import EmbeddingConfig
-from .gateway_config import GatewayConfig, validate_local_endpoint
+from .gateway_config import (
+    HOSTED_PROVIDERS,
+    GatewayConfig,
+    hosted_endpoint,
+    validate_local_endpoint,
+)
 from .protocol import DisplayName, StrictModel
 from .settings import Settings
 
@@ -35,6 +40,10 @@ class ConfirmProfile(StrictModel):
 
 class ConfirmActor(StrictModel):
     confirm_actor_id: str = Field(min_length=1, max_length=128)
+
+
+class ConfirmConversation(ConfirmActor):
+    confirm_event_id: str = Field(min_length=1, max_length=128)
 
 
 class PinActor(ConfirmActor):
@@ -54,17 +63,18 @@ class BackupRequest(StrictModel):
 
 
 class ProviderConfiguration(StrictModel):
-    provider: Literal["disabled", "fake", "local_openai", "openai"]
+    provider: Literal["disabled", "fake", "local_openai", "openai", "anthropic", "claude_cli"]
     dialogue_model: str = Field(default="", max_length=128)
     action_model: str = Field(default="", max_length=128)
     openai_base_url: str = Field(default="https://api.openai.com/v1", max_length=512)
+    anthropic_base_url: str = Field(default="https://api.anthropic.com/v1", max_length=512)
     local_base_url: str = Field(default="http://127.0.0.1:1234/v1", max_length=512)
     ai_gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
     _local_endpoint = field_validator("local_base_url")(validate_local_endpoint)
 
-    @field_validator("openai_base_url")
+    @field_validator("openai_base_url", "anthropic_base_url")
     @classmethod
     def remote_endpoint(cls, value):
         endpoint = urlsplit(value)
@@ -226,10 +236,15 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
         async with mutation_lock:
             configuration = runtime.provider.configuration_summary()
             embedding = configuration["embedding"]
-            if configuration["provider"] != "openai" and embedding["provider"] != "openai":
+            hosted = configuration["provider"] in HOSTED_PROVIDERS
+            if not hosted and embedding["provider"] != "openai":
                 raise HTTPException(409, "select and save a hosted provider first")
+            # Embedding-only consent names the OpenAI-compatible endpoint embeddings use.
+            endpoint = (
+                hosted_endpoint(configuration) if hosted else configuration["openai_base_url"]
+            )
             if (
-                body.endpoint != configuration["openai_base_url"]
+                body.endpoint != endpoint
                 or body.configuration_revision != configuration_revision()
             ):
                 raise HTTPException(409, "the provider configuration changed; review it again")
@@ -237,7 +252,7 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             required = {
                 configuration["dialogue_model"],
                 configuration["action_model"] or configuration["dialogue_model"],
-            } if configuration["provider"] == "openai" else set()
+            } if hosted else set()
             if embedding["provider"] == "openai":
                 required.add(embedding["model"])
             if not required.issubset(prices):
@@ -259,11 +274,14 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             {
                 "session_id": session.id,
                 "profile_id": session.request.profile_id,
+                "save_slot": session.request.save_slot,
+                "profile_confirmed": session.request.profile_confirmed,
                 "branch_id": session.branch_id,
                 "protagonist_id": session.request.protagonist_id,
                 "game_datetime": session.game_datetime,
                 "closed": session.closed,
                 "actor_count": len(session.actors),
+                "cleanup_pending": session.cleanup_pending,
             }
             for session in runtime.sessions.values()
         ]
@@ -271,10 +289,13 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             {
                 "profiles": await runtime.db("list_profiles"),
                 "sessions": sessions,
+                "session_cleanup": runtime.cleanup_diagnostics(),
+                "snapshots": runtime.snapshot_diagnostics(),
                 "provider": runtime.provider.name,
                 "speech": "unverified",
                 "game_verified": False,
                 "selected_branches": getattr(runtime, "selected_branches", {}),
+                "profile_warning": runtime.profile_warning,
             }
         )
 
@@ -312,6 +333,9 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             "error_type",
             "policy",
             "memory_ids",
+            "recent_conversation_memory_ids",
+            "grounding",
+            "grounding_verdicts",
             "knowledge_ids",
             "relationship_event_ids",
             "action_outcome_ids",
@@ -340,11 +364,17 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             {
                 "session_id": session.id,
                 "profile_id": session.request.profile_id,
+                "save_slot": session.request.save_slot,
+                "profile_confirmed": session.request.profile_confirmed,
                 "branch_id": session.branch_id,
                 "protagonist_id": session.request.protagonist_id,
                 "game_datetime": session.game_datetime,
                 "closed": session.closed,
                 "provider": runtime.provider.name,
+                "cleanup_pending": session.cleanup_pending,
+                "cleanup_error_type": runtime.cleanup_pending.get(
+                    (session.request.profile_id, session.id)
+                ),
                 "manifest": session.request.manifest.model_dump(),
                 "world": {k: v for k, v in session.world.items() if not k.startswith("_")},
                 "actors": [
@@ -443,6 +473,25 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
                 "deleted": await runtime.db("delete_memory", profile_id, memory_id),
                 "derived_memory_ids": derived,
             })
+
+    @secured.get("/profiles/{profile_id}/actors/{actor_id}/export")
+    async def export_actor(profile_id: str, actor_id: str):
+        if await runtime.db("get_actor", profile_id, actor_id) is None:
+            raise HTTPException(404, "actor not found in this profile")
+        return result(await runtime.db("export_actor", profile_id, actor_id))
+
+    @secured.delete("/profiles/{profile_id}/actors/{actor_id}/conversations/{event_id}")
+    async def erase_conversation(
+        profile_id: str, actor_id: str, event_id: str, body: ConfirmConversation,
+    ):
+        if body.confirm_actor_id != actor_id or body.confirm_event_id != event_id:
+            raise HTTPException(409, "conversation confirmation mismatch")
+        async with mutate_profile(profile_id):
+            if await runtime.db("get_actor", profile_id, actor_id) is None:
+                raise HTTPException(404, "actor not found in this profile")
+            if not await runtime.db("erase_conversation", profile_id, actor_id, event_id):
+                raise HTTPException(404, "conversation not found for this actor")
+            return result({"deleted": True})
 
     @secured.post("/profiles/{profile_id}/actors/{actor_id}/reset")
     async def reset_actor(profile_id: str, actor_id: str, body: ConfirmActor):

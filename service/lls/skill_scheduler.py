@@ -21,7 +21,7 @@ from .runtime_skills import (
     SkillTrial,
 )
 from .skill_scheduler_store import SkillEpisodeStore
-from .skills import PrimitiveReceipt, SkillIdentity, SkillInterpreter, compile_skill
+from .skills import SkillIdentity, compile_skill
 
 
 class SkillSchedulerConfig(StrictModel):
@@ -456,28 +456,7 @@ class SkillScheduler:
         )
         self._suitable(compiled, episode)
 
-        def environment(identity):
-            self._current(session, episode)
-            return runtime.skill_environment(identity)
-
-        async def execute(identity, operation_id, proposal, deadline):
-            self._current(session, episode)
-            return PrimitiveReceipt(
-                operation_id=operation_id, status="completed", distance_meters=0
-            )
-
-        async def cancel(identity, operation_id):
-            pass
-
-        return await runtime.skill_store.record_trial(
-            candidate["record_id"],
-            episode.identity,
-            session.game_datetime,
-            interpreter=SkillInterpreter(enabled=True, clock=runtime.clock),
-            environment=environment,
-            execute=execute,
-            cancel=cancel,
-        )
+        return await runtime.preflight_skill(session, candidate["record_id"])
 
     async def _run(self, session, episode):
         status, reason = "failed", "episode_incomplete"
@@ -581,6 +560,7 @@ class SkillScheduler:
                 session,
                 self._body(session, episode, SkillTrial, candidate_id=candidate["record_id"]),
                 "trial",
+                preflight_id=simulated["record_id"],
             )
             self._current(session, episode)
             trial = trial_result["result"]

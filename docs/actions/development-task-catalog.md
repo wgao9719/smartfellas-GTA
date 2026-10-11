@@ -15,8 +15,8 @@ identify the player, already bound civilian NPCs, and nearby ordinary cars.
 They do not identify every world pedestrian or map destination.
 
 The adapter resolves opaque target IDs again on its game thread. Ped targets
-must still be visible, alive, and within 15 metres. Vehicle identities carry
-decorator markers to reject recycled handles. Unknown model-supplied IDs and
+must still be visible, alive, and within 15 metres. Vehicle identities use bounded per-tick continuity checks; missing or implausible
+observations retire the binding. Unknown model-supplied IDs and
 native hashes cannot become game calls. Target loss, seat changes, movement
 limits, task takeover, and cancellation end the request without claiming its
 intended result happened.
@@ -42,13 +42,17 @@ intended result happened.
 | `fight_target` | Fight a listed ped briefly; observe combat, without claiming damage or defeat |
 | `shoot_at_target` | Shoot at a listed ped using an equipped firearm; observe shooting, without claiming hits |
 
-Facing and waiting retain their 0.1–5 second limit. Other timed actions accept
+Facing and waiting retain their 0.1–5 second limit. P0 movement actions keep the shared registry bounds and local-navigation controller
+from main (including the approved-area checks). Additional timed actions accept
 0.1–10 seconds and default to three seconds. `stop_following` has no duration.
 Movement is local: point destinations must be within 15 metres and must pass a
-native coordinate check. Driving uses a 4 m/s target speed. Actions stop when
+native coordinate check. The merged P0 walk/follow/wander/flee paths additionally retain
+main's approved-area and pavement-corridor checks. Driving uses a 4 m/s target speed. Actions stop when
 sampled travel exceeds their bound (normally 15 metres; following accepts an
 explicit `max_follow_meters`; wandering also bounds travel by its radius).
-The actor must remain within 15 metres of the player.
+Additional actions require the actor to remain within 15 metres of the player. P0 movement
+retains main's observed distance bounds (follow uses `max_follow_meters`, other local
+movement allows up to 30 metres before withdrawal).
 
 Vehicle entry never requests carjacking or warping. Driving requires the NPC to
 already occupy the driver's seat of a non-mission car. Shooting does not spawn,

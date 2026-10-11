@@ -9,7 +9,7 @@ Status: **UNVERIFIED ON GTA**. Compile reference: SHVDN v3.6.0. Supported game b
 | Duration | 0.1–5 seconds | 0.1–5 seconds |
 | Completion condition | Task observed active and heading error ≤20° after 250 ms | Task observed active and displacement ≤1.5 m through requested duration |
 | Failure | Task ends without observed heading, timeout, invalid binding | Movement beyond tolerance, task takeover, timeout, invalid binding |
-| Stop | Clear only while the same script task reports active and all current guards pass | Same |
+| Stop | Distance beyond 15 m cancels the action. Clear only while the recorded script task reports active, identity/ownership guards pass, and the actor/world remain safe; proximity is not a release guard. | Same |
 | Safety | Live civilian, current binding, within 15 m, ambient/mod-owned, no protected policy, combat, busy, mission, cutscene, random event, pause, loading, or Online | Same |
 
 `GET_SCRIPT_TASK_STATUS` values, task hashes, completion tolerances, and task-clear ownership are provisional mappings. Compilation is not runtime evidence. A task reporting active can still fail to change the ped. Both actions require observed completion after dispatch.

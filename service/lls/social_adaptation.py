@@ -226,6 +226,9 @@ class SocialAdaptation:
     @staticmethod
     def _contact(row, source, payload, age):
         peer, text = payload.get("teller_id"), payload.get("text")
+        if source.get("content_redacted") and _identifier(peer):
+            prefix = f"{peer} told me: "
+            text = row["text"][len(prefix):] if row["text"].startswith(prefix) else None
         if (
             not _identifier(peer) or peer == row["actor_id"]
             or not isinstance(text, str) or not 1 <= len(text) <= 1000
@@ -243,10 +246,11 @@ class SocialAdaptation:
             or speaker.get("event_type") != "social.quote_delivered"
             or speaker.get("provenance") != "directly_observed"
             or speaker.get("protagonist_id") != source.get("protagonist_id")
+            or (not speaker.get("content_redacted") and spoken.get("text") != text)
             or any(
                 spoken.get(field) != payload.get(field)
                 for field in (
-                    "text", "scene_id", "utterance_id", "delivery_receipt_id", "teller_id",
+                    "scene_id", "utterance_id", "delivery_receipt_id", "teller_id",
                     "sampled_at", "reported_event_id", "retelling_lineage", "session_id",
                 )
             )

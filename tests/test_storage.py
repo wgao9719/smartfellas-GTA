@@ -4,6 +4,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -81,7 +82,7 @@ def test_reopen_persists_confirmed_writes_wal_fts_and_backup(tmp_path):
         repo.backup(tmp_path / "backup.sqlite3")
     for location in [path, tmp_path / "backup.sqlite3"]:
         with Repository(location) as reopened:
-            assert reopened.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+            assert reopened.connection.execute("PRAGMA user_version").fetchone()[0] == 6
             assert recall(reopened, branch)[0]["memory_id"] == saved["memory_id"]
             assert reopened.get_actor("save-a", "avery")["display_name"] == "Avery"
             assert reopened.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -286,8 +287,44 @@ def test_delete_scrubs_fts_vectors_summaries_sources_and_export(repo):
     )
     exported = repo.export_profile("save-a")
     assert not exported["memories"]
+    assert "bicycle" not in json.dumps(exported)
     audit = repo.connection.execute("SELECT * FROM scrub_audit").fetchall()
     assert "bicycle" not in json.dumps([tuple(row) for row in audit])
+
+
+def test_conversation_erasure_scrubs_raw_and_actor_derivations_only(repo):
+    branch = repo.open_timeline("save-a", T0)
+    for identifier in ("raw", "reply", "independent"):
+        event(repo, branch, identifier, observers=["avery", "bea"])
+    own = memory(repo, branch, "reply", text="I paraphrased the secret bicycle.")
+    other = memory(repo, branch, "reply", actor="bea", text="I independently heard bicycle.")
+    repo.link_memory_derivations("save-a", "avery", [("raw", "reply")])
+    assert repo.erase_conversation("save-a", "avery", "raw")
+    assert repo.get_memory("save-a", own["memory_id"]) is None
+    assert repo.get_memory("save-a", other["memory_id"]) == other
+    exported = repo.export_profile("save-a")
+    for source in exported["events"]:
+        if source["event_id"] in {"raw", "reply"}:
+            assert "bicycle" not in json.dumps(source)
+    assert "bicycle" in json.dumps(next(
+        source for source in exported["events"] if source["event_id"] == "independent"
+    ))
+    assert not repo.erase_conversation("save-a", "ghost", "independent")
+    assert not repo.erase_conversation("other-profile", "avery", "independent")
+
+
+def test_memory_erasure_cannot_restore_raw_content_on_replay(repo):
+    branch = repo.open_timeline("save-a", T0)
+    raw = event(repo, branch)
+    saved = memory(repo, branch)
+    repo.delete_memory("save-a", saved["memory_id"])
+    assert not repo.record_event("save-a", branch, raw)
+    assert "bicycle" not in json.dumps(repo.export_profile("save-a"))
+    assert repo.delete_event("save-a", raw["event_id"])
+    assert repo.record_event("save-a", branch, raw)
+    assert "bicycle" not in json.dumps(repo.export_profile("save-a"))
+    with pytest.raises(ValueError, match="erased or expired"):
+        memory(repo, branch)
 
 
 def test_source_deletion_removes_all_derived_state(repo):
@@ -371,9 +408,12 @@ def test_save_association_and_invalid_clock_fail_closed(repo):
 def test_reopen_rejects_unknown_future_migration(tmp_path):
     location = tmp_path / "future.sqlite3"
     with sqlite3.connect(location) as connection:
-        connection.execute("PRAGMA user_version=999")
+        connection.execute("PRAGMA user_version=7")
     with pytest.raises(RuntimeError, match="newer"):
         Repository(location)
+    with sqlite3.connect(location) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert connection.execute("SELECT name FROM sqlite_master").fetchall() == []
 
 
 def schema(repo):
@@ -383,7 +423,109 @@ def schema(repo):
     )
 
 
-def test_schema_v3_migrates_to_v4(tmp_path):
+def legacy_database(path, version):
+    fixtures = Path(__file__).parent / "fixtures"
+    with sqlite3.connect(path) as connection:
+        connection.executescript((fixtures / "schema_v4.sql").read_text(encoding="utf-8"))
+        if version == 5:
+            connection.executescript(
+                (fixtures / "schema_v5_session_cleanup.sql").read_text(encoding="utf-8")
+            )
+            connection.execute("INSERT INTO session_cleanup_pending VALUES('save-a','active')")
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == version
+        assert not connection.execute(
+            "SELECT name FROM sqlite_master WHERE name='event_retention'"
+        ).fetchall()
+        tables = [
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            if not row[0].startswith(("sqlite_", "memory_fts"))
+        ]
+        return {
+            table: connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            for table in tables
+        }
+
+
+@pytest.mark.parametrize("version", [4, 5])
+def test_legacy_schema_migrates_to_v6_preserving_data_and_collection_time(tmp_path, version):
+    path = tmp_path / f"v{version}.sqlite3"
+    original = legacy_database(path, version)
+    with Repository(path) as migrated, Repository(tmp_path / "fresh.sqlite3") as fresh:
+        assert migrated.connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert schema(migrated) == schema(fresh)
+        for table, rows in original.items():
+            assert [tuple(row) for row in migrated.connection.execute(
+                f"SELECT * FROM {table} ORDER BY rowid"
+            )] == rows
+        pending = [{"profile_id": "save-a", "session_id": "active"}]
+        assert migrated.unfinished_sessions() == pending
+        assert migrated.pending_session_cleanups() == (pending if version == 5 else [])
+        recorded = migrated.connection.execute(
+            "SELECT recorded_at FROM event_retention WHERE event_id='event-1'"
+        ).fetchone()[0]
+        assert datetime.now(timezone.utc) - datetime.fromisoformat(recorded) < timedelta(minutes=1)
+        assert migrated.connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert migrated.expire_raw_events(recorded) == 0
+        exported = migrated.export_profile("save-a")
+        assert exported["memories"][0]["text"] == "I discussed the broken bicycle with Franklin."
+    with Repository(path) as reopened:
+        assert reopened.connection.execute(
+            "SELECT recorded_at FROM event_retention WHERE event_id='event-1'"
+        ).fetchone()[0] == recorded
+        assert reopened.export_profile("save-a") == exported
+        assert reopened.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_fresh_database_creates_v6_with_session_cleanup_and_retention(tmp_path, monkeypatch):
+    statements = []
+    connect = sqlite3.connect
+
+    def traced_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", traced_connect)
+    with Repository(tmp_path / "fresh.sqlite3") as repo:
+        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        columns = {
+            table: [row[1] for row in repo.connection.execute(f"PRAGMA table_info({table})")]
+            for table in ("session_cleanup_pending", "event_retention")
+        }
+        assert columns["session_cleanup_pending"] == ["profile_id", "session_id"]
+        assert columns["event_retention"] == ["profile_id", "event_id", "recorded_at"]
+        assert repo.connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert repo.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    version_writes = [
+        "".join(statement.lower().split()).rstrip(";") for statement in statements
+        if "".join(statement.lower().split()).startswith("pragmauser_version=")
+    ]
+    assert version_writes == ["pragmauser_version=6"]
+
+
+def test_pending_session_cleanup_survives_reopen_and_blocks_reuse(tmp_path):
+    path = tmp_path / "pending.sqlite3"
+    with Repository(path) as repo:
+        repo.start_session("save-a", "session-a", T0)
+        repo.begin_session_cleanup("save-a", "session-a")
+        repo.begin_session_cleanup("save-a", "session-a")
+    with Repository(path) as repo:
+        pending = [{"profile_id": "save-a", "session_id": "session-a"}]
+        assert repo.pending_session_cleanups() == pending
+        assert repo.unfinished_sessions() == pending
+        with pytest.raises(ValueError, match="pending cleanup"):
+            repo.start_session("save-a", "session-a", T0)
+        repo.end_session("save-a", "session-a")
+        repo.begin_session_cleanup("save-a", "session-a")
+        repo.begin_session_cleanup("save-a", "missing")
+        assert repo.pending_session_cleanups() == []
+        assert repo.unfinished_sessions() == []
+        with pytest.raises(ValueError, match="ended gameplay session"):
+            repo.start_session("save-a", "session-a", T0)
+
+
+def test_schema_v3_migrates_to_current(tmp_path):
     with Repository(tmp_path / "fresh.sqlite3") as fresh:
         expected = schema(fresh)
     path = tmp_path / "v3.sqlite3"
@@ -406,10 +548,11 @@ def test_schema_v3_migrates_to_v4(tmp_path):
         repo.connection.executescript(
             "DROP INDEX scrub_lookup; DROP INDEX memory_social_window; "
             "DROP INDEX memory_source_event; DROP TABLE memory_derivations; "
+            "DROP TABLE event_retention; "
             "PRAGMA user_version=3;"
         )
     with Repository(path) as repo:
-        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 6
         # Fresh databases pass through the same migration and gain identical objects.
         assert schema(repo) == expected
         assert recall(repo, branch)[0]["memory_id"] == saved["memory_id"]
@@ -455,7 +598,12 @@ def test_derivations_actor_scoped_audited_reset(repo):
     remaining = {row["memory_id"] for row in repo.list_memories("save-a")}
     assert remaining == set(ids.values()) - forgotten
     audit = [tuple(row)[2:4] for row in repo.connection.execute("SELECT * FROM scrub_audit")]
-    assert sorted(audit) == sorted(("delete_memory", memory_id) for memory_id in forgotten)
+    assert sorted(row for row in audit if row[0] == "delete_memory") == sorted(
+        ("delete_memory", memory_id) for memory_id in forgotten
+    )
+    assert {identifier for operation, identifier in audit if operation == "scrub_event"} == {
+        "line-1", "line-2", "line-3",
+    }
     assert "bicycle" not in json.dumps(audit)
     assert repo.memory_dependents("save-a", ids["bea", "line-1"]) == derived["bea"]
     repo.reset_actor("save-a", "avery")
@@ -854,6 +1002,47 @@ def pin(repo, branch, actor_id="walker", session_id="session-a"):
         "save-a", actor_id, session_id, display_name="Resident 3f9a",
         pinned_at_game_datetime=T2, branch_id=branch,
     )
+
+
+def test_session_cleanup_rolls_back_and_retries_without_erasing_durable_data(repo):
+    branch = pin_world(repo)
+    pinned = pin(repo, branch)
+    event(repo, branch, "durable-event", observers=["avery"])
+    durable = memory(repo, branch, "durable-event")
+    repo.bind_instance("save-a", "other", "session-a", 77, 1)
+    repo.begin_session_cleanup("save-a", "session-a")
+    repo.connection.executescript("""
+        CREATE TRIGGER fail_session_end BEFORE UPDATE OF ended_at ON game_sessions
+        BEGIN SELECT RAISE(ABORT, 'injected cleanup failure'); END;
+    """)
+    with pytest.raises(sqlite3.IntegrityError, match="injected cleanup failure"):
+        repo.end_session("save-a", "session-a")
+    assert repo.get_actor("save-a", "other", session_id="session-a")
+    assert recall(repo, branch, actor="other", session_id="session-a")
+    assert repo.resolve_instance("save-a", "session-a", 77, 1)
+    assert repo.pending_session_cleanups() == [
+        {"profile_id": "save-a", "session_id": "session-a"}
+    ]
+    assert repo.connection.execute("SELECT ended_at FROM game_sessions").fetchone()[0] is None
+    repo.connection.execute("DROP TRIGGER fail_session_end")
+    repo.end_session("save-a", "session-a")
+    ended_at = repo.connection.execute("SELECT ended_at FROM game_sessions").fetchone()[0]
+    assert ended_at
+    repo.end_session("save-a", "session-a")
+    assert repo.connection.execute("SELECT ended_at FROM game_sessions").fetchone()[0] == ended_at
+    assert repo.pending_session_cleanups() == []
+    assert repo.unfinished_sessions() == []
+    assert repo.get_actor("save-a", "other", session_id="session-a") is None
+    assert repo.resolve_instance("save-a", "session-a", 77, 1) is None
+    assert scopes(repo, "other") == {
+        "memories": set(), "relationship_updates": set(), "knowledge_cards": set()
+    }
+    assert repo.get_actor("save-a", "walker") == pinned
+    assert scopes(repo, "walker") == {
+        "memories": {None}, "relationship_updates": {None}, "knowledge_cards": {None}
+    }
+    assert recall(repo, branch, actor="walker")
+    assert recall(repo, branch)[0]["memory_id"] == durable["memory_id"]
 
 
 def test_pin_promotes_in_place_and_survives_session_end(repo):

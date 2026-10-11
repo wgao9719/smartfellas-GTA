@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "registry_version": "1",
+  "registry_version": "2",
   "grants_capabilities": false,
   "actions": [
     {
@@ -22,15 +22,21 @@
       },
       "executor": {
         "id": "face_player",
-        "implementation": "development_only",
+        "implementation": "g0_debug_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "follow_player",
-      "description": "Follow the player briefly; max_follow_meters bounds total travel, not following distance.",
+      "description": "Follow at walking speed for at most 30 seconds; stop if the player exceeds max_follow_meters.",
       "risk_tier": "B",
       "cooldown_seconds": 5,
       "arguments": {
@@ -40,23 +46,32 @@
           "max_follow_meters": {
             "type": "number",
             "minimum": 1,
-            "maximum": 30
+            "maximum": 15
           },
           "duration_seconds": {
             "type": "number",
-            "minimum": 0.1,
-            "maximum": 10
+            "minimum": 1,
+            "maximum": 30
           }
         },
         "required": []
       },
       "executor": {
         "id": "follow_player",
-        "implementation": "development_only",
+        "implementation": "p0_debug_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task",
+        "mobile",
+        "consent_or_observed_threat",
+        "approved_public_pavement_corridor"
+      ]
     },
     {
       "id": "stop_following",
@@ -71,15 +86,22 @@
       },
       "executor": {
         "id": "stop_following",
-        "implementation": "development_only",
+        "implementation": "p0_debug_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task",
+        "current_mod_follow_task"
+      ]
     },
     {
       "id": "go_to_safe_point",
-      "description": "Walk to a nearby coordinate after the adapter validates a pedestrian destination.",
+      "description": "Walk to nearby approved pavement; omit point to let the adapter choose it.",
       "risk_tier": "B",
       "cooldown_seconds": 5,
       "arguments": {
@@ -114,21 +136,28 @@
           },
           "duration_seconds": {
             "type": "number",
-            "minimum": 0.1,
-            "maximum": 10
+            "minimum": 1,
+            "maximum": 30
           }
         },
-        "required": [
-          "point"
-        ]
+        "required": []
       },
       "executor": {
         "id": "go_to_safe_point",
-        "implementation": "development_only",
+        "implementation": "p0_debug_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task",
+        "mobile",
+        "consent_or_observed_threat",
+        "approved_public_pavement_corridor"
+      ]
     },
     {
       "id": "wait_here",
@@ -149,11 +178,17 @@
       },
       "executor": {
         "id": "wait_here",
-        "implementation": "development_only",
+        "implementation": "g0_debug_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "wander_nearby",
@@ -171,23 +206,32 @@
           },
           "duration_seconds": {
             "type": "number",
-            "minimum": 0.1,
-            "maximum": 10
+            "minimum": 1,
+            "maximum": 30
           }
         },
         "required": []
       },
       "executor": {
         "id": "wander_nearby",
-        "implementation": "development_only",
+        "implementation": "p0_debug_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task",
+        "mobile",
+        "consent_or_observed_threat",
+        "approved_public_pavement_corridor"
+      ]
     },
     {
       "id": "flee_from_threat",
-      "description": "Leave an observed threat.",
+      "description": "Walk away from a supplied nearby threat position or the player on request; never attack or panic into traffic.",
       "risk_tier": "B",
       "cooldown_seconds": 5,
       "arguments": {
@@ -201,23 +245,63 @@
           },
           "duration_seconds": {
             "type": "number",
-            "minimum": 0.1,
-            "maximum": 10
+            "minimum": 1,
+            "maximum": 30
+          },
+          "threat_position": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              },
+              "y": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              },
+              "z": {
+                "type": "number",
+                "minimum": -20000,
+                "maximum": 20000
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "z"
+            ]
+          },
+          "distance_meters": {
+            "type": "number",
+            "minimum": 2,
+            "maximum": 15
           }
         },
         "required": []
       },
       "executor": {
         "id": "flee_from_threat",
-        "implementation": "development_only",
+        "implementation": "p0_debug_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task",
+        "mobile",
+        "consent_or_observed_threat",
+        "approved_public_pavement_corridor"
+      ]
     },
     {
       "id": "play_verified_gesture",
-      "description": "Play the authored wave gesture. Only gesture_id wave is supported; mapping is unverified in GTA.",
+      "description": "Play one fixed harmless gesture: wave, shrug, or point (Debug, unverified in game).",
       "risk_tier": "A",
       "cooldown_seconds": 5,
       "arguments": {
@@ -227,12 +311,12 @@
           "gesture_id": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 128
-          },
-          "duration_seconds": {
-            "type": "number",
-            "minimum": 0.1,
-            "maximum": 10
+            "maxLength": 128,
+            "enum": [
+              "wave",
+              "shrug",
+              "point"
+            ]
           }
         },
         "required": [
@@ -241,11 +325,17 @@
       },
       "executor": {
         "id": "play_verified_gesture",
-        "implementation": "development_only",
+        "implementation": "p0_debug_only",
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry."
+      "stop_policy": "Yield to engine takeover; stop on cancellation, invalid binding, danger, or expiry.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "run_to_point",
@@ -298,7 +388,13 @@
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "look_at",
@@ -330,7 +426,13 @@
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "hands_up",
@@ -355,7 +457,13 @@
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "cower",
@@ -380,11 +488,17 @@
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "enter_vehicle",
-      "description": "Enter a listed nearby car in a free seat. seat is driver or passenger; never displace an occupant.",
+      "description": "Enter a listed nearby car in a free seat, driver or passenger, without displacing an occupant.",
       "risk_tier": "B",
       "cooldown_seconds": 2,
       "arguments": {
@@ -418,7 +532,13 @@
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "leave_vehicle",
@@ -443,7 +563,13 @@
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "drive_to_point",
@@ -496,7 +622,13 @@
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "cruise_vehicle",
@@ -521,7 +653,13 @@
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "fight_target",
@@ -553,7 +691,13 @@
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     },
     {
       "id": "shoot_at_target",
@@ -585,7 +729,13 @@
         "validation": "unverified",
         "verified_game_builds": []
       },
-      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover."
+      "stop_policy": "Stop the owned task on cancellation, time or distance limit; yield to engine takeover.",
+      "preconditions": [
+        "current_safe_world",
+        "live_bound_eligible_actor",
+        "available_capability",
+        "no_conflicting_task"
+      ]
     }
   ]
 }

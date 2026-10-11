@@ -340,7 +340,10 @@ def test_reset_suppression_survives_reopen_branches_and_source_reimport(tmp_path
         assert repo.delete_event("profile", "shared-courtesy")
         repo.record_event("profile", original, source)
         assert not apply(repo, alternate, "shared-courtesy")
-        assert apply(repo, alternate, "shared-courtesy", actor_id="bea")
+        # Deleting the canonical source erases every owner's projection. Reimport
+        # retains only its content-free envelope and cannot establish a new fact.
+        assert not apply(repo, alternate, "shared-courtesy", actor_id="bea")
+        assert relationship(repo, alternate, actor_id="bea")["source_event_ids"] == []
         add_event(repo, alternate, "new-courtesy", game_datetime=LATER)
         assert apply(repo, alternate, "new-courtesy")
         assert relationship(repo, alternate)["trust"] == 0.01

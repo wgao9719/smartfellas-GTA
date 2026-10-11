@@ -184,11 +184,14 @@ def main():
                     ],
                     cwd=ROOT,
                     env=environment,
-                    check=True,
+                    check=False,
                     timeout=90,
                     capture_output=args.pin or args.social,
                     text=True,
                 )
+                if probe.returncode:
+                    raise RuntimeError(f"Bridge probe failed ({probe.returncode}): "
+                                       f"{probe.stdout or ''}{probe.stderr or ''}")
                 # Pin mode runs its own conversation and checks durability in verify_pin.
                 if not args.pin and not args.social:
                     # Durable receipts must quote display-safe text with the sanitized speaker.

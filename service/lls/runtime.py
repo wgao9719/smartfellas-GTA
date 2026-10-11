@@ -5,20 +5,32 @@ import hashlib
 import json
 import re
 import secrets
+import sqlite3
 import time
 from collections import OrderedDict, deque
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
-from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
+from .action_registry import ACTION_IDS, action_metadata
+from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy, requested_action
+from .bridge_limits import MAX_BODY_BYTES
 from .context import build_context
 from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
+from .grounding import (
+    NEUTRAL_FALLBACK,
+    acknowledged_completion_lines,
+    grounded_text_checked,
+    last_sentence,
+)
 from .memory_consolidation import MemoryConsolidator
 from .memory_index import MemoryIndex
+from .narration import SpeechMarkupFilter
 from .neighborhood_bridge import NeighborhoodBridge
 from .outbound import AIControlOwner
 from .packs import install_pilot_pack
@@ -27,7 +39,8 @@ from .perception_bridge import DEVELOPMENT_PERCEPTION_CAPABILITY
 from .personas import ambient_persona, names_in_use
 from .protocol import Command
 from .providers import create_provider, effective_provider_settings, persist_provider_configuration
-from .roles import ROLE_POLICIES, ownership_from_facts, revalidate
+from .roles import ROLE_POLICIES, TABLE_VERSION, ownership_from_facts, revalidate
+from .runtime_dispatch import DispatchRuntime
 from .runtime_outcomes import OutcomeRuntime
 from .runtime_pin import PinRuntime
 from .runtime_skills import SkillRuntime
@@ -48,17 +61,20 @@ def key(prefix):
 
 
 async def sentence_chunks(provider, context, max_chars):
-    """Bound token streams and remove one leading emotion tag before delivery."""
+    """Bound streams, stripping stage markup and a leading emotion tag before delivery."""
     buffer = ""
     received = 0
     leading = True
+    markup = SpeechMarkupFilter()
     async with aclosing(provider.dialogue(context)) as stream:
         async for raw in stream:
             fragment = raw[: max_chars - received]
             if not fragment:
                 break
             received += len(fragment)
-            buffer += fragment
+            buffer += markup.feed(fragment)
+            if not buffer.strip():
+                continue
             if leading:
                 buffer = buffer.lstrip()
                 if buffer.startswith(("[", "<")) and not re.match(
@@ -73,13 +89,19 @@ async def sentence_chunks(provider, context, max_chars):
                 sentence, buffer = buffer[:end], buffer[end:]
                 if sentence.strip():
                     yield sentence
-            if len(buffer) >= 400:
-                split = buffer.rfind(" ", 0, 400)
-                split = split if split > 0 else 400
-                yield buffer[:split] + " "
-                buffer = buffer[split:].lstrip()
     if buffer.strip():
         yield buffer
+
+
+def delivery_chunks(sentence):
+    """Split only after the complete sentence has passed grounding."""
+    while len(sentence) > DISPLAY_MAX_CHARS:
+        end = sentence.rfind(" ", 0, DISPLAY_MAX_CHARS) + 1
+        end = end or DISPLAY_MAX_CHARS
+        yield sentence[:end]
+        sentence = sentence[end:]
+    if sentence:
+        yield sentence
 
 
 @dataclass
@@ -130,12 +152,15 @@ class Session:
     cancel_seq: int = 0
     epoch: int = 0
     closed: bool = False
+    cleanup_pending: bool = False
     turns: deque = field(default_factory=deque)
     heartbeat: dict = field(default_factory=dict)
     trace: deque = field(default_factory=lambda: deque(maxlen=200))
 
 
-class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRuntime):
+class Runtime(
+    SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRuntime, DispatchRuntime
+):
     def __init__(
         self,
         settings,
@@ -155,12 +180,24 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             self.settings = effective_provider_settings(settings, repository)
             self.repo = repository
             self.sessions = {}
+            self.cleanup_pending = {}
+            self.cleanup_recovery_pending = True
+            self.cleanup_recovery_error = None
             self.selected_branches = {}
+            self.profile_warning = None
             self.profile_locks = {}
             self.open_lock = asyncio.Lock()
             self.configuration_lock = asyncio.Lock()
             self.clock = clock
             self.utc_now = utc_now
+            self.snapshot_task = None
+            self.snapshot_stopping = False
+            self.snapshot_next_at = clock() + self.settings.snapshot_interval_seconds
+            self.snapshot_last_success_at = None
+            self.snapshot_last_success_path = None
+            self.snapshot_last_failure_at = None
+            self.snapshot_last_error_type = None
+            self._next_retention_at = float("-inf")
             self.id_factory = id_factory
             self.trigger_engine = trigger_engine
             self.policy = ActionPolicy(clock=clock)
@@ -299,14 +336,36 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
     async def open(self, request):
         await self.expire_sessions()
         async with self.open_lock:
+            if (
+                not (request.profile_id or "").strip()
+                or not (request.save_slot or "").strip()
+                or not request.profile_confirmed
+            ):
+                self.profile_warning = (
+                    "Confirm the profile and save slot for this load before attaching memories. "
+                    "A different or unknown save needs explicit selection or a new profile."
+                )
+                raise HTTPException(409, self.profile_warning)
             async with self.profile_lock(request.profile_id):
                 return await self._open_locked(request)
 
     async def _open_locked(self, request):
+        if self.cleanup_recovery_pending or any(
+            profile == request.profile_id for profile, _ in self.cleanup_pending
+        ):
+            raise HTTPException(503, "session cleanup pending; retry after database recovery")
         if len([s for s in self.sessions.values() if not s.closed]) >= self.settings.max_sessions:
             raise HTTPException(429, "session limit reached")
         if request.manifest.service_host_mode == "dev_lan" and not self.settings.dev_lan:
             raise HTTPException(403, "dev-LAN unavailable")
+        try:
+            await self.db("create_profile", request.profile_id, save_slot=request.save_slot)
+        except ValueError:
+            self.profile_warning = (
+                "This profile belongs to another save slot. Select the matching profile "
+                "or a new profile before attaching memories; the association was not changed."
+            )
+            raise HTTPException(409, self.profile_warning) from None
         session_id = self.id_factory("ses")
         branch = await self.db(
             "start_session",
@@ -320,13 +379,51 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         if isinstance(branch, dict):
             branch = branch["branch_id"]
         await self.thread_job(install_pilot_pack, self.repo, request.profile_id)
+        supported_flags = {
+            "typed_input", "subtitles", "actor_pin", "role_classifier_v1",
+            "role_table_" + TABLE_VERSION,
+        }
+        if self.settings.speech.enabled:
+            supported_flags.add("ptt_control")
+        for enabled, feature in (
+            (self.settings.dev_perception, "development:perception:v1"),
+            (self.settings.dev_social, "development:social:v1"),
+            (self.settings.dev_social, "development:social-embodiment:v1"),
+            (self.settings.dev_skills, "development:skills:v1"),
+            (self.settings.dev_neighborhood, "development:neighborhood:v1"),
+        ):
+            if enabled and not self.settings.release:
+                supported_flags.add(feature)
+        for actor in await self.db("list_actors", request.profile_id):
+            if (
+                actor.get("actor_kind") == "anchored_service"
+                and actor.get("control_policy") == "service_limited"
+                and actor.get("service_integration_id")
+            ):
+                supported_flags.add("service:" + actor["service_integration_id"])
+        # Existing authorization paths consume only the negotiated intersection.
+        request = request.model_copy(deep=True)
+        request.capabilities = list(
+            dict.fromkeys(
+                capability for capability in request.capabilities if capability in ACTION_IDS
+            )
+        )
+        request.manifest.capability_flags = list(
+            dict.fromkeys(
+                flag for flag in request.manifest.capability_flags if flag in supported_flags
+            )
+        )
         session = Session(session_id, secrets.token_urlsafe(32), request, branch)
         session.last_activity = self.clock()
         session.game_datetime = request.game_datetime.isoformat()
         self.sessions[session.id] = session
+        self.profile_warning = None
         # Closed sessions cannot accumulate forever.
         for sid in list(self.sessions):
-            if len(self.sessions) > self.settings.max_sessions * 2 and self.sessions[sid].closed:
+            if (
+                len(self.sessions) > self.settings.max_sessions * 2
+                and self.sessions[sid].closed and not self.sessions[sid].cleanup_pending
+            ):
                 del self.sessions[sid]
         return session
 
@@ -366,10 +463,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         presented = {"dialogue.chunk": "speaker", "status": "message"}.get(kind)
         if presented and isinstance(payload.get(presented), str):
             payload = {**payload, presented: display_text(payload[presented])}
-        session.command_seq += 1
         command = {
+            "schema_version": 1,
             "id": self.id_factory("cmd"),
-            "seq": session.command_seq,
+            "seq": session.command_seq + 1,
             "kind": kind,
             "session_id": session.id,
             "actor_id": actor_id,
@@ -380,8 +477,15 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             "payload": payload,
         }
         Command.model_validate(command)
+        response = JSONResponse({"commands": [command], "cursor": command["seq"]})
+        if len(response.body) > MAX_BODY_BYTES:
+            raise HTTPException(413, "single command exceeds bridge body limit")
+        session.command_seq = command["seq"]
         command.update(
             state="queued",
+            _epoch=session.epoch,
+            _branch_id=session.branch_id,
+            _protagonist_id=session.request.protagonist_id,
             _game_datetime=session.game_datetime,
             _created_at_utc=self.utc_now(),
             _record_delivery=self.provider.name != "disabled",
@@ -389,6 +493,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         turn = session.delivery_turns.get(payload.get("turn_id"))
         if kind == "dialogue.chunk" and turn is not None:
             command["_conversation_turn"] = payload["turn_id"]
+            command["_memory_source_event_ids"] = turn["source_event_ids"]
             turn["chunks"][command["id"]] = {
                 "nonempty": bool(payload["text"]),
                 "complete": False,
@@ -884,9 +989,13 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     or not self.conversation_policy.check(actor, session.world).allowed
                 ):
                     continue
-                text = display_text(effect.text, DISPLAY_MAX_CHARS)
-                if not text.strip():
+                text = await grounded_text_checked(
+                    display_text(effect.text), classifier=self.grounding_classifier(),
+                    budget_class="background",
+                )
+                if session.closed or session.epoch != effect.epoch:
                     continue
+                text = display_text(text if text.strip() else NEUTRAL_FALLBACK, DISPLAY_MAX_CHARS)
                 turn_id = self.id_factory("trigger")
                 # Authored speech is still only a queued command until its delivery acknowledgment.
                 command = self.command(
@@ -978,6 +1087,8 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
     ):
         value = {
             "event_id": event.event_id,
+            "session_id": session.id,
+            "actor_id": event.actor_id,
             "game_datetime": event.game_datetime.isoformat(),
             "protagonist_id": event.protagonist_id,
             "event_type": event.kind,
@@ -1226,6 +1337,11 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         )
         return True
 
+    def grounding_classifier(self):
+        if self.settings.grounding_classifier_enabled:
+            return getattr(self.provider, "classify_grounding", None)
+        return None
+
     async def turn(self, session, event, epoch, *, action_eligible=True):
         turn_id = self.id_factory("turn")
         actor_id = event.actor_id
@@ -1273,6 +1389,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     session.world,
                     session.actors[actor_id].get("allowed_actions", []),
                     event.payload["consent"],
+                    requested=requested_action(event.payload["text"]),
                 )
                 if action_eligible
                 else []
@@ -1283,11 +1400,17 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                 memories=memories, session_id=session.id,
             )
             memories = [m for m in memories if event.event_id not in m.get("source_event_ids", [])]
+            recent_conversation = self.repo.recent_conversation(
+                session.request.profile_id, session.branch_id, actor_id,
+                event.protagonist_id, event.game_datetime.isoformat(),
+                session_id=session.id, exclude_event_id=event.event_id,
+            )
             context, context_trace = build_context(
                 actor=actor,
                 snapshot=session.actors[actor_id],
                 world=session.world,
                 memories=memories,
+                recent_conversation=recent_conversation,
                 knowledge=knowledge,
                 relationship=relationship,
                 input_text=event.payload["text"],
@@ -1303,6 +1426,7 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     and o["session_id"] == session.id
                     and o["protagonist_id"] == event.protagonist_id
                 ][-8:],
+                completion_lines=acknowledged_completion_lines(session, actor_id),
             )
             session.trace.append({"turn_id": turn_id, "actor_id": actor_id, **context_trace})
             if self.provider.name != "disabled":
@@ -1314,6 +1438,17 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     "scene_id": scene_id,
                     "epoch": epoch,
                     "input_event_id": event.event_id,
+                    "source_event_ids": tuple(dict.fromkeys([
+                        event.event_id,
+                        *[
+                            source for record in (
+                                context["recent_conversation"] + context["memories"]
+                                + context["knowledge"]
+                            )
+                            for source in record["source_event_ids"]
+                        ],
+                        *[outcome["event_id"] for outcome in context["action_outcomes"]],
+                    ])),
                     "chunks": {},
                     "final_command_id": None,
                     "invalid": False,
@@ -1324,6 +1459,9 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             text = ""
             index = 0
             delivery_seconds = 0.0
+            sentence_refused = False
+            grounding_verdicts = []
+            session.trace.append({"turn_id": turn_id, "grounding_verdicts": grounding_verdicts})
             async with (
                 asyncio.timeout(30),
                 aclosing(
@@ -1338,28 +1476,51 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                         break
                     # Subtitles, speech, receipts, and memories all use the displayed text.
                     chunk = display_text(chunk)
+                    safe = await grounded_text_checked(
+                        chunk, player_text=event.payload["text"],
+                        completion_lines=acknowledged_completion_lines(session, actor_id),
+                        classifier=self.grounding_classifier(),
+                        previous_sentence=last_sentence(text), verdicts=grounding_verdicts,
+                    )
+                    if session.closed or session.epoch != epoch:
+                        return
+                    if safe != chunk:
+                        session.trace.append({"turn_id": turn_id, "grounding": "sentence_refused"})
+                        sentence_refused = True
+                    chunk = safe
                     if not chunk.strip():
                         continue
-                    duration = max(3, min(15, len(chunk) / 12))
-                    if index >= 20 or delivery_seconds + duration > 100:
-                        break
-                    delivery_seconds += duration
-                    text += chunk
-                    await self.deliver_dialogue_chunk(
-                        session,
-                        actor_id,
-                        {
-                            "text": chunk,
-                            "speaker": actor["display_name"],
-                            "scene_id": scene_id,
-                            "turn_id": turn_id,
-                            "chunk_index": index,
-                            "final": False,
-                        },
-                    )
-                    index += 1
+                    if sentence_refused and text[-1:].isspace():
+                        chunk = chunk.lstrip()
+                    sentence_refused = False
+                    for part in delivery_chunks(chunk):
+                        duration = max(3, min(15, len(part) / 12))
+                        if index >= 20 or delivery_seconds + duration > 100:
+                            break
+                        delivery_seconds += duration
+                        text += part
+                        await self.deliver_dialogue_chunk(
+                            session,
+                            actor_id,
+                            {
+                                "text": part,
+                                "speaker": actor["display_name"],
+                                "scene_id": scene_id,
+                                "turn_id": turn_id,
+                                "chunk_index": index,
+                                "final": False,
+                            },
+                        )
+                        index += 1
+                    else:
+                        continue
+                    break
             if not text.strip():
-                text = "I'm not sure what to say right now."
+                text = NEUTRAL_FALLBACK
+                grounding_verdicts.append({
+                    "sentence_index": len(grounding_verdicts), "source": "fallback",
+                    "allowed": True, "reason": "neutral_fallback", "previous_sentence_used": False,
+                })
                 await self.deliver_dialogue_chunk(
                     session,
                     actor_id,
@@ -1385,38 +1546,61 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     "final": True,
                 },
             )
+            if session.closed or session.epoch != epoch:
+                return
+            current_actor = session.actors.get(actor_id, {})
+            eligible = [
+                action for action in self.policy.eligible(
+                    current_actor, session.world, current_actor.get("allowed_actions", []),
+                    event.payload["consent"],
+                    requested=requested_action(event.payload["text"]),
+                ) if action in eligible
+            ]
+            action_context = {
+                **context,
+                "eligible_actions": {
+                    action: context["eligible_actions"][action] for action in eligible
+                },
+            }
             try:
                 async with asyncio.timeout(20):
                     proposal = (
-                        await self.provider.action(context, text, eligible) if eligible else None
+                        await self.provider.action(action_context, text, eligible)
+                        if eligible else None
                     )
             except Exception:
                 proposal = None
             if session.closed or session.epoch != epoch:
                 return
             if proposal:
+                consent = (event.payload["consent"]
+                           or requested_action(event.payload["text"]) == proposal.action_id)
                 decision = self.policy.check(
                     proposal,
                     session.actors.get(actor_id),
                     session.world,
                     session.actors.get(actor_id, {}).get("allowed_actions", []),
-                    event.payload["consent"],
+                    consent,
                 )
                 session.trace.append({"turn_id": turn_id, "policy": decision.reason})
                 if decision.allowed:
                     action_key = (actor_id, proposal.action_id)
-                    if self.clock() - session.last_action.get(action_key, -float("inf")) < 3:
+                    cooldown = action_metadata(proposal.action_id)["cooldown_seconds"]
+                    if self.clock() - session.last_action.get(action_key, -float("inf")) < cooldown:
                         return
                     if any(
                         c["kind"] == "action.execute"
                         and c["actor_id"] == actor_id
                         and c["state"] not in TERMINAL
                         and not (proposal.action_id == "stop_following"
-                                 and c["payload"]["action_id"] == "follow_player")
+                                 and c["payload"]["action_id"] == "follow_player"
+                                 and c["state"] == "started")
                         for c in session.commands.values()
                     ):
                         return
                     session.last_action[action_key] = self.clock()
+                    duration = (proposal.arguments.duration_seconds or
+                                (20 if proposal.action_id == "follow_player" else 10))
                     action_command = self.command(
                         session,
                         "action.execute",
@@ -1426,9 +1610,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                             "arguments": proposal.arguments.model_dump(exclude_none=True),
                             "policy_version": POLICY_VERSION,
                             "scene_id": scene_id,
-                            "consent": event.payload["consent"],
+                            "consent": consent,
                             "turn_id": turn_id,
                         },
+                        seconds=max(15, duration + 5),
                     )
                     action_command["_skill_origin"] = "external"
                     action_command["_skill_source_event_id"] = event.event_id
@@ -1476,7 +1661,12 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             return result
 
     async def acknowledge_locked(self, session, command_id, ack, *, internal_audio=False):
-        self.ensure_current(session, ack.runtime_generation)
+        if internal_audio and session.closed and session.cleanup_pending:
+            # Closing still settles trusted render receipts before purging ambient rows.
+            if ack.runtime_generation != session.request.runtime_generation:
+                raise HTTPException(409, "stale runtime generation")
+        else:
+            self.ensure_current(session, ack.runtime_generation)
         command = session.commands.get(command_id)
         if command is None:
             raise HTTPException(404, "unknown command")
@@ -1561,12 +1751,17 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             ):
                 delivered_event = {
                     "event_id": command_id + ":delivered",
+                    "session_id": session.id,
                     "game_datetime": command["_game_datetime"],
                     "protagonist_id": session.request.protagonist_id,
                     "event_type": "dialogue.delivered",
                     "payload": {
                         "text": actual,
                         "turn_id": command["payload"]["turn_id"],
+                        "input_event_id": session.delivery_turns.get(
+                            command.get("_conversation_turn"), {}
+                        ).get("input_event_id"),
+                        "chunk_index": command["payload"]["chunk_index"],
                         "speaker": command["payload"]["speaker"],
                         "display_rule": DISPLAY_RULE,
                     },
@@ -1580,6 +1775,15 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                     session.branch_id,
                     delivered_event,
                 )
+                links = [
+                    (source, delivered_event["event_id"])
+                    for source in command.get("_memory_source_event_ids", ())
+                ]
+                for offset in range(0, len(links), 64):
+                    await self.db(
+                        "link_memory_derivations", session.request.profile_id,
+                        command["actor_id"], links[offset:offset + 64],
+                    )
                 await self.db(
                     "add_memory",
                     session.request.profile_id,
@@ -1688,25 +1892,37 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
 
     async def close_session_locked(self, session):
         """Close after the caller acquires session.lock, including admin transactions."""
-        if session.closed:
+        if session.closed and not session.cleanup_pending:
             return
-        self.cancel(session)
-        await self.stop_session_work(session)
-        await self.speech.forget(session_id=session.id)
-        if self.social is not None:
-            await self.social.forget_session(session.id)
-        if self.social_scheduler is not None:
-            self.social_scheduler.forget(session.id)
-        if self.neighborhood.scheduler is not None:
-            self.neighborhood.scheduler.forget(session.id)
-        self.memory_consolidator.forget(session.id)
-        session.social_scenes.clear()
-        if self.trigger_engine:
-            self.trigger_engine.cancel_session(session.id)
+        profile = session.request.profile_id
+        cleanup_key = (profile, session.id)
+        self.cleanup_pending.setdefault(cleanup_key, None)
+        session.cleanup_pending = True
+        # Revoke authorization immediately; closed does not imply the purge committed.
         session.closed = True
-        if session.task:
-            await asyncio.gather(session.task, return_exceptions=True)
-        await self.db("end_session", session.request.profile_id, session.id)
+        try:
+            self.cancel(session)
+            if session.task:
+                await asyncio.gather(session.task, return_exceptions=True)
+            await self.stop_session_work(session)
+            await self.speech.forget(session_id=session.id)
+            if self.social is not None:
+                await self.social.forget_session(session.id)
+            if self.social_scheduler is not None:
+                self.social_scheduler.forget(session.id)
+            if self.neighborhood.scheduler is not None:
+                self.neighborhood.scheduler.forget(session.id)
+            self.memory_consolidator.forget(session.id)
+            session.social_scenes.clear()
+            if self.trigger_engine:
+                self.trigger_engine.cancel_session(session.id)
+            await self.db("begin_session_cleanup", profile, session.id)
+            await self.db("end_session", profile, session.id)
+        except Exception as exc:
+            self.cleanup_pending[cleanup_key] = type(exc).__name__
+            raise HTTPException(503, "session cleanup pending; automatic retry scheduled") from exc
+        session.cleanup_pending = False
+        self.cleanup_pending.pop(cleanup_key, None)
         session.actors.clear()
         session.commands.clear()
         session.action_outcomes.clear()
@@ -1717,21 +1933,129 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         session.delivery_turns.clear()
         session.changed.set()
 
+    def cleanup_diagnostics(self):
+        pending = [
+            {"profile_id": profile, "session_id": sid, "error_type": error}
+            for (profile, sid), error in sorted(self.cleanup_pending.items())
+        ]
+        return {
+            "status": "pending" if pending or self.cleanup_recovery_pending else "complete",
+            "message": (
+                "Session cleanup pending. Session-only history may remain on disk; "
+                "cleanup retries automatically each maintenance tick and at startup."
+                if pending or self.cleanup_recovery_pending else "No session cleanup pending."
+            ),
+            "recovery_pending": self.cleanup_recovery_pending,
+            "recovery_error_type": self.cleanup_recovery_error,
+            "sessions": pending,
+        }
+
     async def expire_sessions(self):
+        async with self.open_lock:
+            if self.cleanup_recovery_pending:
+                try:
+                    unfinished = await self.db("unfinished_sessions")
+                except Exception as exc:
+                    self.cleanup_recovery_error = type(exc).__name__
+                else:
+                    # A crash may precede the pending marker write. All unfinished
+                    # sessions belong to the previous service owner at startup.
+                    for row in unfinished:
+                        self.cleanup_pending.setdefault(
+                            (row["profile_id"], row["session_id"]), None
+                        )
+                    self.cleanup_recovery_pending = False
+                    self.cleanup_recovery_error = None
+            for profile, sid in list(self.cleanup_pending):
+                if sid in self.sessions:
+                    continue
+                try:
+                    await self.db("begin_session_cleanup", profile, sid)
+                    await self.db("end_session", profile, sid)
+                except Exception as exc:
+                    self.cleanup_pending[(profile, sid)] = type(exc).__name__
+                else:
+                    self.cleanup_pending.pop((profile, sid), None)
         for session in list(self.sessions.values()):
             if (
-                not session.closed
-                and self.clock() - session.last_activity > self.settings.session_timeout_seconds
+                session.cleanup_pending or (
+                    not session.closed
+                    and self.clock() - session.last_activity > self.settings.session_timeout_seconds
+                )
             ):
-                await self.close_session(session)
+                try:
+                    await self.close_session(session)
+                except HTTPException:
+                    # One unavailable purge must not stop maintenance or other cleanups.
+                    pass
         for sid in list(self.sessions):
-            if len(self.sessions) > self.settings.max_sessions * 2 and self.sessions[sid].closed:
+            if (
+                len(self.sessions) > self.settings.max_sessions * 2
+                and self.sessions[sid].closed and not self.sessions[sid].cleanup_pending
+            ):
                 del self.sessions[sid]
+
+    def snapshot_diagnostics(self):
+        return {
+            "enabled": self.settings.snapshot_interval_seconds > 0 and self.repo.path != ":memory:",
+            "running": self.snapshot_task is not None and not self.snapshot_task.done(),
+            "interval_seconds": self.settings.snapshot_interval_seconds,
+            "retention_count": self.settings.snapshot_retention_count,
+            "last_success_at": self.snapshot_last_success_at,
+            "last_success_path": self.snapshot_last_success_path,
+            "last_failure_at": self.snapshot_last_failure_at,
+            "last_error_type": self.snapshot_last_error_type,
+        }
+
+    def snapshot_if_due(self):
+        interval = self.settings.snapshot_interval_seconds
+        if (
+            self.snapshot_stopping or interval == 0 or self.repo.path == ":memory:"
+            or self.clock() < self.snapshot_next_at
+            or self.snapshot_task is not None and not self.snapshot_task.done()
+        ):
+            return
+        self.snapshot_task = asyncio.create_task(self.take_snapshot())
+
+    async def take_snapshot(self):
+        try:
+            path = await self.thread_job(self.write_snapshot)
+        except Exception as exc:
+            self.snapshot_last_failure_at = self.utc_now().isoformat()
+            # Exception messages can contain private paths or database contents.
+            self.snapshot_last_error_type = type(exc).__name__
+        else:
+            self.snapshot_last_success_at = self.utc_now().isoformat()
+            self.snapshot_last_success_path = str(path)
+        finally:
+            # Slow or failed backups never cause a catch-up burst.
+            self.snapshot_next_at = self.clock() + self.settings.snapshot_interval_seconds
+
+    def write_snapshot(self):
+        directory = Path(self.repo.path).resolve().parent / "snapshots"
+        stamp = self.utc_now().strftime("%Y%m%dT%H%M%S%fZ")
+        path = directory / f"lls-{stamp}-{secrets.token_hex(4)}.sqlite3"
+        self.repo.backup(path)
+        # Only successful publications rotate this service's scheduled snapshots.
+        # Always keep the new snapshot even if the wall clock moved backwards.
+        previous = sorted(
+            (p for p in directory.glob("lls-*.sqlite3") if p != path),
+            key=lambda p: (p.stat().st_mtime_ns, p.name),
+            reverse=True,
+        )
+        for old in previous[self.settings.snapshot_retention_count - 1:]:
+            old.unlink()
+        return path
 
     async def maintain(self):
         while True:
             await asyncio.sleep(1)
             self.refresh_speech_status()
+            try:
+                await self.expire_raw_history()
+            except sqlite3.OperationalError:
+                # Retry retention next tick without blocking pending session cleanup.
+                pass
             if self.neighborhood.scheduler is not None:
                 self.neighborhood.scheduler.tick()
             if self.skill_scheduler is not None and self._skills_first:
@@ -1754,10 +2078,38 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             self._skills_first = not self._skills_first
             self.memory_consolidator.tick()
             await self.expire_sessions()
+            self.snapshot_if_due()
+
+    async def expire_raw_history(self):
+        if self.clock() < self._next_retention_at:
+            return 0
+        cutoff = self.utc_now() - timedelta(days=self.settings.raw_event_retention_days)
+        count = await self.db("expire_raw_events", cutoff.isoformat())
+        for session in list(self.sessions.values()):
+            async with session.lock:
+                for command_id, command in list(session.commands.items()):
+                    if command["state"] in TERMINAL and command["_created_at_utc"] < cutoff:
+                        del session.commands[command_id]
+                for scene_id, speech in list(session.player_speech.items()):
+                    if speech["accepted_at"] < cutoff:
+                        del session.player_speech[scene_id]
+                for event_id, utterance in list(session.delivered_utterances.items()):
+                    if utterance.sampled_at < cutoff:
+                        del session.delivered_utterances[event_id]
+        self.speech.expire_receipts(cutoff)
+        self._next_retention_at = self.clock() + 60
+        return count
 
     async def shutdown(self):
+        self.snapshot_stopping = True
+        if self.snapshot_task is not None:
+            await asyncio.gather(self.snapshot_task, return_exceptions=True)
         for session in list(self.sessions.values()):
-            await self.close_session(session)
+            try:
+                await self.close_session(session)
+            except HTTPException:
+                # The durable unfinished row survives shutdown for startup recovery.
+                pass
         await self.speech.close()
         if self.social is not None:
             await self.social.aclose()

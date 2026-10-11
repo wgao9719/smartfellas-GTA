@@ -1,5 +1,6 @@
 """Deterministic authorization. Capabilities cannot be supplied by model text."""
 
+import re
 import time
 from dataclasses import dataclass
 from math import dist
@@ -8,6 +9,24 @@ from .action_registry import ACTION_DESCRIPTIONS as ACTION_DESCRIPTIONS
 from .action_registry import ACTION_IDS
 
 POLICY_VERSION = "1"
+VERIFIED_GESTURES = frozenset({"wave", "shrug", "point"})
+
+
+def requested_action(text):
+    """Narrow direct requests supply consent only for the named bounded action."""
+    text = text.strip().lower().rstrip(".!?")
+    text = re.sub(r"^(?:please |(?:can|could|would) you )", "", text)
+    text = re.sub(r"^(?:please )|(?: please)$", "", text)
+    return {
+        "follow me": "follow_player", "come with me": "follow_player",
+        "stop following": "stop_following", "stop following me": "stop_following",
+        "wait here": "wait_here", "look at me": "face_player", "face me": "face_player",
+        "go somewhere safe": "go_to_safe_point", "go to a safe spot": "go_to_safe_point",
+        "wander nearby": "wander_nearby", "walk around nearby": "wander_nearby",
+        "get out of here": "flee_from_threat", "move away from me": "flee_from_threat",
+        "wave": "play_verified_gesture", "shrug": "play_verified_gesture",
+        "point": "play_verified_gesture",
+    }.get(text)
 
 
 @dataclass(frozen=True)
@@ -36,9 +55,11 @@ class ActionPolicy:
     def __init__(self, *, clock=time.monotonic):
         self.clock = clock
 
-    def eligible(self, actor, world, capabilities, consent=False):
+    def eligible(self, actor, world, capabilities, consent=False, requested=None):
         return [action for action in capabilities if action in ACTION_IDS
-                and self.availability(action, actor, world, capabilities, consent).allowed]
+                and self.availability(
+                    action, actor, world, capabilities, consent or action == requested
+                ).allowed]
 
     def availability(self, action, actor, world, capabilities, consent=False):
         presence = check_presence(actor, world, clock=self.clock)
@@ -70,7 +91,9 @@ class ActionPolicy:
         if action == "stop_following" and not actor.get("mod_following", False):
             return Decision(False, "no_mod_follow_task")
         targets = actor.get("action_context", {}).get("targets", [])
-        if action == "flee_from_threat" and not any(t["is_threat"] for t in targets):
+        if (action == "flee_from_threat" and not consent
+                and not actor.get("observed_threat", False)
+                and not any(t["is_threat"] for t in targets)):
             return Decision(False, "no_observed_threat")
         if action in TARGET_ACTIONS:
             kind = "vehicle" if action == "enter_vehicle" else "ped"
@@ -86,28 +109,43 @@ class ActionPolicy:
         if not available.allowed:
             return available
         args = proposal.arguments
-        if args.duration_seconds is not None and args.duration_seconds > (
-            5 if action in {"face_player", "wait_here"} else 10
+        if getattr(args, "duration_seconds", None) is not None and args.duration_seconds > (
+            5 if action in {"face_player", "wait_here"} else
+            30 if action in {"follow_player", "go_to_safe_point", "wander_nearby",
+                            "flee_from_threat", "play_verified_gesture"} else 10
         ):
             return Decision(False, "invalid_duration")
-        if action == "play_verified_gesture" and args.gesture_id != "wave":
-            return Decision(False, "unknown_gesture")
+        if action == "play_verified_gesture" and args.gesture_id not in VERIFIED_GESTURES:
+            return Decision(False, "gesture_mapping_unverified")
         if action in POINT_ACTIONS:
             point = args.point
-            if not point or dist(
+            if point is None and action != "go_to_safe_point":
+                return Decision(False, "point_outside_local_area")
+            if point is not None and dist(
                 tuple(actor["position"][k] for k in ("x", "y", "z")),
                 (point.x, point.y, point.z),
             ) > 15:
                 return Decision(False, "point_outside_local_area")
-        if action in TARGET_ACTIONS or action == "flee_from_threat":
-            target_id = args.threat_actor_id if action == "flee_from_threat" else args.target_id
+        if action == "flee_from_threat":
+            threat = args.threat_position
+            if args.threat_actor_id:
+                targets = actor.get("action_context", {}).get("targets", [])
+                target = next((t for t in targets
+                               if t["target_id"] == args.threat_actor_id), None)
+                if targets and (not target or target["kind"] != "ped"):
+                    return Decision(False, "target_unavailable")
+            if threat and args.threat_actor_id:
+                return Decision(False, "ambiguous_threat")
+            if threat and dist(tuple(actor["position"][k] for k in ("x", "y", "z")),
+                               (threat.x, threat.y, threat.z)) > 15:
+                return Decision(False, "threat_outside_local_area")
+        if action in TARGET_ACTIONS:
+            target_id = args.target_id
             target = next((t for t in actor.get("action_context", {}).get("targets", [])
                            if t["target_id"] == target_id), None)
             kind = "vehicle" if action == "enter_vehicle" else "ped"
             if not target or target["kind"] != kind:
                 return Decision(False, "target_unavailable")
-            if action == "flee_from_threat" and not target["is_threat"]:
-                return Decision(False, "no_observed_threat")
             if action == "enter_vehicle" and not target.get(args.seat + "_seat_free", False):
                 return Decision(False, "seat_unavailable")
         return Decision(True, "authorized")

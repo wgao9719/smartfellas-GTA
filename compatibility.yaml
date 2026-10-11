@@ -1,4 +1,4 @@
-schema_version: 1
+﻿schema_version: 1
 recorded_at: 2026-10-10
 product: Living Los Santos
 status: UNVERIFIED
@@ -38,12 +38,12 @@ network:
 actions:
   face_player: UNVERIFIED
   wait_here: UNVERIFIED
-  follow_player: NOT_IMPLEMENTED
-  stop_following: NOT_IMPLEMENTED
-  go_to_safe_point: NOT_IMPLEMENTED
-  wander_nearby: NOT_IMPLEMENTED
-  flee_from_threat: NOT_IMPLEMENTED
-  play_verified_gesture: NOT_IMPLEMENTED
+  follow_player: UNVERIFIED
+  stop_following: UNVERIFIED
+  go_to_safe_point: UNVERIFIED
+  wander_nearby: UNVERIFIED
+  flee_from_threat: UNVERIFIED
+  play_verified_gesture: UNVERIFIED
 adapter_features:
   ped_role_classifier: UNVERIFIED  # docs/actions/ped-classification-and-pin.md
   actor_pin: UNVERIFIED

@@ -64,11 +64,12 @@ namespace LivingNPC.GameAdapter
                         var classification = PedClassifier.Classify(Sample(ped, null));
                         if (classification.Role == PedRole.Civilian && classification.Ownership == Ownership.Ambient && classification.Policy == ControlPolicy.Ambient && !ped.IsInVehicle() && !ped.IsInCombat && !ped.IsFleeing)
                         {
-                            var marker = new Random(Guid.NewGuid().GetHashCode()).Next(1, int.MaxValue);
-                            if (Function.Call<bool>(Hash.DECOR_SET_INT, ped.Handle, Decorator, marker))
+                            var candidate = new Binding { ActorId = Guid.NewGuid().ToString(), Instance = Guid.NewGuid().ToString(), Ped = ped, Generation = generation };
+                            var sample = ReadBindingSample(candidate);
+                            if (sample != null)
                             {
-                                binding = new Binding { ActorId = Guid.NewGuid().ToString(), Instance = Guid.NewGuid().ToString(), Ped = ped, Model = ped.Model.Hash, Marker = marker, Generation = generation };
-                                bindings[binding.ActorId] = binding;
+                                candidate.Guard = new RuntimeBindingGuard(sample);
+                                if (candidate.Guard.IsValid) { binding = candidate; bindings[binding.ActorId] = binding; }
                             }
                         }
                     }

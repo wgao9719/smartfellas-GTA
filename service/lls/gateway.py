@@ -5,8 +5,10 @@ import time
 import weakref
 from contextlib import aclosing
 
+from .anthropic_provider import AnthropicProvider
 from .budgets import BudgetExceeded, BudgetLedger
-from .gateway_config import validate_local_endpoint, validate_remote_endpoint
+from .claude_cli_provider import ClaudeCliProvider
+from .gateway_config import HOSTED_PROVIDERS, validate_local_endpoint, validate_remote_endpoint
 from .outbound import OutboundDenied, OutboundGate, raise_if_cancelling
 from .providers import DisabledProvider, FakeProvider, OpenAIProvider, ProviderResponseError
 
@@ -16,6 +18,7 @@ CONFIGURATION_FIELDS = (
     "dialogue_model",
     "action_model",
     "openai_base_url",
+    "anthropic_base_url",
     "local_base_url",
     "ai_gateway",
     "embedding",
@@ -24,8 +27,9 @@ NEUTRAL_LINE = "I'm not sure what to say right now."
 
 
 def validate_endpoints(settings):
-    # Even inactive endpoints appear in administrator status, so validate both.
+    # Even inactive endpoints appear in administrator status, so validate them all.
     validate_remote_endpoint(settings.openai_base_url)
+    validate_remote_endpoint(settings.anthropic_base_url)
     validate_local_endpoint(settings.local_base_url)
     return settings
 
@@ -75,14 +79,18 @@ class GatewayProvider:
         self.failures = 0
         self.circuit_until = 0
         self.turn_routes = weakref.WeakKeyDictionary()
-        self.primary = (
-            OpenAIProvider(settings, gate=self.gate, transport=transport)
-            if self.name in {"openai", "local_openai"}
-            else {"disabled": DisabledProvider, "fake": FakeProvider}[self.name]()
-        )
+        self.grounding_routes = weakref.WeakKeyDictionary()
+        if self.name == "anthropic":
+            self.primary = AnthropicProvider(settings, gate=self.gate, transport=transport)
+        elif self.name == "claude_cli":
+            self.primary = ClaudeCliProvider(settings, gate=self.gate, transport=transport)
+        elif self.name in {"openai", "local_openai"}:
+            self.primary = OpenAIProvider(settings, gate=self.gate, transport=transport)
+        else:
+            self.primary = {"disabled": DisabledProvider, "fake": FakeProvider}[self.name]()
         self.fallback = None
         configured = settings.ai_gateway.local_fallback
-        if self.name == "openai" and configured is not None:
+        if self.name in HOSTED_PROVIDERS and configured is not None:
             values = settings.model_dump()
             values.update(
                 provider="local_openai",
@@ -118,12 +126,29 @@ class GatewayProvider:
 
     async def aclose(self):
         await self.gate.aclose()
+        close = getattr(self.primary, "aclose", None)
+        if close is not None:
+            await close()
+
+    @property
+    def classify_grounding(self):
+        if self.name in {"disabled", "fake"} or not self.settings.grounding_classifier_enabled:
+            return None
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        # Resolve in the dialogue task before the bounded classifier runs in its own task.
+        provider = (
+            self.grounding_routes.get(task, self.primary) if task is not None else self.primary
+        )
+        return provider.classify_grounding
 
     def _failure(self, exc, provider):
         self.last_fallback_reason = type(exc).__name__
         if (
             provider is self.primary
-            and self.name == "openai"
+            and self.name in HOSTED_PROVIDERS
             and not isinstance(exc, (OutboundDenied, BudgetExceeded))
         ):
             self.failures += 1
@@ -147,7 +172,7 @@ class GatewayProvider:
             self.turn_routes[task] = self.primary
             return
         candidates = [self.primary]
-        if self.name == "openai" and self.clock() < self.circuit_until:
+        if self.name in HOSTED_PROVIDERS and self.clock() < self.circuit_until:
             candidates = []
             self.last_fallback_reason = "circuit_open"
         if self.fallback is not None:
@@ -155,6 +180,7 @@ class GatewayProvider:
         for provider in candidates:
             emitted = False
             try:
+                self.grounding_routes[task] = provider
                 response = provider.dialogue(context, budget_class=budget_class)
                 async with aclosing(response) as stream:
                     async for chunk in stream:
@@ -220,7 +246,7 @@ class GatewayProvider:
         if self.name == "disabled":
             return None
         candidates = [self.primary]
-        if self.name == "openai" and self.clock() < self.circuit_until:
+        if self.name in HOSTED_PROVIDERS and self.clock() < self.circuit_until:
             candidates = []
             self.last_fallback_reason = "circuit_open"
         if self.fallback is not None:

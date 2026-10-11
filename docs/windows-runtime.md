@@ -11,7 +11,7 @@ G0 is not done. No game, loader, or SHVDN combination is currently certified by 
 7. Confirm Story Mode starts without adapter errors.
 8. Copy the staged adapter bundle into the game's existing `scripts` directory.
 9. Copy `scripts/LivingNPC/LivingNPC.ini.example` to `scripts/LivingNPC/LivingNPC.ini`. Preserve an existing INI.
-10. Set `ScriptHookVBuild` to the installed build in the INI.
+10. Set `ScriptHookVBuild` to the installed build in the INI. Set `[Service]` `ProfileId` and `SaveSlot` for the loaded save as described under [Save/profile association](#saveprofile-association).
 11. Install Python 3.11 or 3.12 for the local service.
 12. Install the project dependencies with `uv sync --group dev`.
 13. Start the local service.
@@ -22,7 +22,7 @@ G0 is not done. No game, loader, or SHVDN combination is currently certified by 
 
 14. Check `http://127.0.0.1:8765/health`.
 15. Start Story Mode and inspect the latest `scripts/LivingNPC/LivingNPC-*.log` for `adapter_loaded`.
-16. Press F6 near an ordinary pedestrian. Expect `Target: Passerby (Available)`.
+16. Read the save/profile warning and press F10 only after checking that the configured profile and save label match the loaded save. Then press F6 near an ordinary pedestrian. Expect `Target: Passerby (Available)`.
 17. Press F7 to enter a message.
 18. Hold N to request microphone capture.
 19. Release N to stop capture and start transcription.
@@ -81,7 +81,7 @@ Without this setting, a pinned ped is registered but the game may still despawn 
 1. Stop the service during a pending interaction.
 2. Verify regular GTA play continues.
 3. Restart the service.
-4. Verify the adapter opens a fresh session after authentication invalidates the old session.
+4. Verify the adapter requests save/profile confirmation after authentication invalidates the old session. Confirm the matching association and verify it opens a fresh session.
 5. Confirm old replies cannot act on the new runtime generation.
 6. Reload the adapter after changing the DLL.
 7. Compare the logged informational version with `scripts/adapter-build.json`.
@@ -90,7 +90,36 @@ If the loader locks a DLL, close GTA before deployment. The deployment tool stor
 
 SHVDN loads every DLL below `scripts`. Local deployment therefore stages files in a temporary `lls-stage-*` directory beside `scripts`, on the same volume. An interrupted deployment can leave that directory behind, but never a second adapter copy inside `scripts`. Delete a leftover `lls-stage-*` directory after the interrupted deployment ends.
 
-The default profile is `default`. Use a distinct `ProfileId` for each save lineage when automatic timeline association is ambiguous. G0 must test full in-game dates after restart and rewind. Same-date divergent saves remain an explicit selection case.
+## Database snapshots and restore
+
+The service database is separate from the adapter and GTA saves. Its Windows default is `%LOCALAPPDATA%\LivingLosSantos\lls.sqlite3`; `LLS_DATABASE` can select another absolute path. Periodic snapshots are stored in the database directory's `snapshots` subdirectory, by default `%LOCALAPPDATA%\LivingLosSantos\snapshots`. Each published file is named `lls-<UTC timestamp>-<random>.sqlite3` and contains all profiles and service database settings.
+
+`LLS_SNAPSHOT_INTERVAL_SECONDS` defaults to `3600` (one hour). Set it to `0` to disable periodic snapshots. The first snapshot is due one interval after startup; later intervals begin when the preceding attempt finishes. `LLS_SNAPSHOT_RETENTION_COUNT` defaults to `24` and accepts `1` through `1000`; after a successful publication, older periodic snapshots are removed until that count remains. Restart the service after changing either setting. In-memory databases do not produce periodic snapshots. The dashboard's manual database backup still writes to the database directory's `backups` subdirectory; those backups are not rotated automatically.
+
+The maintenance loop runs at most one periodic snapshot at a time in a worker thread. SQLite's online backup API copies a consistent database while WAL writes continue. The copy is written to a temporary file in the snapshot directory, then published with an atomic replacement only after copying succeeds. Copy or publication failure leaves previously published snapshots intact. Failures record the exception type and retry at the next interval without stopping the service.
+
+The dashboard's snapshot diagnostics and authenticated local admin overview (`/v1/admin/overview`) report `enabled`, `running`, `interval_seconds`, `retention_count`, `last_success_at`, `last_success_path`, `last_failure_at`, and `last_error_type` in the `snapshots` object. Diagnostics cover the current service lifetime. A later success updates the success fields while retaining the last failure fields. Check both timestamps and the failure type when diagnosing missing snapshots, including disk-space or directory-permission failures.
+
+To restore a selected snapshot or manual backup:
+
+1. Stop the service completely and confirm its process has exited. Do not replace a database while any service instance is using it.
+2. Identify the database path from `LLS_DATABASE`, or use the default above. Preserve the current database and any matching `-wal` and `-shm` sidecars together in a separate recovery directory. For example, `lls.sqlite3`, `lls.sqlite3-wal`, and `lls.sqlite3-shm` belong to the same set. Do not leave old sidecars beside the replacement database.
+3. Copy the selected `.sqlite3` snapshot to the configured database path, keeping the original snapshot. A completed snapshot is a standalone database; it does not need the live database's WAL or SHM files.
+4. Restart the service, inspect the local dashboard for the expected profiles and memories, and confirm the save/profile association before reopening a game session.
+
+Restoring replaces all profiles and database settings with their state at snapshot time; later changes are lost. Deleting a profile or memory from the live database does not remove it from existing snapshots or manual backups. Remove retained copies separately when erasure is required. Disabling snapshots does not delete existing files. These copies share the database's disk and do not protect against loss of that disk. Automated consistency and failure tests are development evidence; actual power-loss recovery and GTA behavior still require rig verification.
+
+## Save/profile association
+
+There is no default profile. Set `[Service]` `ProfileId` to the profile you choose for the loaded Story Mode save and `SaveSlot` to a stable manual label for that save lineage. Use a distinct profile and label for a different lineage, including different slots saved at the same game date/time. These fields do not identify a save automatically; the adapter has no verified stable engine save GUID. Reload the adapter after changing the INI.
+
+Before every new bridge session, the adapter displays a warning and waits for `[Input]` `ConfirmProfileKey` (default F10). Check the configured association against the loaded save before confirming. This applies to first startup, detected loads and rewinds, transport reconnects, and protagonist switches. It also applies after pause, missions, cutscenes, and other unsafe-world states that already close the bridge. These transitions conservatively require confirmation too. Check F10 for binding conflicts on the rig. Until confirmation, no service session opens and no existing memories attach.
+
+The service requires `profile_id`, `save_slot`, and `profile_confirmed=true` on session-open. The first explicit association is stored, including for an existing profile whose association was empty. A stored nonempty association cannot be changed through session-open. A missing confirmation or a mismatched save label refuses the session. Select the matching profile and label, or choose a new profile for an unknown or different save; matching timestamps alone never establish an association.
+
+After association, existing timeline behavior applies: an earlier full game date opens a branch with future records excluded. If more than one history matches, the adapter asks you to select this save's history in the dashboard, then press `ConfirmProfileKey` (F10 by default) to reconnect. `ParentBranchId` can also select an intended existing timeline; it does not override the profile/save association check. Keep the same profile and save label across Michael, Franklin, and Trevor within that save. Memories and relationships remain separate for each protagonist. The new refusal notice and key retry are automated-tested; native retry remains provisional.
+
+G0 must test first load, continuation, earlier-save rewind, different-slot equal-time saves, and protagonist switching. Loading-state detection and full-date restoration still require native verification. The adapter may miss a load boundary; dates cannot resolve equal-time divergent saves. Reload the adapter and select the correct association whenever a save change was not detected.
 
 ## Evidence required before release
 
@@ -98,6 +127,41 @@ Record the 20-interaction trial ledger, 20-minute soak, FPS comparison, script t
 
 
 ## Installed paths and diagnostics
+
+The adapter reads INI text directly because SHVDN 3.7.0-nightly.193 truncates
+`URL=http://127.0.0.1:8765` to `http` in `ScriptSettings`. Keep that URL line
+uncommented with the fixed adapter, or omit it to select the same default. All
+settings use the adapter's parser, including `BootstrapToken`, `ProfileId`, and
+`SaveSlot`: section/key names are case-insensitive, surrounding whitespace is
+trimmed, and the last duplicate key wins. UTF BOMs and CRLF are supported. Put
+`;` or `//` comments on their own lines. Values are unquoted literals; embedded
+`//`, `:`, `=`, and `;` are preserved, and inline comments are not stripped.
+
+Service URLs must be absolute `http` URLs with a numeric IP, no credentials,
+path other than `/`, query, or fragment, and a nonzero port. Release permits
+loopback only (including `[::1]`). Debug permits private/Tailscale IPv4 only
+with `DevLAN=true` and a bootstrap token of at least 24 characters. Invalid URLs
+or prohibited DevLAN settings fall back to `http://127.0.0.1:8765`; the log writes
+the fixed code `configuration_endpoint_fallback` without the configured value.
+Malformed boolean/key settings use their defaults. Unreadable or malformed INI
+settings log `configuration_defaults_used`; a missing INI uses defaults. Empty
+profile/save defaults still require explicit configuration and confirmation.
+The first unpaused ticks display a configuration warning for eight seconds before input
+or connection can proceed (pausing restarts that notice interval); no configuration status calls the game in the
+constructor. Reload after correcting the INI.
+
+Thread affinity binds on the first tick, not during SHVDN's domain-thread
+construction. SHVDN dispatches queued keys before Tick, so keys are ignored
+until binding and the startup warning finish. Later keys must use that same
+thread. Bridge callbacks exchange queues only. Abort cleanup touches game and
+controller state only on the bound thread; domain-thread or pre-tick aborts log
+`abort_game_cleanup_skipped` and still attempt transport/log disposal. Native
+task/persistence cleanup during such aborts remains unverified. See the
+[runtime review](first-gta-adapter-fixes.md) for source evidence and limits.
+
+SQLite also needs a writable temporary directory, even when its database directory is writable. Check the service process's `TMP` and `TEMP` if `unable to open database file` appears during session cleanup. When both are absent, Windows can select `C:\Windows\`, while Python chooses a different fallback. Set them to an existing writable directory in the launch shell and restart the service. A nonstandard writable location is valid. See the [local Windows diagnosis](development-validation.md#local-windows-sqlite-temporary-directory-failure).
+
+If session cleanup fails, the dashboard's Live session area shows **Session cleanup pending**, with affected profile/session IDs and the exception type. The admin overview reports the same state even after a service restart. Closed sessions reject further game work; opening another session for an affected profile returns 503 until cleanup succeeds. The service retries on each maintenance tick and at startup. SQLite schema v5 persists cleanup intent, and startup also recovers unfinished sessions if the failure prevented that intent from being written. Only a committed purge clears pending state. Pinned and curated memories remain durable. History can remain on disk while storage is unavailable; restore writable database/temp paths or resolve locking/disk-space failures, then refresh the dashboard to confirm cleanup completed.
 
 The DLLs remain directly under `scripts/`. The adapter reads only `scripts/LivingNPC/LivingNPC.ini`. Logs use the same `LivingNPC` directory. Deployment installs an INI template and preserves existing settings and logs. The adapter does not create a persistent local state database.
 

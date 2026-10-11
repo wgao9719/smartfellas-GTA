@@ -45,7 +45,7 @@ class EmbeddingAndDialogueHTTP:
             )
         if not payload.get("stream"):
             return httpx.Response(200, json={"choices": [{"message": {"content": "null"}}]})
-        context = json.loads(payload["messages"][-1]["content"])
+        context = json.loads(payload["messages"][1]["content"])
         self.contexts.append(context)
         text = (
             '{"decision":"accept"}'

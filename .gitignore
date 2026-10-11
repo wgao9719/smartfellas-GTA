@@ -2,6 +2,9 @@
 .env
 .env.*
 !.env.example
+# API keys stay on each computer: only the instructions in secrets/ are shared.
+secrets/*
+!secrets/README.md
 *.sqlite
 *.sqlite3
 *.sqlite3-*

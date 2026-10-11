@@ -32,6 +32,9 @@ namespace LivingNPC.Core
         public long Generation { get; }
         public string PolicyVersion { get; }
         public bool FailedClosed { get; private set; }
+        private int nativeFailures;
+        private string? stopMessage;
+        private const int NativeFailureLimit = 3;
         public CommandController(IGameAdapter game, string sessionId, long generation, string policyVersion, IEnumerable<string> capabilities)
         {
             this.game = game; safety = new SafetyGovernor(capabilities); SessionId = sessionId; Generation = generation; PolicyVersion = policyVersion;
@@ -50,47 +53,48 @@ namespace LivingNPC.Core
             var world = game.ReadWorld();
             foreach (var item in active.Values.ToArray())
             {
-                // Reserve enough space for terminal results. The worker retains failed sends.
-                if (Acks.Remaining < 4) break;
                 var actor = game.Resolve(item.Command.ActorId!);
-                var invalid = actor == null || !actor.Exists || !actor.Alive || actor.Generation != Generation || actor.RuntimeInstanceId != item.Instance;
-                var unsafeActor = actor != null && (actor.Busy || (actor.InCombat && !NativeActions.IsCombat(item.Action) && item.Action != "flee_from_threat") || actor.Policy == ControlPolicy.Protected || actor.Ownership == Ownership.GameScriptOwned || actor.Distance > 15);
-                if (invalid || !world.Safe || unsafeActor)
+                if (!CanContinue(item, actor, world))
                 {
-                    // Leaving our radius ends an owned task; an engine/mission takeover does not.
-                    if (!invalid && world.Safe && actor != null && actor.Distance > 15 && !actor.Busy &&
-                        (!actor.InCombat || NativeActions.IsCombat(item.Action) || item.Action == "flee_from_threat") &&
-                        actor.Policy == ControlPolicy.Ambient && (actor.Ownership == Ownership.Ambient || actor.Ownership == Ownership.ModOwned) &&
-                        (!actor.MissionEntity || actor.Ownership == Ownership.ModOwned)) game.Release(item.Command, actor, item.Action);
+                    // Distance loss stops our task; a takeover never permits clearing it.
+                    if (MayRelease(item, actor, world)) game.Release(item.Command, actor!, item.Action);
                     Acknowledge(item.Command, "canceled", "actor_or_world_changed"); ForgetAction(item); continue;
                 }
                 if (now >= item.Command.ExpiresAt)
                 {
                     game.Release(item.Command, actor!, item.Action); Acknowledge(item.Command, "expired", "execution_timeout"); ForgetAction(item); continue;
                 }
+                // Backpressure observations, never safety cleanup. Terminal ACKs can be deferred.
+                if (Acks.Remaining < 4) continue;
                 var observation = game.Observe(item.Command, actor!, item.Action);
                 if (observation.Status == EffectStatus.Running) continue;
                 var status = observation.Status == EffectStatus.Completed ? "completed" : observation.Status == EffectStatus.TakenOver ? "canceled" : "failed";
-                if (observation.Status != EffectStatus.TakenOver) game.Release(item.Command, actor!, item.Action);
+                if (observation.Status == EffectStatus.Failed || observation.Status == EffectStatus.Completed) ReleaseIfOurs(item);
                 Acknowledge(item.Command, status, observation.Reason, observation.Facts); ForgetAction(item);
+                if (observation.Status == EffectStatus.Completed) nativeFailures = 0;
+                else if (observation.Status == EffectStatus.Failed) NativeFailed();
+                if (stopMessage != null) break;
             }
-            if (FailedClosed) return;
+            if (FailedClosed && stopMessage == null) return;
             for (var drained = 0; drained < 4 && Acks.Remaining >= 4 && Commands.TryTake(out var command); drained++) Dispatch(command, world, now);
             AdvanceSubtitles(world, now);
         }
         private void Dispatch(Command command, WorldState world, DateTimeOffset now)
         {
+            if (results.Count >= 4096 && !results.ContainsKey(command.IdempotencyKey)) { FailedClosed = true; game.ShowStatus("error", "Session command limit reached. Reload the adapter."); return; }
+            if (command.SchemaVersion != 1)
+            { Acknowledge(command, "rejected", "schema_mismatch"); StopForProtocolFault(); return; }
             if (results.TryGetValue(command.IdempotencyKey, out var previous))
             {
                 if (!Acks.TryAdd(new Ack { CommandId = command.Id, SessionId = SessionId, RuntimeGeneration = Generation, Status = previous.Status, Reason = previous.Reason, Observed = previous.Observed })) FailedClosed = true;
                 return;
             }
-            if (results.Count >= 4096) { FailedClosed = true; game.ShowStatus("error", "Session command limit reached. Reload the adapter."); return; }
-            if (command.SessionId != SessionId || command.RuntimeGeneration != Generation || command.SchemaVersion != 1)
+            if (command.SessionId != SessionId || command.RuntimeGeneration != Generation)
             { Acknowledge(command, "rejected", "stale_session"); return; }
             if (command.ExpiresAt <= now) { Acknowledge(command, "expired", "authorization_expired"); return; }
             var scene = (string?)command.Payload["scene_id"] ?? "";
             if (command.Kind == "scene.cancel") { Cancel(scene, now, command.Seq); Acknowledge(command, "completed", "local_scene_canceled"); return; }
+            if (stopMessage != null) { Acknowledge(command, "canceled", "safety_stop"); return; }
             if (scene.Length > 0 && canceledScenes.ContainsKey(scene)) { Acknowledge(command, "canceled", "scene_canceled"); return; }
             if (command.Kind == "status")
             {
@@ -138,15 +142,43 @@ namespace LivingNPC.Core
             if (command.Kind != "action.execute") { Acknowledge(command, "rejected", "unknown_command"); return; }
             var action = (string)command.Payload["action_id"]!;
             active.TryGetValue(actor!.ActorId, out var previousAction);
+            if (action == "stop_following" && (previousAction == null || previousAction.Action != "follow_player" || !CanContinue(previousAction, actor, world)))
+            { Acknowledge(command, "rejected", "no_mod_follow_task"); return; }
             if (previousAction != null && !(action == "stop_following" && previousAction.Action == "follow_player"))
             { Acknowledge(command, "rejected", "actor_task_conflict"); return; }
-            if (!game.Start(command, actor, action, (JObject)command.Payload["arguments"]!)) { Acknowledge(command, "rejected", "native_task_refused"); return; }
-            if (previousAction != null) { Acknowledge(previousAction.Command, "canceled", "follow_stop_requested"); ForgetAction(previousAction); }
+            if (!game.Start(command, actor, action, (JObject)command.Payload["arguments"]!)) { Acknowledge(command, "rejected", "native_task_refused"); NativeFailed(); return; }
+            if (previousAction != null) { Acknowledge(previousAction.Command, "canceled", "stop_following"); ForgetAction(previousAction); }
             active.Add(actor.ActorId, new Active { Command = command, Action = action, Instance = actor.RuntimeInstanceId });
             safety.Started(actor.ActorId, action, now);
-            Acknowledge(command, "started", "task_dispatched", new Dictionary<string, object> { ["task_dispatched"] = true });
+            var loadingGesture = action == "play_verified_gesture";
+            Acknowledge(command, "started", loadingGesture ? "animation_loading" : "task_dispatched", new Dictionary<string, object> { ["task_dispatched"] = !loadingGesture });
+        }
+        private void NativeFailed()
+        {
+            if (++nativeFailures >= NativeFailureLimit) Stop("Repeated native command failures. AI stopped. Reload the adapter.");
+        }
+        public void StopForProtocolFault() => Stop("Command schema mismatch. AI stopped. Update the adapter and service together, then reload the adapter.");
+        private void Stop(string message)
+        {
+            if (stopMessage != null) return;
+            stopMessage = message; FailedClosed = true;
+            Cancel(null, null, null, "safety_stop"); game.ShowStatus("error", message);
         }
         private void ForgetAction(Active item) { game.Forget(item.Command); active.Remove(item.Command.ActorId!); }
+        private void ReleaseIfOurs(Active item)
+        {
+            var actor = game.Resolve(item.Command.ActorId!);
+            if (MayRelease(item, actor, game.ReadWorld())) game.Release(item.Command, actor!, item.Action);
+        }
+        private bool CanContinue(Active item, ActorState? actor, WorldState world) =>
+            MayRelease(item, actor, world) && actor!.Distance >= 0 && actor.Distance <=
+                (item.Action == "follow_player" ? (double?)item.Command.Payload["arguments"]?["max_follow_meters"] ?? 15 : LocalActionController.Moves(item.Action) ? 30 : 15) &&
+            (!LocalActionController.Moves(item.Action) || actor.CanMove && actor.Policy == ControlPolicy.Ambient);
+        private bool MayRelease(Active item, ActorState? actor, WorldState world) =>
+            world.Safe && actor != null && actor.Exists && actor.Alive && actor.Generation == Generation && actor.RuntimeInstanceId == item.Instance &&
+            !actor.Busy && (!actor.InCombat || NativeActions.IsCombat(item.Action)) && actor.Policy != ControlPolicy.Protected && (!actor.MissionEntity || actor.Ownership == Ownership.ModOwned) &&
+            (actor.Policy != ControlPolicy.ServiceLimited || item.Action == "face_player") && (actor.Ownership == Ownership.Ambient || actor.Ownership == Ownership.ModOwned);
+        public bool IsFollowing(string actorId, string instance) => active.TryGetValue(actorId, out var item) && item.Action == "follow_player" && item.Instance == instance;
         private static Dictionary<string, object> Rendered(Subtitle subtitle, DateTimeOffset? observedAt = null)
         {
             subtitle.DisplayedAt = subtitle.DisplayedAt ?? observedAt ?? DateTimeOffset.UtcNow;
@@ -194,7 +226,8 @@ namespace LivingNPC.Core
             showing = next; showing.Until = durationMs.HasValue ? now.AddMilliseconds(durationMs.Value) : now.AddSeconds(Math.Max(3, Math.Min(15, next.Text.Length / 12.0)));
             game.ShowSubtitle(next.Speaker, next.Text);
         }
-        public void Cancel(string? sceneId = null, DateTimeOffset? canceledAt = null, long? beforeSequence = null)
+        public void Cancel(string? sceneId = null, DateTimeOffset? canceledAt = null, long? beforeSequence = null) => Cancel(sceneId, canceledAt, beforeSequence, "user_cancel");
+        private void Cancel(string? sceneId, DateTimeOffset? canceledAt, long? beforeSequence, string reason)
         {
             if (!string.IsNullOrWhiteSpace(sceneId))
             {
@@ -206,29 +239,28 @@ namespace LivingNPC.Core
             {
                 if (!string.IsNullOrWhiteSpace(sceneId) && (string?)item.Command.Payload["scene_id"] != sceneId) continue;
                 var actor = game.Resolve(item.Command.ActorId!);
-                if (world.Safe && actor != null && actor.Exists && actor.Alive && !actor.Busy && (!actor.InCombat || NativeActions.IsCombat(item.Action) || item.Action == "flee_from_threat") && actor.RuntimeInstanceId == item.Instance && actor.Ownership != Ownership.GameScriptOwned)
-                    game.Release(item.Command, actor, item.Action);
-                Acknowledge(item.Command, "canceled", "user_cancel"); ForgetAction(item);
+                if (MayRelease(item, actor, world)) game.Release(item.Command, actor!, item.Action);
+                Acknowledge(item.Command, "canceled", reason); ForgetAction(item);
             }
             // Local cancellation invalidates every already queued command, including late speech.
             var retained = new List<Command>();
             while (Commands.TryTake(out var pending))
             {
-                if ((!beforeSequence.HasValue || pending.Seq <= beforeSequence.Value) && (string.IsNullOrWhiteSpace(sceneId) || (string?)pending.Payload["scene_id"] == sceneId)) Acknowledge(pending, "canceled", "user_cancel");
+                if ((!beforeSequence.HasValue || pending.Seq <= beforeSequence.Value) && (string.IsNullOrWhiteSpace(sceneId) || (string?)pending.Payload["scene_id"] == sceneId)) Acknowledge(pending, "canceled", reason);
                 else retained.Add(pending);
             }
             foreach (var item in retained) Commands.TryAdd(item);
             if (showing != null && (string.IsNullOrWhiteSpace(sceneId) || (string?)showing.Command.Payload["scene_id"] == sceneId))
-            { if (!showing.Delivered) Acknowledge(showing.Command, "canceled", "user_cancel", game.SubtitleRendered ? Rendered(showing) : null); showing = null; }
+            { if (!showing.Delivered) Acknowledge(showing.Command, "canceled", reason, game.SubtitleRendered ? Rendered(showing) : null); showing = null; }
             var pendingSubtitles = subtitles.ToArray(); subtitles.Clear();
             foreach (var subtitle in pendingSubtitles)
             {
-                if (string.IsNullOrWhiteSpace(sceneId) || (string?)subtitle.Command.Payload["scene_id"] == sceneId) Acknowledge(subtitle.Command, "canceled", "user_cancel");
+                if (string.IsNullOrWhiteSpace(sceneId) || (string?)subtitle.Command.Payload["scene_id"] == sceneId) Acknowledge(subtitle.Command, "canceled", reason);
                 else subtitles.Enqueue(subtitle);
             }
             game.ClearSubtitle();
             if (statusScene != null && (string.IsNullOrWhiteSpace(sceneId) || statusScene == sceneId))
-            { statusScene = null; game.ShowStatus("canceled", "Living Los Santos: conversation canceled."); }
+            { statusScene = null; if (stopMessage == null) game.ShowStatus("canceled", "Living Los Santos: conversation canceled."); }
         }
     }
 }

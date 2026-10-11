@@ -119,7 +119,7 @@ The demo uses a temporary database and the fake provider. It makes no cloud call
 
 Both integration checks start an isolated temporary service. They verify serialized events, commands, subtitles, action acknowledgments, and session closure. Speech mode uses synthetic audio and mocked playback. It verifies push-to-talk states and delivery ordering without opening audio devices. Both checks detect a task-local `.dotnet` installation automatically.
 
-The process-death check kills its owned temporary service during a fake C# action. It verifies withdrawal, reconnect, stale-action rejection, and preservation of the incomplete outcome.
+The process-death check kills its owned temporary service during a fake C# action. It verifies withdrawal, reconnect, stale-action rejection, and preservation of the canonical started receipt without inventing completion. The receipt remains visible in the admin profile export; the unpinned ambient actor's session-only memories are purged during recovery, just as on normal close.
 
 ```sh
 uv run --frozen python tests/live_bridge_crash_check.py
@@ -159,13 +159,15 @@ uv run --frozen python tools/simulated_load.py
 
 | Key | Action |
 |---|---|
-| F6 | Select the nearest eligible pedestrian. The status shows `Available`, `Busy`, `Out of range`, or `Not available`, or names the nearest refused role. |
+| F6 | Select an eligible pedestrian within 8 m of the player and 45° of the camera's look direction, ranked by angle and distance. Without a target in view, show unavailable feedback or name the nearest refused role. |
 | F7 | Type a message to the selected pedestrian. |
 | N | Hold to talk. Release to send. |
-| Backspace | Cancel the current conversation. |
+| B | Hold to whisper. Release to send. |
+| Backspace | Outside typed input, cancel playback, queued dialogue and actions, and clear the selected target. While typing, delete a character. |
+| Escape | While typing, cancel and clear the target. Otherwise reserved for GTA's pause menu; an observed pause also cancels and clears selection. |
 | F8 twice | Pin the selected pedestrian. The conversation becomes permanent. The pedestrian may not return after you leave. |
 
-All keys are configurable in `scripts/LivingNPC/LivingNPC.ini`. Only ordinary civilians are eligible. Police, security, emergency, gang, animal, story, and unrecognized peds stay protected. The [classification capability sheet](docs/actions/ped-classification-and-pin.md) records what still needs rig verification.
+The six interaction keys are configurable in `scripts/LivingNPC/LivingNPC.ini`; Escape stays reserved outside typed input, so choose another key for cancel. Only ordinary civilians are eligible. Police, security, emergency, gang, animal, story, and unrecognized peds stay protected. The [classification capability sheet](docs/actions/ped-classification-and-pin.md) records what still needs rig verification. Camera selection, pause detection, key conflicts, and native cancellation remain provisional until tested in GTA on the rig.
 
 ## Build the game adapter
 

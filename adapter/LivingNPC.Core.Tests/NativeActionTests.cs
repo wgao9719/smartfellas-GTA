@@ -49,7 +49,7 @@ public class NativeActionTests
         actor.IsDriver = true; Assert.Null(NativeActions.Check("cruise_vehicle", new JObject(), actor, true));
         actor.InVehicle = false;
         Assert.Equal("point_outside_local_area", NativeActions.Check("run_to_point", JObject.FromObject(new { point = new { x = 16, y = 0, z = 0 } }), actor, true));
-        Assert.Equal("unknown_gesture", NativeActions.Check("play_verified_gesture", JObject.FromObject(new { gesture_id = "arbitrary_animation" }), actor, true));
+        Assert.Equal("argument_out_of_range", NativeActions.Check("play_verified_gesture", JObject.FromObject(new { gesture_id = "arbitrary_animation" }), actor, true));
     }
     [Fact] public void StoppingFollowReplacesOnlyTheOwnedFollowAction()
     {
@@ -72,7 +72,7 @@ public class NativeActionTests
     {
         var game = new FakeGame(); var controller = new CommandController(game, "ses", 7, "p1", NativeActions.DevelopmentCapabilities);
         controller.Commands.TryAdd(Command("wander_nearby", new { })); controller.Tick(ControllerTests.Now); Drain(controller);
-        game.Actor.Distance = 16; controller.Tick(ControllerTests.Now.AddMilliseconds(100));
+        game.Actor.Distance = 31; controller.Tick(ControllerTests.Now.AddMilliseconds(100));
         Assert.Equal(1, game.Releases); Assert.Equal("canceled", Assert.Single(Drain(controller)).Status);
     }
     [Fact] public void DevelopmentConsentReachesTypedAndVoiceInputOnlyWhenEnabled()

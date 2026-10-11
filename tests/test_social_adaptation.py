@@ -218,19 +218,21 @@ def test_reset_blocks_same_source_and_anchor_after_reimport(history, unprojected
                 "DELETE FROM memories WHERE memory_id=?", (identifier + ":memory",)
             )
     history.repo.reset_actor("profile", "bea")
-    history.repo.add_memory(
-        "profile", history.branch, "bea", "franklin", GAME.isoformat(),
-        decision_memory_text("refuse"), [identifier], "system_fact",
-        memory_id=identifier + ":memory",
-    )
+    with pytest.raises(ValueError, match="source event content was erased or expired"):
+        history.repo.add_memory(
+            "profile", history.branch, "bea", "franklin", GAME.isoformat(),
+            decision_memory_text("refuse"), [identifier], "system_fact",
+            memory_id=identifier + ":memory",
+        )
     assert read(history)["bea"]["last_boundary_at"] is None
     history.repo.delete_event("profile", identifier)
     history.repo.record_event("profile", history.branch, source)
-    history.repo.add_memory(
-        "profile", history.branch, "bea", "franklin", GAME.isoformat(),
-        decision_memory_text("refuse"), [identifier], "system_fact",
-        memory_id=identifier + ":memory",
-    )
+    with pytest.raises(ValueError, match="source event content was erased or expired"):
+        history.repo.add_memory(
+            "profile", history.branch, "bea", "franklin", GAME.isoformat(),
+            decision_memory_text("refuse"), [identifier], "system_fact",
+            memory_id=identifier + ":memory",
+        )
     assert read(history)["bea"]["last_boundary_at"] is None
     decide(history, scene="fresh")
     assert read(history)["bea"]["recent_boundary_count"] == 1
@@ -491,10 +493,12 @@ def seed_mixed_history(history):
         if reimport:
             repo.delete_event("profile", refusal)
             repo.record_event("profile", history.branch, source)
-        repo.add_memory(
-            "profile", history.branch, "dana", "franklin", minutes(6).isoformat(),
-            decision_memory_text("refuse"), [refusal], "system_fact", memory_id=refusal + ":memory",
-        )
+        with pytest.raises(ValueError, match="source event content was erased or expired"):
+            repo.add_memory(
+                "profile", history.branch, "dana", "franklin", minutes(6).isoformat(),
+                decision_memory_text("refuse"), [refusal], "system_fact",
+                memory_id=refusal + ":memory",
+            )
     decide(history, "withdraw", owner="dana", scene="dana-fresh", at=minutes(4), **dana)
     decide(history, owner="bea", scene="michael", at=minutes(1), protagonist_id="michael")
     quote(history, speaker="bea", listener="avery", at=minutes(1), protagonist_id="michael")

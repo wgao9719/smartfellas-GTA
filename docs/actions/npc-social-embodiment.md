@@ -7,7 +7,7 @@ The service requires `LLS_RELEASE=0`, `LLS_DEV_SOCIAL=1`, and, for automatic ini
 
 | Operation | Native mapping | Bounds | Observed on rig |
 | --- | --- | --- | --- |
-| Discover civilians | SHVDN `World.GetNearbyPeds`, zone/interior natives, runtime decorators | 8 nearby identities, 35 m, one candidate per sample | — |
+| Discover civilians | SHVDN `World.GetNearbyPeds`, zone/interior natives, per-tick binding continuity | 8 nearby identities, 35 m, one candidate per sample | — |
 | Approach partner | `TASK_GO_TO_ENTITY` | Initial separation ≤6 m; 4 s task; cumulative movement ≤6 m | — |
 | Face partner | `TASK_TURN_PED_TO_FACE_ENTITY` via SHVDN | 600 ms | — |
 | Chat/look | `TASK_CHAT_TO_PED`, `TASK_LOOK_AT_ENTITY` | 2–3 bound civilians, ≤45 s scene | — |

@@ -196,7 +196,52 @@ class SkillRuntime:
             if proposal["arguments"].get("duration_seconds") is None:
                 raise HTTPException(409, "bridge skills require explicit primitive durations")
 
-    async def skill_call(self, session, body, operation):
+    async def preflight_skill(self, session, candidate_id):
+        """Persist simulated interpreter evidence before authorizing a bridge trial."""
+        identity = session.skill_run["identity"]
+        self.skill_environment(identity)
+
+        async def execute(identity, operation_id, proposal, deadline):
+            self.skill_environment(identity)
+            return PrimitiveReceipt(
+                operation_id=operation_id, status="completed", distance_meters=0
+            )
+
+        async def cancel(identity, operation_id):
+            pass
+
+        return await self.skill_store.record_trial(
+            candidate_id,
+            identity,
+            session.game_datetime,
+            interpreter=SkillInterpreter(enabled=True, clock=self.clock),
+            environment=self.skill_environment,
+            execute=execute,
+            cancel=cancel,
+        )
+
+    def require_skill_preflight(self, identity, game_datetime, program):
+        with self.repo._lock:
+            _, stamp = self.skill_store._scope(identity, game_datetime)
+            candidate = self.skill_store._owned(
+                identity, stamp, program["record_id"], {"candidate"}
+            )
+            compiled = self.skill_store._compiled(identity, stamp, candidate)
+            trial = self.skill_store._owned(
+                identity, stamp, program.get("preflight_id"), {"trial"}
+            )
+            result = self.skill_store._record(trial)["result"]
+            if (
+                trial["parent_id"] != program["record_id"]
+                or trial["fingerprint"] != compiled.fingerprint
+                or program["fingerprint"] != compiled.fingerprint
+                or result.get("fingerprint") != compiled.fingerprint
+                or result.get("verification") != "simulated"
+                or result.get("status") != "completed"
+            ):
+                raise HTTPException(409, "bridge trial requires a matching passing preflight")
+
+    async def skill_call(self, session, body, operation, *, preflight_id=None):
         async with session.lock:
             identity = self.authorize_skill(session, body)
             owner = (identity.profile_id, identity.actor_id)
@@ -224,6 +269,7 @@ class SkillRuntime:
                 "commands": {},
                 "source_event_ids": [],
                 "cleanup_requested": False,
+                "preflight_id": preflight_id,
             }
             session.skill_run = state
             self.skill_environment(identity)
@@ -293,6 +339,21 @@ class SkillRuntime:
                     "fingerprint": compiled.fingerprint,
                 }
             self.validate_bridge_skill(compiled)
+            if operation == "trial":
+                preflight_id = state["preflight_id"]
+                if preflight_id is None:
+                    simulated = await self.preflight_skill(session, body.candidate_id)
+                    if simulated["result"]["status"] != "completed":
+                        return {
+                            "run_id": state["run_id"],
+                            "operation": operation,
+                            "result": simulated,
+                            "game_verified": False,
+                            "native_cleanup_confirmed": False,
+                        }
+                    preflight_id = simulated["record_id"]
+                state["program"]["preflight_id"] = preflight_id
+                self.require_skill_preflight(identity, session.game_datetime, state["program"])
             interpreter = SkillInterpreter(enabled=True, clock=self.clock)
             kwargs = dict(
                 environment=self.skill_environment,
@@ -355,6 +416,9 @@ class SkillRuntime:
         session = self.sessions[identity.session_id]
         async with session.lock:
             environment = self.skill_environment(identity)
+            program = session.skill_run["program"]
+            if program["kind"] == "candidate":
+                self.require_skill_preflight(identity, session.game_datetime, program)
             decision = self.policy.check(
                 proposal,
                 environment.actor,
