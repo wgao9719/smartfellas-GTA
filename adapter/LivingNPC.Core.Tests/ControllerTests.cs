@@ -17,10 +17,11 @@ public sealed class FakeGame : IGameAdapter
     public void Forget(Command command) { }
     public string Status = "";
     public EffectObservation Observation = new() { Status = EffectStatus.Running };
+    public Action? OnObserve;
     public WorldState ReadWorld() => World;
     public ActorState? Resolve(string actorId) => actorId == Actor.ActorId ? Actor : null;
     public bool Start(Command command, ActorState actor, string actionId, JObject arguments) { Starts++; return true; }
-    public EffectObservation Observe(Command command, ActorState actor, string actionId) => Observation;
+    public EffectObservation Observe(Command command, ActorState actor, string actionId) { OnObserve?.Invoke(); return Observation; }
     public void Release(Command command, ActorState actor, string actionId) => Releases++;
     public void ShowSubtitle(string speaker, string text) { Subtitles++; LastSpeaker = speaker; LastSubtitle = text; }
     public void ClearSubtitle() { SubtitleClears++; LastSubtitle = ""; }
@@ -118,6 +119,75 @@ public class ControllerTests
         var game = new FakeGame(); var controller = Controller(game); controller.Commands.TryAdd(Action()); controller.Tick(Now); Drain(controller);
         game.Actor.RuntimeInstanceId = "instance-2"; controller.Tick(Now.AddSeconds(1));
         Assert.Equal(0, game.Releases); Assert.Equal("canceled", Assert.Single(Drain(controller)).Status);
+    }
+    [Theory]
+    [InlineData("protected", false)][InlineData("protected", true)]
+    [InlineData("generation", false)][InlineData("generation", true)]
+    [InlineData("far", false)][InlineData("far", true)]
+    [InlineData("script_owned", false)][InlineData("script_owned", true)]
+    [InlineData("unsafe_world", false)][InlineData("unsafe_world", true)]
+    [InlineData("missing", false)][InlineData("missing", true)]
+    [InlineData("dead", false)][InlineData("dead", true)]
+    [InlineData("unresolved", false)][InlineData("unresolved", true)]
+    [InlineData("rebound", false)][InlineData("rebound", true)]
+    [InlineData("busy", false)][InlineData("busy", true)]
+    [InlineData("combat", false)][InlineData("combat", true)]
+    [InlineData("nan_distance", false)][InlineData("nan_distance", true)]
+    public void CancelDoesNotClearTaskAfterActorOrWorldChanges(string unsafeState, bool sceneCommand)
+    {
+        var game = new FakeGame(); var controller = Controller(game); controller.Commands.TryAdd(Action()); controller.Tick(Now);
+        Assert.Equal("started", Assert.Single(Drain(controller)).Status); Assert.Equal(1, game.Starts);
+        void ChangeState()
+        {
+            switch (unsafeState)
+            {
+                case "protected": game.Actor.Policy = ControlPolicy.Protected; break;
+                case "generation": game.Actor.Generation++; break;
+                case "far": game.Actor.Distance = 15.1f; break;
+                case "script_owned": game.Actor.Ownership = Ownership.GameScriptOwned; break;
+                case "unsafe_world": game.World.MissionActive = true; break;
+                case "missing": game.Actor.Exists = false; break;
+                case "dead": game.Actor.Alive = false; break;
+                case "unresolved": game.Actor.ActorId = "different-actor"; break;
+                case "rebound": game.Actor.RuntimeInstanceId = "instance-2"; break;
+                case "busy": game.Actor.Busy = true; break;
+                case "combat": game.Actor.InCombat = true; break;
+                case "nan_distance": game.Actor.Distance = float.NaN; break;
+            }
+        }
+        // Change after Tick's active-action check so scene.cancel exercises Cancel itself.
+        if (sceneCommand) game.OnObserve = ChangeState;
+        else ChangeState();
+        CancelActiveAction(controller, sceneCommand);
+        var acks = Drain(controller);
+        Assert.Equal(sceneCommand ? 2 : 1, acks.Count);
+        Assert.Contains(acks, a => a.CommandId == "cmd1" && a.Status == "canceled" && a.Reason == "user_cancel");
+        if (sceneCommand) Assert.Contains(acks, a => a.CommandId == "cancel" && a.Status == "completed" && a.Reason == "local_scene_canceled");
+        Assert.Equal(0, game.Releases);
+        controller.Cancel(); controller.Tick(Now.AddSeconds(2)); Assert.Empty(Drain(controller)); Assert.Equal(0, game.Releases);
+    }
+    [Theory]
+    [InlineData(false, Ownership.Ambient)][InlineData(true, Ownership.Ambient)]
+    [InlineData(false, Ownership.ModOwned)][InlineData(true, Ownership.ModOwned)]
+    public void CancelReleasesStillEligibleActor(bool sceneCommand, Ownership ownership)
+    {
+        var game = new FakeGame(); game.Actor.Ownership = ownership; game.Actor.MissionEntity = ownership == Ownership.ModOwned;
+        game.Actor.Distance = 15;
+        var controller = Controller(game); controller.Commands.TryAdd(Action()); controller.Tick(Now);
+        Assert.Equal("started", Assert.Single(Drain(controller)).Status);
+        CancelActiveAction(controller, sceneCommand);
+        var acks = Drain(controller);
+        Assert.Equal(sceneCommand ? 2 : 1, acks.Count);
+        Assert.Contains(acks, a => a.CommandId == "cmd1" && a.Status == "canceled" && a.Reason == "user_cancel");
+        if (sceneCommand) Assert.Contains(acks, a => a.CommandId == "cancel" && a.Status == "completed");
+        Assert.Equal(1, game.Releases);
+        controller.Cancel(); controller.Tick(Now.AddSeconds(2)); Assert.Empty(Drain(controller)); Assert.Equal(1, game.Releases);
+    }
+    private static void CancelActiveAction(CommandController controller, bool sceneCommand)
+    {
+        if (!sceneCommand) { controller.Cancel(); return; }
+        var cancel = Action("cancel"); cancel.Kind = "scene.cancel"; cancel.Seq = 2;
+        controller.Commands.TryAdd(cancel); controller.Tick(Now.AddSeconds(1));
     }
     [Fact] public void CancelBlocksLateActionButAllowsNewScene()
     {
