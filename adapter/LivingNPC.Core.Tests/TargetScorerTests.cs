@@ -9,6 +9,29 @@ public sealed class TargetScorerTests
 {
     private static readonly TargetVector Origin = new TargetVector(0, 0, 0), Forward = new TargetVector(0, 1, 0);
 
+    [Theory][InlineData(1, 1, true, true)][InlineData(0, 1, true, true)][InlineData(2, 1, false, true)][InlineData(2, 1, true, false)]
+    public void PoolCandidatesExcludePlayerMissingAndDeadPeds(int handle, int playerHandle, bool exists, bool alive)
+    {
+        Assert.False(TargetScorer.IsCandidate(handle, playerHandle, exists, alive, 2));
+    }
+
+    [Theory][InlineData(-1)][InlineData(8.01)][InlineData(double.NaN)][InlineData(double.PositiveInfinity)]
+    public void PoolCandidatesRejectInvalidOrDistantPedsBeforeClassification(double distance)
+    {
+        Assert.False(TargetScorer.IsCandidate(2, 1, true, true, distance));
+    }
+
+    [Theory][InlineData(0)][InlineData(8)]
+    public void PoolCandidatesIncludeLivingPedsAtPlayerRangeBoundary(double distance)
+    {
+        Assert.True(TargetScorer.IsCandidate(2, 1, true, true, distance));
+    }
+
+    [Fact] public void PoolCandidatesAllowNegativeNonzeroHandles()
+    {
+        Assert.True(TargetScorer.IsCandidate(-2, 1, true, true, 4));
+    }
+
     [Fact] public void FartherLookedAtPedBeatsNearerPedBehindPlayer()
     {
         var behind = new TargetCandidate(1, 2, new TargetVector(0, -2, 0));

@@ -292,9 +292,11 @@ namespace LivingNPC.GameAdapter
                 CancelInput();
                 PruneAndPublish();
                 if (bridge == null) return;
-                var actor = game.SelectTarget(generation, out var refusal); SendSnapshot(actor); LogClassification(actor ?? refusal);
-                game.ShowStatus("target", actor != null ? "Target: " + actor.Name + " (" + PedClassifier.Availability(actor, game.ReadWorld(), generation) + ")"
-                    : refusal != null ? "Nearest: " + PedRoleTable.Label(refusal.Role) + " — not available" : "No nearby resident is available."); return;
+                var actor = game.SelectTarget(generation, out var refusal); PruneAndPublish();
+                if (bridge == null) return;
+                SendSnapshot(actor); LogClassification(actor ?? refusal);
+                game.ShowStatus(game.TargetError == null ? "target" : "target_error", game.TargetError ?? (actor != null ? "Target: " + actor.Name + " (" + PedClassifier.Availability(actor, game.ReadWorld(), generation) + ")"
+                    : refusal != null ? "Nearest: " + PedRoleTable.Label(refusal.Role) + " — not available" : "No nearby resident is available.")); return;
             }
             if (args.KeyCode == pinKey) { RequestPin(); return; }
             if (args.KeyCode == textKey) { CancelInput(clearTarget: false); if (LockTarget()) typing = ""; return; }

@@ -4,6 +4,14 @@ Status: **UNVERIFIED ON GTA**. Compile reference: SHVDN v3.6.0. Supported game b
 
 The adapter samples facts for each candidate ped and classifies them with the shared table. The service recomputes the role from the same facts and keeps the stricter result. A ped becomes a target only when its model, ped type, and relationship group all indicate a civilian and its ownership is ambient. Every other role, and any unlisted value, is **Protected**.
 
+## Reported in-game failure and registration fix
+
+Targeting **failed** with adapter `8df3db5`, GTA V Legacy 1.0.3889.0, Script Hook V v3889.0, and SHVDN 3.7.0-nightly.193, with Franklin in free roam and the session open. F6 near three standing ambient pedestrians, apparently 4–7 m away and centered in view, repeatedly showed `No nearby resident is available.` It never showed a nearest-role refusal. The console returned `false` for `Function.Call<bool>(Hash.DECOR_IS_REGISTERED_AS_TYPE, "lls_runtime_binding_v1", 3)`. GTA's startup registration lock prevented the constructor's `DECOR_REGISTER` from registering the private integer marker; a subsequent failed `DECOR_SET_INT` returned no target without explaining the technical failure.
+
+The fix retains the random private decorator marker, model, generation, and runtime instance guard required for FR-ID-01/FR-ID-04. The adapter uses the supported public [`GTA.DecoratorInterface.IsLocked`](https://github.com/scripthookvdotnet/scripthookvdotnet/blob/4afee05937377d33d87930821e922bb2d3987dae/source/scripting_v3/GTA/DecoratorInterface.cs#L23-L33), whose [`Register` documentation](https://github.com/scripthookvdotnet/scripthookvdotnet/blob/4afee05937377d33d87930821e922bb2d3987dae/source/scripting_v3/GTA/DecoratorInterface.cs#L103-L114) explicitly requires unlocking first. This API is in the [nightly.193 source commit](https://github.com/scripthookvdotnet/scripthookvdotnet-nightly/releases/tag/v3.7.0-nightly.193) but absent from the pinned v3.6.0 compile reference, so reflection accesses only the public lock property. Registration runs on the script thread with a scoped unlock and restores the original lock state in `finally`; native integer registration and marker readback must succeed. An unregistered key without the public API, or failed registration/binding, disables targeting with distinct technical feedback and a fixed log-once code. The adapter does not write raw game memory or replace the marker with a heuristic signature. Invalidated bindings send `actor.removed`; a recycled handle gets a fresh actor identity and no old history.
+
+Candidate discovery now enumerates `World.GetAllPeds()` and applies an explicit Core filter for player exclusion, existence, life, and distance at most 8 m before the unchanged 45° look-cone scorer. The failed-session console counts were 0 for `World.GetNearbyPeds(player, 8f)`, 5 at 20 m, 1 for `World.GetNearbyPeds(position, 8f)`, and 66 for `World.GetAllPeds()`. Both [SHVDN nearby overloads](https://github.com/scripthookvdotnet/scripthookvdotnet/blob/4afee05937377d33d87930821e922bb2d3987dae/source/scripting_v3/GTA/World.cs#L470-L516) already use the ped pool; the position overload includes the player, so its extra result does not establish a defect in the ped overload. Apparent camera distance also does not establish player distance. `GameplayCamera.Direction` returned the valid unit vector `(0.923, -0.376, -0.079)`. The fix's native behavior remains **unverified**.
+
 ## Sampled facts
 
 | Fact | API | Cached | Expected value | Observed on rig |
@@ -62,6 +70,8 @@ Game-script-owned or unknown ownership forces Protected. Otherwise the role poli
 
 F6 shows `Target: <name> (Available)`, `(Busy)`, `(Out of range)`, or `(Not available)`. When no eligible ped is nearby, it names the nearest refused role, for example `Nearest: police officer — not available`. Debug builds log `target_classified role= reason= ped_type= relgroup=0x… model=0x…`.
 
+A registration failure shows `Targeting unavailable: runtime identity guard could not be initialized. Check the adapter log.` and logs `target_decorator_unavailable`. Other technical binding failures use distinct error statuses and the fixed codes `target_marker_failed`, `target_binding_limit`, `target_sampling_failed`, or `target_binding_lost`. Each code logs only once per adapter lifetime; these failures must not be mistaken for an empty candidate pool or a role refusal.
+
 ## Rig test script
 
 Use a Debug build. Save the game first. Record the adapter log for each step.
@@ -78,6 +88,17 @@ Use a Debug build. Save the game first. Record the adapter log for each step.
 10. Target a random-event participant during the event. Expect `Not available` or a refusal.
 11. Record each observed ped type, relationship group, and model hash in the tables above.
 12. Record any ordinary pedestrian that shows `*_unlisted`, with its model hash.
+
+### Registration and identity regression checks
+
+These checks are pending on the reference rig; pure tests and bridge probes cannot verify GTA's decorator or handle lifecycle.
+
+1. Before and after loading the adapter, record `GTA.DecoratorInterface.IsLocked`. After initialization, confirm `DECOR_IS_REGISTERED_AS_TYPE("lls_runtime_binding_v1", 3)` is `true` and the prior lock state is restored. Verify restoration after a registration failure as well as success.
+2. Use measured player distances to verify ordinary pedestrians at most 8 m away in the 45° cone select successfully. Verify the player cannot be selected and distant or outside-cone pedestrians cannot bind. Repeat the refused-role checks above.
+3. Confirm the selected pedestrian carries the expected marker. Remove or change the marker, and separately remove/replace its entity. Confirm binding invalidation and `actor.removed`; pending face/wait/pin/cancel work or persistence release must not affect a replacement pedestrian. A missing/dead entity, changed model/handle, or missing/changed marker permanently invalidates the old binding, even if matching facts later reappear.
+4. Reacquire a recycled handle, including a replacement with the same model. Confirm it receives a new actor UUID/runtime instance and cannot retrieve the old actor's conversation history.
+5. Exercise unavailable registration support and failed marker writes/readbacks in a controlled validation build. Confirm the distinct technical error, one fixed log entry per code, no selection, and no native action dispatch.
+6. Repeat the pin checks below and the provisional face/wait capability checks after successful registration. Record results without marking native capabilities supported until their full sheets pass.
 
 ## Pinning
 

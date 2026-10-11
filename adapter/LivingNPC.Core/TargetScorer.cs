@@ -21,11 +21,16 @@ namespace LivingNPC.Core
         { Handle = handle; Distance = distance; Position = position; }
     }
 
-    // Geometry only. Classification and binding remain on the script thread.
+    // Candidate facts and geometry only. Classification and binding remain on the script thread.
     public static class TargetScorer
     {
         public const double MaximumDistance = 8;
         public const double MaximumAngleDegrees = 45;
+
+        public static bool IsCandidate(int handle, int playerHandle, bool exists, bool alive, double distance)
+        {
+            return handle != 0 && handle != playerHandle && exists && alive && Finite(distance) && distance >= 0 && distance <= MaximumDistance;
+        }
 
         public static IEnumerable<TargetCandidate> Rank(IEnumerable<TargetCandidate> candidates, TargetVector cameraPosition, TargetVector lookDirection)
         {

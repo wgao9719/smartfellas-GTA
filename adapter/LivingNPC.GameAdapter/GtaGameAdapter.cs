@@ -16,7 +16,7 @@ namespace LivingNPC.GameAdapter
         {
             public Ped Ped = null!;
             public string ActorId = "", Instance = "", Kind = "ambient_ephemeral", Name = "Nearby resident";
-            public int Marker, Model;
+            public RuntimeBindingGuard Guard = null!;
             public long Generation;
             public bool ModOwned = false, TookPersistence;
             public PedFacts? StaticFacts, Facts;
@@ -34,11 +34,14 @@ namespace LivingNPC.GameAdapter
         private readonly Dictionary<string, Binding> bindings = new Dictionary<string, Binding>();
         private readonly Dictionary<string, TaskRecord> tasks = new Dictionary<string, TaskRecord>();
         private readonly List<string> dropped = new List<string>();
+        private readonly HashSet<string> targetFailures = new HashSet<string>();
+        private bool registrationAttempted, decoratorReady;
         // Debug builds with EnableUnverifiedPinPersistence only.
         public bool PinPersistence { get; set; }
         private string subtitle = "", status = "Living Los Santos: connecting";
         private DateTimeOffset subtitleUntil;
         public string? SelectedActorId { get; private set; }
+        public string? TargetError { get; private set; }
         public void ClearSelection() { OnScriptThread(); SelectedActorId = null; }
         public bool Recording { get; private set; }
         public bool SubtitleRendered { get; private set; }
@@ -46,10 +49,16 @@ namespace LivingNPC.GameAdapter
         public GtaGameAdapter(AdapterLog log)
         {
             this.log = log;
-            if (!Function.Call<bool>(Hash.DECOR_IS_REGISTERED_AS_TYPE, Decorator, 3)) Function.Call(Hash.DECOR_REGISTER, Decorator, 3);
         }
         public bool IsScriptThread => thread.IsCurrent;
-        public void BindScriptThread() => thread.Bind();
+        public void BindScriptThread()
+        {
+            thread.Bind();
+            if (registrationAttempted) return;
+            registrationAttempted = true;
+            decoratorReady = GtaDecoratorRegistration.TryRegister(Decorator);
+            if (!decoratorReady) TargetFailed("target_decorator_unavailable", "runtime identity guard could not be initialized. Check the adapter log.");
+        }
         private void OnScriptThread() => thread.Verify();
         public WorldState ReadWorld()
         {
@@ -63,21 +72,42 @@ namespace LivingNPC.GameAdapter
         // Binds a nearby civilian in the camera cone. Refused peds are never decorated.
         public ActorState? SelectTarget(long generation, out ActorState? refusal)
         {
-            OnScriptThread(); refusal = null; SelectedActorId = null;
+            OnScriptThread(); refusal = null; SelectedActorId = null; TargetError = null;
+            try { return SelectTargetCore(generation, out refusal); }
+            catch (Exception) { return TargetFailed("target_sampling_failed", "pedestrian facts could not be sampled. Try again."); }
+        }
+        private ActorState? TargetFailed(string code, string message)
+        {
+            SelectedActorId = null; TargetError = "Targeting unavailable: " + message;
+            if (targetFailures.Add(code)) log.Write(code);
+            return null;
+        }
+        private ActorState? SelectTargetCore(long generation, out ActorState? refusal)
+        {
+            refusal = null;
             if (!ReadWorld().Safe) return null;
+            if (!decoratorReady) return TargetFailed("target_decorator_unavailable", "runtime identity guard could not be initialized. Check the adapter log.");
             var player = Game.Player.Character;
             var playerPosition = player.Position;
             var cameraPosition = ToCoreVector(GameplayCamera.Position); var lookDirection = ToCoreVector(GameplayCamera.Direction);
-            var nearby = World.GetNearbyPeds(player, (float)TargetScorer.MaximumDistance).Where(p => p.Exists() && !p.IsDead).ToDictionary(p => p.Handle);
-            var candidates = nearby.Values.Select(p => new { Ped = p, Position = p.Position })
-                .Select(p => new TargetCandidate(p.Ped.Handle, p.Position.DistanceTo(playerPosition), ToCoreVector(p.Position)));
-            var eligible = new List<TargetCandidate>(); var registered = new Dictionary<int, Binding>();
+            var nearby = new Dictionary<int, Ped>(); var candidates = new List<TargetCandidate>();
+            foreach (var ped in World.GetAllPeds())
+            {
+                if (ped.Handle == player.Handle || !ped.Exists() || ped.IsDead || nearby.ContainsKey(ped.Handle)) continue;
+                var position = ped.Position; var distance = position.DistanceTo(playerPosition);
+                if (!TargetScorer.IsCandidate(ped.Handle, player.Handle, true, true, distance)) continue;
+                nearby.Add(ped.Handle, ped); candidates.Add(new TargetCandidate(ped.Handle, distance, ToCoreVector(position)));
+            }
+            var eligible = new List<TargetCandidate>(); var registered = new Dictionary<int, Binding>(); var samplingFailed = false;
             // Refusal feedback remains nearest by player distance, independently of the camera cone.
             foreach (var candidate in candidates.OrderBy(c => c.Distance).ThenBy(c => c.Handle))
             {
                 var ped = nearby[candidate.Handle];
-                var existing = bindings.Values.FirstOrDefault(b => b.Ped.Handle == ped.Handle && b.Generation == generation && Valid(b));
-                var facts = Sample(ped, existing); var classified = PedClassifier.Classify(facts);
+                var existing = bindings.Values.FirstOrDefault(b => b.Ped.Handle == ped.Handle);
+                if (existing != null && (existing.Generation != generation || !Valid(existing))) { DropBinding(existing); existing = null; }
+                var facts = Sample(ped, existing);
+                if (facts == null) { samplingFailed = true; continue; }
+                var classified = PedClassifier.Classify(facts);
                 if ((classified.Ownership != Ownership.Ambient && (existing == null || classified.Ownership != Ownership.ModOwned)) ||
                     classified.Role != PedRole.Civilian || classified.Policy != ControlPolicy.Ambient)
                 {
@@ -90,17 +120,37 @@ namespace LivingNPC.GameAdapter
             }
             foreach (var candidate in TargetScorer.Rank(eligible, cameraPosition, lookDirection))
             {
-                if (registered.TryGetValue(candidate.Handle, out var existing)) { SelectedActorId = existing.ActorId; return Resolve(existing.ActorId); }
+                if (registered.TryGetValue(candidate.Handle, out var existing)) return SelectBinding(existing);
                 var ped = nearby[candidate.Handle];
-                if (bindings.Count >= 36) return null;
+                if (bindings.Count >= 36) return TargetFailed("target_binding_limit", "runtime binding limit reached. Try again after leaving the area.");
                 var id = Guid.NewGuid().ToString();
                 var marker = new Random(Guid.NewGuid().GetHashCode()).Next(1, int.MaxValue);
-                if (!Function.Call<bool>(Hash.DECOR_SET_INT, ped.Handle, Decorator, marker)) return null;
-                bindings[id] = new Binding { Ped = ped, ActorId = id, Instance = Guid.NewGuid().ToString(), Marker = marker, Model = ped.Model.Hash, Generation = generation };
-                SelectedActorId = id;
-                return Resolve(id);
+                var binding = new Binding { Ped = ped, ActorId = id, Instance = Guid.NewGuid().ToString(),
+                    Guard = new RuntimeBindingGuard(ped.Handle, ped.Model.Hash, marker), Generation = generation };
+                if (!TryMark(binding, marker))
+                    return TargetFailed("target_marker_failed", "runtime identity marker could not be verified. Try again.");
+                bindings.Add(id, binding);
+                return SelectBinding(binding);
             }
-            return null;
+            return samplingFailed ? TargetFailed("target_sampling_failed", "pedestrian facts could not be sampled. Try again.") : null;
+        }
+        private bool TryMark(Binding binding, int marker)
+        {
+            try { return Function.Call<bool>(Hash.DECOR_SET_INT, binding.Ped.Handle, Decorator, marker) && Valid(binding); }
+            catch (Exception) { binding.Guard.Invalidate(); return false; }
+        }
+        private ActorState? SelectBinding(Binding binding)
+        {
+            var actor = Resolve(binding.ActorId);
+            if (actor == null) { DropBinding(binding); return TargetFailed("target_binding_lost", "pedestrian identity changed during selection. Try again."); }
+            if (actor.Facts == null) { DropBinding(binding); return TargetFailed("target_sampling_failed", "pedestrian facts could not be sampled. Try again."); }
+            SelectedActorId = binding.ActorId;
+            return actor;
+        }
+        private void DropBinding(Binding binding)
+        {
+            bindings.Remove(binding.ActorId); dropped.Add(binding.ActorId); ReleasePersistence(binding);
+            if (SelectedActorId == binding.ActorId) SelectedActorId = null;
         }
         private static TargetVector ToCoreVector(Vector3 vector) => new TargetVector(vector.X, vector.Y, vector.Z);
         // Static facts are cached per binding. Dynamic facts are sampled at most once per frame.
@@ -171,15 +221,26 @@ namespace LivingNPC.GameAdapter
             return true;
         }
         // Never release a ped another script has taken.
-        private static void ReleasePersistence(Binding binding)
+        private void ReleasePersistence(Binding binding)
         {
             if (!binding.TookPersistence) return;
             binding.TookPersistence = false;
-            try { if (binding.Ped.Exists() && Function.Call<bool>(Hash.DOES_ENTITY_BELONG_TO_THIS_SCRIPT, binding.Ped.Handle, false)) binding.Ped.MarkAsNoLongerNeeded(); }
+            try { if (Valid(binding) && Function.Call<bool>(Hash.DOES_ENTITY_BELONG_TO_THIS_SCRIPT, binding.Ped.Handle, false)) binding.Ped.MarkAsNoLongerNeeded(); }
             catch (Exception) { }
         }
-        private bool Valid(Binding value) => value.Ped.Exists() && value.Ped.Model.Hash == value.Model &&
-            Function.Call<bool>(Hash.DECOR_EXIST_ON, value.Ped.Handle, Decorator) && Function.Call<int>(Hash.DECOR_GET_INT, value.Ped.Handle, Decorator) == value.Marker;
+        private bool Valid(Binding value)
+        {
+            if (!value.Guard.IsValid) return false;
+            try
+            {
+                var ped = value.Ped;
+                if (!ped.Exists() || ped.IsDead) { value.Guard.Invalidate(); return false; }
+                int? marker = Function.Call<bool>(Hash.DECOR_EXIST_ON, ped.Handle, Decorator)
+                    ? Function.Call<int>(Hash.DECOR_GET_INT, ped.Handle, Decorator) : (int?)null;
+                return value.Guard.Validate(true, true, ped.Handle, ped.Model.Hash, marker);
+            }
+            catch (Exception) { value.Guard.Invalidate(); return false; }
+        }
         public ActorState? Resolve(string actorId)
         {
             OnScriptThread();

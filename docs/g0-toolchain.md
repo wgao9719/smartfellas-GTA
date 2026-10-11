@@ -7,8 +7,9 @@ G0 is **not done**. The source builds on macOS and Windows. No in-game native, m
 | .NET SDK | 10.0.100 on the first Mac and 10.0.401 on the second, both macOS arm64; 10.0.401 on Windows |
 | Public compile reference | SHVDN v3.6.0, SHA-256 pinned in `compatibility.yaml` |
 | Adapter build | `net48`, Debug and Release compile successfully |
-| Pure C# tests | 360 tests pass on `net10.0` on Windows after the target/cancel fix. One reads `GTA.PedHash` from the compile reference |
+| Pure C# tests | 487 tests pass on `net10.0` on Windows after the decorator registration fix. One reads `GTA.PedHash` from the compile reference |
 | Actual C# → Python HTTP round trip | Passed with a simulated game and explicit fake provider |
+| In-game targeting | Failed on GTA V Legacy 1.0.3889.0 / Script Hook V v3889.0 / SHVDN 3.7.0-nightly.193 with adapter `8df3db5`: private binding decorator was not registered. The fix still needs in-game verification. |
 | Native actions | `face_player` and `wait_here` have provisional executors. Runtime support is unverified. |
 | Release native capabilities | Empty until the rig establishes support |
 | Tailscale deployment | Tooling implemented. No connected rig has verified deployment. |
@@ -31,7 +32,13 @@ Queue saturation stops dispatch. Safety cancellation and expiration cleanup stil
 
 Targeting classifies nearby peds from sampled facts: model, ped type, relationship group, cuffed state, police vehicle, player group, mission flag, and owning script in Debug builds. A ped becomes a target only when its model, ped type, and relationship group all indicate a civilian and its ownership is ambient. The adapter and service share `data/ped_roles.json`. The service recomputes the role from the snapshot's facts and keeps the stricter result. Missing facts classify as unknown and protected. Refused peds receive no decorator. Each transient binding gets a random decorator marker and runtime instance ID. A missing marker, changed model, or changed instance invalidates the binding. The marker is not a persistent identity. The [classification capability sheet](actions/ped-classification-and-pin.md) lists the facts and expected values that require rig verification.
 
+GTA locks decorator registration before SHVDN scripts start. The original constructor's bare `DECOR_REGISTER` silently failed on the stack above: the console reported `DECOR_IS_REGISTERED_AS_TYPE("lls_runtime_binding_v1", 3) == false`, and F6 near standing pedestrians always showed `No nearby resident is available.` The adapter now uses SHVDN's supported public [`DecoratorInterface.IsLocked`](https://github.com/scripthookvdotnet/scripthookvdotnet/blob/4afee05937377d33d87930821e922bb2d3987dae/source/scripting_v3/GTA/DecoratorInterface.cs#L23-L33) to unlock only around registration on the script thread, restore the original lock state in `finally`, and verify integer registration and marker readback. Reflection accesses this public property because the pinned v3.6.0 compile reference predates it; [nightly.193](https://github.com/scripthookvdotnet/scripthookvdotnet-nightly/releases/tag/v3.7.0-nightly.193) contains it. No adapter code writes raw game memory, borrows a game's decorator, or substitutes a heuristic identity guard. An unregistered key without the helper, or failed registration/binding, fails closed with distinct technical targeting feedback and a fixed code logged once. FR-ID-01/FR-ID-04 still require invalid bindings to send `actor.removed`; a recycled handle receives a new identity and cannot inherit the former actor's history or pending native actions.
+
+Binding validity also requires existence, life, and the original handle. A failed identity sample permanently invalidates that binding, even if the same model or marker later reappears. Marker readback precedes publishing a new binding; native actions and persistence release also revalidate identity. Registration failure reports `Targeting unavailable: runtime identity guard could not be initialized. Check the adapter log.` with `target_decorator_unavailable`. Other technical failures use `target_marker_failed`, `target_binding_limit`, `target_sampling_failed`, or `target_binding_lost`; each fixed code logs once per adapter lifetime.
+
 F6 selects an eligible target within 8 m of the player and a 45° half-angle cone around the camera look direction. The pure Core scorer minimizes `distance / 8 + angle / 45`, then breaks ties by player distance and runtime handle. `GameplayCamera.Position` and `Direction` are sampled on the script thread. Invalid camera geometry or no eligible candidate in the cone yields no target. Refused peds remain unselectable and receive no new decorator; the fallback still names the nearest refused role by player distance, for example `Nearest: police officer — not available`. Selection reports `Available`, `Busy`, `Out of range`, or `Not available`. The cone only applies to selection: a locked turn retains the existing proximity and identity revalidation. These geometry fixtures prove the pure algorithm, not native camera behavior or visibility; cone tuning and GTA selection still need rig verification.
+
+Candidate discovery enumerates `World.GetAllPeds()` and explicitly excludes the player, missing/dead entities, and candidates beyond 8 m before the existing cone scorer. In the failed session, the ped-based nearby query returned 0 within 8 m and 5 within 20 m; the position-based 8 m query returned 1 and the complete pool contained 66. SHVDN's [actual overloads](https://github.com/scripthookvdotnet/scripthookvdotnet/blob/4afee05937377d33d87930821e922bb2d3987dae/source/scripting_v3/GTA/World.cs#L470-L516) both enumerate the ped pool, rather than `GET_PED_NEARBY_PEDS`; only the ped overload excludes its input ped. The position result may therefore have been the player. The observations do not prove a native nearby-query defect or a distance within 8 m of the player, despite apparent proximity to the camera. The reported camera direction `(0.923, -0.376, -0.079)` was valid. Registration, restored lock state after failures, refusal labels, handle recycling, and pin/action guards remain native rig checks.
 
 The adapter uses remappable Backspace to cancel by default outside typed input. Cancellation clears playback, queued dialogue/actions, input, and `SelectedActorId`, and disarms an unconfirmed pin. Explicit cancellation sends the service's existing global cancel even without bound input; a bound scene also retains its local late-command rejection. F7 opens a small typed input field, where a leading `/w ` whispers and `//` keeps a literal leading slash. Backspace edits text; Escape cancels the conversation and clears the target. Outside typing, Escape is reserved for GTA's pause menu, including when configured as CancelKey; use another cancel key. An observed pause or other unsafe world state also cancels and clears selection, even without an active bridge/input. Actual pause-menu key delivery and cancellation timing remain unverified on the rig. The independent HTTP polling/control lanes do not establish an instantaneous barrier for unsolicited commands already in flight.
 
@@ -48,6 +55,34 @@ The service applies the rule before speech synthesis, queuing, delivery receipts
 The registry grants no capabilities. Every executor is marked unverified. The adapter's native capability gate and live-state policy remain separate. G0 additionally limits face/wait durations to five seconds.
 
 Transient bindings now leave the registry after despawn, identity mismatch, script takeover, or distance beyond 60 meters. The adapter queues `actor.removed` for the service. The service then releases that runtime binding. A recycled handle can bind a new identity, which never sees the old identity's memories. A released ambient identity cannot bind any entity again. Cancellation records remain for 125 seconds, beyond the 120-second speech command window. Saturation fails closed instead of evicting an active cancellation record.
+
+## Decorator registration Windows validation
+
+2026-10-11, TOWER-PENGU, `integration` worktree on `win/validation`, starting at `8df3db5`. The reported game failure was reproduced in a pure test by extracting the original registration sequence and simulating GTA's silent refusal while locked: **1 failed, 1 passed** before the fix. The extracted candidate filter initially produced **6 failed, 20 passed**; the extracted binding predicate produced **12 failed, 2 passed** before permanent invalidation was added. These are simulated failures, not a new GTA run. Final focused candidate and binding suites passed 27 and 14 tests respectively; all are included in the full C# count below.
+
+Commands used PowerShell 5.1, uv 0.12.17, Python 3.12.14, and .NET 10.0.401 with process-local settings:
+
+```powershell
+$env:PATH = 'C:\Users\Brian\.lls-tools\uv;' + $env:PATH
+$env:LLS_DOTNET = 'C:\Users\Brian\Documents\Github\smartfellas-GTA\.dotnet\dotnet.exe'
+$env:RestoreSources = 'https://api.nuget.org/v3/index.json'
+```
+
+| Command | Observed result |
+|---|---|
+| `& $env:LLS_DOTNET test adapter/LivingNPC.Core.Tests/LivingNPC.Core.Tests.csproj --configuration Release --filter FullyQualifiedName~DecoratorRegistrationTests` | Before fix: 1 failed, 1 passed; expanded final registration suite passes within the full run |
+| `& $env:LLS_DOTNET test adapter/LivingNPC.Core.Tests/LivingNPC.Core.Tests.csproj --configuration Release` | 487 passed, 0 failed, 0 skipped |
+| `& $env:LLS_DOTNET build adapter/LivingNPC.GameAdapter/LivingNPC.GameAdapter.csproj --configuration Release` | 0 warnings, 0 errors; repeated after the final sampling-feedback change |
+| `& $env:LLS_DOTNET build adapter/LivingNPC.GameAdapter/LivingNPC.GameAdapter.csproj --configuration Debug` | 0 warnings, 0 errors; repeated after the final sampling-feedback change |
+| `uv run --frozen ruff check service tests tools` | Passed |
+| `uv run --frozen pytest -W error` | 2,173 passed, 1 skipped in 221.65 seconds; skip is opt-in real whisper.cpp |
+| `uv run --frozen python tests/live_bridge_check.py` | Passed: 2 subtitle chunks, 1 simulated action, 5 acknowledgments |
+| `uv run --frozen python tests/live_bridge_check.py --speech` | Passed: 2 audio/text chunks, 13 acknowledgments, simulated recording and stop confirmed |
+| `uv run --frozen python tests/live_bridge_check.py --pin` | Passed: 1 pin, 8 durable memories, 1 pre-pin memory retained, ambient officer purged |
+| `uv run --frozen python tests/live_bridge_crash_check.py` | Passed: withdrawal, reconnect, stale-action rejection, unchanged started receipt in profile export, ambient history purged, no invented completion |
+| `git diff --check` | Passed |
+
+The existing QA listener on port 8765 was left running. Bridge checks used their own ephemeral ports and cleaned up their fixture processes. Nothing was deployed to the game or pushed. Registration/lock restoration, real candidate geometry and refusals, handle recycling with history isolation, native commands, and pinning still need the [in-game regression checks](actions/ped-classification-and-pin.md#registration-and-identity-regression-checks).
 
 ## Remaining G0 checks
 
