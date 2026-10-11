@@ -1022,6 +1022,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime):
             if event.seq > session.actor_seq.get(actor_id, 0):
                 session.actors.pop(actor_id, None)
                 session.actor_seq[actor_id] = event.seq
+                # The adapter dropped this binding; a recycled handle needs a fresh identity.
+                await self.db(
+                    "release_instance", session.request.profile_id, session.id, actor_id=actor_id
+                )
                 self.cancel(session)
                 await self.stop_session_work(session)
         elif event.kind == "world.snapshot":

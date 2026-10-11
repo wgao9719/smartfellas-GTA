@@ -416,6 +416,68 @@ def test_reconciling_persistent_actor_releases_previous_live_instance(repo):
     assert repo.resolve_instance("save-a", "live", 88, 2)["actor_id"] == "avery"
 
 
+def ambient(repo, actor_id, session_id="session-a"):
+    repo.register_actor(
+        "save-a", {"id": actor_id, "actor_kind": "ambient_ephemeral", "session_id": session_id}
+    )
+
+
+def test_released_handle_binds_a_fresh_identity_without_prior_memories(repo):
+    branch = repo.start_session("save-a", "session-a", T0)["branch_id"]
+    ambient(repo, "first")
+    repo.bind_instance("save-a", "first", "session-a", 77, 1)
+    event(repo, branch, observers=["first"])
+    memory(repo, branch, actor="first", session_id="session-a")
+    assert recall(repo, branch, actor="first", session_id="session-a")
+    assert repo.release_instance("save-a", "session-a", actor_id="first") == 1
+    assert repo.resolve_instance("save-a", "session-a", 77, 1) is None
+    ambient(repo, "second")
+    repo.bind_instance("save-a", "second", "session-a", 77, 1)
+    assert repo.resolve_instance("save-a", "session-a", 77, 1)["actor_id"] == "second"
+    assert not recall(repo, branch, actor="second", session_id="session-a")
+    # The released identity cannot join this or any other entity again.
+    for handle in (77, 88):
+        with pytest.raises(ValueError, match="new actor identity"):
+            repo.bind_instance("save-a", "first", "session-a", handle, 1)
+    assert repo.release_instance("save-a", "session-a", actor_id="second") == 1
+    with pytest.raises(ValueError, match="released ambient entity"):
+        repo.bind_instance("save-a", "first", "session-a", 77, 1)
+    with pytest.raises(ValueError, match="released ambient entity"):
+        repo.bind_instance("save-a", "second", "session-a", 77, 1)
+    with pytest.raises(ValueError, match="runtime handle generation or an actor"):
+        repo.release_instance("save-a", "session-a")
+
+
+def test_live_handle_conflict_still_raises(repo):
+    repo.start_session("save-a", "session-a", T0)
+    ambient(repo, "first")
+    ambient(repo, "second")
+    repo.bind_instance("save-a", "first", "session-a", 77, 1)
+    repo.bind_instance("save-a", "first", "session-a", 77, 1)
+    with pytest.raises(ValueError, match="already belongs"):
+        repo.bind_instance("save-a", "second", "session-a", 77, 1)
+    with pytest.raises(ValueError, match="already belongs"):
+        repo.bind_instance("save-a", "avery", "session-a", 77, 1)
+    assert repo.resolve_instance("save-a", "session-a", 77, 1)["actor_id"] == "first"
+
+
+def test_persistent_character_keeps_one_live_incarnation_after_release(repo):
+    repo.bind_instance("save-a", "avery", "live", 77, 1)
+    assert repo.release_instance("save-a", "live", 77, 1) == 1
+    assert repo.release_instance("save-a", "live", 77, 1) == 0
+    repo.bind_instance("save-a", "avery", "live", 88, 1)
+    repo.bind_instance("save-a", "avery", "live", 99, 1)
+    live = repo.connection.execute(
+        "SELECT handle FROM actor_instances WHERE profile_id='save-a' AND session_id='live' "
+        "AND actor_id='avery' AND status='live'"
+    ).fetchall()
+    assert [row[0] for row in live] == [99]
+    with pytest.raises(ValueError, match="already belongs"):
+        repo.bind_instance("save-a", "bea", "live", 99, 1)
+    repo.bind_instance("save-a", "bea", "live", 77, 1)
+    assert repo.resolve_instance("save-a", "live", 77, 1)["actor_id"] == "bea"
+
+
 def test_derived_confidence_cannot_exceed_source_confidence(repo):
     branch = repo.open_timeline("save-a", T0)
     event(repo, branch)

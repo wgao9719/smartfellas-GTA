@@ -519,18 +519,26 @@ class Repository:
     ) -> None:
         with self._lock, self.connection:
             actor = self._actor_session(profile_id, actor_id, session_id)
+            ambient = actor["actor_kind"] == "ambient_ephemeral"
             previous = self.connection.execute(
-                "SELECT handle,generation FROM actor_instances "
+                "SELECT handle,generation,status FROM actor_instances "
                 "WHERE profile_id=? AND session_id=? AND actor_id=?",
                 (profile_id, session_id, actor_id),
             ).fetchall()
-            if actor["actor_kind"] == "ambient_ephemeral" and any(
+            if ambient and any(
                 row["handle"] != handle or row["generation"] != generation for row in previous
             ):
                 raise ValueError("a different ambient entity generation needs a new actor identity")
+            # An ambient identity embodies one entity once. Its released row can be
+            # replaced by a recycled handle's new identity, so the marker lives on the actor.
+            bound = actor.get("runtime_binding")
+            if ambient and bound is not None and (
+                bound != [handle, generation] or not any(r["status"] == "live" for r in previous)
+            ):
+                raise ValueError("a released ambient entity needs a new actor identity")
             existing = self.connection.execute(
                 "SELECT actor_id FROM actor_instances WHERE profile_id=? AND session_id=? "
-                "AND handle=? AND generation=?",
+                "AND handle=? AND generation=? AND status='live'",
                 (profile_id, session_id, handle, generation),
             ).fetchone()
             if existing and existing[0] != actor_id:
@@ -554,6 +562,12 @@ class Repository:
                     "live",
                 ),
             )
+            if ambient and bound is None:
+                actor["runtime_binding"] = [handle, generation]
+                self.connection.execute(
+                    "UPDATE actors SET data=? WHERE profile_id=? AND actor_id=?",
+                    (_json(actor), profile_id, actor_id),
+                )
 
     def resolve_instance(
         self, profile_id: str, session_id: str, handle: int, generation: int
@@ -567,14 +581,30 @@ class Repository:
             return dict(row) if row else None
 
     def release_instance(
-        self, profile_id: str, session_id: str, handle: int, generation: int
-    ) -> None:
+        self,
+        profile_id: str,
+        session_id: str,
+        handle: int | None = None,
+        generation: int | None = None,
+        *,
+        actor_id: str | None = None,
+    ) -> int:
+        """Release live bindings by entity tuple, by actor, or both. Return the count."""
+        if (handle is None) != (generation is None) or (handle is None and actor_id is None):
+            raise ValueError("release requires a runtime handle generation or an actor")
+        clauses = ["profile_id=?", "session_id=?", "status='live'"]
+        values = [profile_id, session_id]
+        if handle is not None:
+            clauses.append("handle=? AND generation=?")
+            values += [handle, generation]
+        if actor_id is not None:
+            clauses.append("actor_id=?")
+            values.append(actor_id)
         with self._lock, self.connection:
-            self.connection.execute(
-                "UPDATE actor_instances SET status='released' WHERE profile_id=? "
-                "AND session_id=? AND handle=? AND generation=?",
-                (profile_id, session_id, handle, generation),
-            )
+            return self.connection.execute(
+                "UPDATE actor_instances SET status='released' WHERE " + " AND ".join(clauses),
+                values,
+            ).rowcount
 
     def adopt_actor(
         self, profile_id: str, actor_id: str, session_id: str, *, display_name: str | None = None
@@ -590,6 +620,7 @@ class Repository:
                 session_id=None,
                 adopted_from=actor_id,
             )
+            actor.pop("runtime_binding", None)
             actor["actor_id"] = actor["id"]
             if display_name:
                 actor["display_name"] = display_name

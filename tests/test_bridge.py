@@ -1155,3 +1155,47 @@ async def test_role_change_mid_scene_cancels_the_scene(client):
     assert chunks and all(c["state"] == "canceled" for c in chunks)
     assert not any(c["kind"] == "action.execute" for c in session.commands.values())
     assert (await utterance(client, sid, seq=5))[0].status_code == 409
+
+
+async def post_events(client, sid, *events):
+    return await client.post(
+        "/v1/bridge/events:batch", json={"session_id": sid, "events": list(events)}
+    )
+
+
+async def test_retarget_after_removal_gets_a_fresh_identity_without_prior_memories(client):
+    sid, actor = await open_ready(client)
+    runtime = client.app.state.runtime
+    repo = client.app.state.repository
+    session = runtime.sessions[sid]
+    assert (await utterance(client, sid, "My secret is the blue door."))[0].status_code == 200
+    await session.task
+    removed = fixture_event(sid, 4, "actor.removed", {}, "npc-1")
+    assert (await post_events(client, sid, removed)).status_code == 200
+    assert repo.resolve_instance("fake-demo", sid, 42, 1) is None
+    # GTA recycled the handle and the adapter bound it to a new random identity.
+    payload = {**actor["payload"], "runtime_instance_id": "ped-2"}
+    retarget = fixture_event(sid, 5, "actor.snapshot", payload, "npc-2")
+    assert (await post_events(client, sid, retarget)).status_code == 200
+    assert repo.resolve_instance("fake-demo", sid, 42, 1)["actor_id"] == "npc-2"
+    provider = ContextProvider()
+    runtime.provider = provider
+    question = fixture_event(
+        sid, 6, "player.utterance_text", {"text": "What is my secret?", "scene_id": "s6"}, "npc-2"
+    )
+    assert (await post_events(client, sid, question)).status_code == 200
+    await session.task
+    assert all("blue door" not in m["text"] for m in provider.contexts[0]["memories"])
+
+    def recall(actor_id):
+        return repo.retrieve_memories(
+            "fake-demo", session.branch_id, actor_id, "franklin", session.game_datetime,
+            "secret blue door", session_id=sid,
+        )
+
+    assert not any("blue door" in m["text"] for m in recall("npc-2"))
+    assert any("blue door" in m["text"] for m in recall("npc-1"))
+    # The removed identity can never reattach to the recycled entity.
+    stale = fixture_event(sid, 7, "actor.snapshot", actor["payload"], "npc-1")
+    assert (await post_events(client, sid, stale)).status_code == 409
+    assert repo.resolve_instance("fake-demo", sid, 42, 1)["actor_id"] == "npc-2"
