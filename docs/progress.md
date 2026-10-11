@@ -2,13 +2,17 @@
 
 Date: 2026-10-11. This note records the project state after the second working session on `living-los-santos-foundation`. The first session committed `a2727d8` on another Mac. The second session continued on a second Mac and closed the handoff's open issues. The full discussion is in the Hansard archive. See [Conversation history](#conversation-history).
 
+**Third session (Windows, 2026-10-10/11, branch `win/validation`): start with the plain-English hand-off in [windows-qa/README.md](windows-qa/README.md).** The mod now runs in GTA V Legacy 1.0.3889.0 on a Windows rig with a local AI model. In the game, typed conversation works, the NPC turns to face the player and the game confirms it, recent-conversation memory works, invented job and mission claims are blocked, protected roles are refused, cancel works, and service restart recovery works. All automated checks pass on Windows.
+
 ## Status
 
 The in-game re-verification exposed speaker-attribution errors and contextual
 two-sentence job leads. The [re-verification fix record](conversation-reverify-fixes.md)
 documents named chat-history turns, contextual sentence classification, local
 single-slot timeout handling, diagnostic fields, and measured remaining model
-errors. These service changes have not been deployed or re-verified in GTA.
+errors. These service changes (commit `c181fdf`) were deployed and re-verified in
+GTA on 2026-10-11. Name and work recall and both job-bait prompts passed; see
+[the latest in-game spot check](windows-qa/ingame-qa-3-spotcheck.md).
 
 The first real conversations on adapter `427eebe` exposed action narration in
 speech, an Enter/phone conflict, stale cancellation status, invisible target
