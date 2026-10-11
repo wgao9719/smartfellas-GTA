@@ -28,6 +28,7 @@ The following commit fixes those failures. Its own Windows run must confirm them
 - Speech probes and a speech coordinator with push-to-talk, subtitles, and delivery receipts.
 - Development perception, social scenes, social scheduler, social adaptation, 48-character neighborhood simulation, and skill learning with automatic practice.
 - Local dashboard for inspection, memory edits, export, backups, and diagnostics.
+- Retryable session cleanup with SQLite-persisted pending state, startup recovery, and dashboard diagnostics. Failed cleanup blocks reuse until ambient history is purged; pinned and durable memories are preserved. See the [Windows cleanup validation](development-validation.md#retryable-session-cleanup-on-windows).
 - CI workflow for macOS and Windows in `.github/workflows/ci.yml`.
 
 ### Added in the second session

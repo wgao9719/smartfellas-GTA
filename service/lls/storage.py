@@ -145,9 +145,21 @@ class Repository:
 
     def _migrate(self) -> None:
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version > 4:
+        if version > 5:
             raise RuntimeError("database schema is newer than this service")
+        if version == 5:
+            return
         if version == 4:
+            self.connection.executescript("""
+            BEGIN IMMEDIATE;
+            CREATE TABLE IF NOT EXISTS session_cleanup_pending (
+              profile_id TEXT NOT NULL, session_id TEXT NOT NULL,
+              PRIMARY KEY(profile_id,session_id),
+              FOREIGN KEY(profile_id,session_id) REFERENCES game_sessions ON DELETE CASCADE
+            );
+            PRAGMA user_version=5;
+            COMMIT;
+            """)
             return
         if version == 3:
             # Social windows index only decision- and hearing-shaped memories, so action
@@ -192,6 +204,7 @@ class Repository:
             PRAGMA user_version=4;
             COMMIT;
             """)
+            self._migrate()
             return
         if version == 2:
             self.connection.executescript("""
@@ -470,6 +483,11 @@ class Repository:
             if existing:
                 if existing["ended_at"]:
                     raise ValueError("cannot reuse an ended gameplay session")
+                if self.connection.execute(
+                    "SELECT 1 FROM session_cleanup_pending WHERE profile_id=? AND session_id=?",
+                    (profile_id, session_id),
+                ).fetchone():
+                    raise ValueError("cannot reuse a gameplay session pending cleanup")
                 return dict(existing)
             branch_id = self.open_timeline(
                 profile_id, game_datetime, parent_branch_id=parent_branch_id
@@ -479,6 +497,37 @@ class Repository:
                 (profile_id, session_id, branch_id, _date(game_datetime)),
             )
             return {"profile_id": profile_id, "session_id": session_id, "branch_id": branch_id}
+
+    def unfinished_sessions(self) -> list[dict]:
+        with self._lock:
+            return [
+                dict(row)
+                for row in self.connection.execute(
+                    "SELECT g.profile_id,g.session_id FROM game_sessions g "
+                    "LEFT JOIN session_cleanup_pending p USING(profile_id,session_id) "
+                    "WHERE g.ended_at IS NULL OR p.session_id IS NOT NULL "
+                    "ORDER BY g.profile_id,g.session_id"
+                )
+            ]
+
+    def begin_session_cleanup(self, profile_id: str, session_id: str) -> None:
+        with self._lock, self.connection:
+            self.connection.execute(
+                "INSERT OR IGNORE INTO session_cleanup_pending(profile_id,session_id) "
+                "SELECT profile_id,session_id FROM game_sessions "
+                "WHERE profile_id=? AND session_id=? AND ended_at IS NULL",
+                (profile_id, session_id),
+            )
+
+    def pending_session_cleanups(self) -> list[dict]:
+        with self._lock:
+            return [
+                dict(row)
+                for row in self.connection.execute(
+                    "SELECT profile_id,session_id FROM session_cleanup_pending "
+                    "ORDER BY profile_id,session_id"
+                )
+            ]
 
     def end_session(self, profile_id: str, session_id: str) -> None:
         with self._lock, self.connection:
@@ -492,8 +541,13 @@ class Repository:
                 (profile_id, session_id),
             )
             self.connection.execute(
-                "UPDATE game_sessions SET ended_at=? WHERE profile_id=? AND session_id=?",
+                "UPDATE game_sessions SET ended_at=COALESCE(ended_at,?) "
+                "WHERE profile_id=? AND session_id=?",
                 (_now(), profile_id, session_id),
+            )
+            self.connection.execute(
+                "DELETE FROM session_cleanup_pending WHERE profile_id=? AND session_id=?",
+                (profile_id, session_id),
             )
 
     def register_actor(self, profile_id: str, actor: dict) -> dict:

@@ -126,6 +126,7 @@ class Session:
     cancel_seq: int = 0
     epoch: int = 0
     closed: bool = False
+    cleanup_pending: bool = False
     turns: deque = field(default_factory=deque)
     heartbeat: dict = field(default_factory=dict)
     trace: deque = field(default_factory=lambda: deque(maxlen=200))
@@ -151,6 +152,9 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             self.settings = effective_provider_settings(settings, repository)
             self.repo = repository
             self.sessions = {}
+            self.cleanup_pending = {}
+            self.cleanup_recovery_pending = True
+            self.cleanup_recovery_error = None
             self.selected_branches = {}
             self.profile_warning = None
             self.profile_locks = {}
@@ -307,6 +311,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
                 return await self._open_locked(request)
 
     async def _open_locked(self, request):
+        if self.cleanup_recovery_pending or any(
+            profile == request.profile_id for profile, _ in self.cleanup_pending
+        ):
+            raise HTTPException(503, "session cleanup pending; retry after database recovery")
         if len([s for s in self.sessions.values() if not s.closed]) >= self.settings.max_sessions:
             raise HTTPException(429, "session limit reached")
         if request.manifest.service_host_mode == "dev_lan" and not self.settings.dev_lan:
@@ -339,7 +347,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         self.profile_warning = None
         # Closed sessions cannot accumulate forever.
         for sid in list(self.sessions):
-            if len(self.sessions) > self.settings.max_sessions * 2 and self.sessions[sid].closed:
+            if (
+                len(self.sessions) > self.settings.max_sessions * 2
+                and self.sessions[sid].closed and not self.sessions[sid].cleanup_pending
+            ):
                 del self.sessions[sid]
         return session
 
@@ -1469,7 +1480,12 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             return result
 
     async def acknowledge_locked(self, session, command_id, ack, *, internal_audio=False):
-        self.ensure_current(session, ack.runtime_generation)
+        if internal_audio and session.closed and session.cleanup_pending:
+            # Closing still settles trusted render receipts before purging ambient rows.
+            if ack.runtime_generation != session.request.runtime_generation:
+                raise HTTPException(409, "stale runtime generation")
+        else:
+            self.ensure_current(session, ack.runtime_generation)
         command = session.commands.get(command_id)
         if command is None:
             raise HTTPException(404, "unknown command")
@@ -1661,24 +1677,36 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
 
     async def close_session_locked(self, session):
         """Close after the caller acquires session.lock, including admin transactions."""
-        if session.closed:
+        if session.closed and not session.cleanup_pending:
             return
-        self.cancel(session)
-        await self.stop_session_work(session)
-        await self.speech.forget(session_id=session.id)
-        if self.social is not None:
-            await self.social.forget_session(session.id)
-        if self.social_scheduler is not None:
-            self.social_scheduler.forget(session.id)
-        if self.neighborhood.scheduler is not None:
-            self.neighborhood.scheduler.forget(session.id)
-        session.social_scenes.clear()
-        if self.trigger_engine:
-            self.trigger_engine.cancel_session(session.id)
+        profile = session.request.profile_id
+        cleanup_key = (profile, session.id)
+        self.cleanup_pending.setdefault(cleanup_key, None)
+        session.cleanup_pending = True
+        # Revoke authorization immediately; closed does not imply the purge committed.
         session.closed = True
-        if session.task:
-            await asyncio.gather(session.task, return_exceptions=True)
-        await self.db("end_session", session.request.profile_id, session.id)
+        try:
+            self.cancel(session)
+            if session.task:
+                await asyncio.gather(session.task, return_exceptions=True)
+            await self.stop_session_work(session)
+            await self.speech.forget(session_id=session.id)
+            if self.social is not None:
+                await self.social.forget_session(session.id)
+            if self.social_scheduler is not None:
+                self.social_scheduler.forget(session.id)
+            if self.neighborhood.scheduler is not None:
+                self.neighborhood.scheduler.forget(session.id)
+            session.social_scenes.clear()
+            if self.trigger_engine:
+                self.trigger_engine.cancel_session(session.id)
+            await self.db("begin_session_cleanup", profile, session.id)
+            await self.db("end_session", profile, session.id)
+        except Exception as exc:
+            self.cleanup_pending[cleanup_key] = type(exc).__name__
+            raise HTTPException(503, "session cleanup pending; automatic retry scheduled") from exc
+        session.cleanup_pending = False
+        self.cleanup_pending.pop(cleanup_key, None)
         session.actors.clear()
         session.commands.clear()
         session.action_outcomes.clear()
@@ -1689,15 +1717,66 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         session.delivery_turns.clear()
         session.changed.set()
 
+    def cleanup_diagnostics(self):
+        pending = [
+            {"profile_id": profile, "session_id": sid, "error_type": error}
+            for (profile, sid), error in sorted(self.cleanup_pending.items())
+        ]
+        return {
+            "status": "pending" if pending or self.cleanup_recovery_pending else "complete",
+            "message": (
+                "Session cleanup pending. Session-only history may remain on disk; "
+                "cleanup retries automatically each maintenance tick and at startup."
+                if pending or self.cleanup_recovery_pending else "No session cleanup pending."
+            ),
+            "recovery_pending": self.cleanup_recovery_pending,
+            "recovery_error_type": self.cleanup_recovery_error,
+            "sessions": pending,
+        }
+
     async def expire_sessions(self):
+        async with self.open_lock:
+            if self.cleanup_recovery_pending:
+                try:
+                    unfinished = await self.db("unfinished_sessions")
+                except Exception as exc:
+                    self.cleanup_recovery_error = type(exc).__name__
+                else:
+                    # A crash may precede the pending marker write. All unfinished
+                    # sessions belong to the previous service owner at startup.
+                    for row in unfinished:
+                        self.cleanup_pending.setdefault(
+                            (row["profile_id"], row["session_id"]), None
+                        )
+                    self.cleanup_recovery_pending = False
+                    self.cleanup_recovery_error = None
+            for profile, sid in list(self.cleanup_pending):
+                if sid in self.sessions:
+                    continue
+                try:
+                    await self.db("begin_session_cleanup", profile, sid)
+                    await self.db("end_session", profile, sid)
+                except Exception as exc:
+                    self.cleanup_pending[(profile, sid)] = type(exc).__name__
+                else:
+                    self.cleanup_pending.pop((profile, sid), None)
         for session in list(self.sessions.values()):
             if (
-                not session.closed
-                and self.clock() - session.last_activity > self.settings.session_timeout_seconds
+                session.cleanup_pending or (
+                    not session.closed
+                    and self.clock() - session.last_activity > self.settings.session_timeout_seconds
+                )
             ):
-                await self.close_session(session)
+                try:
+                    await self.close_session(session)
+                except HTTPException:
+                    # One unavailable purge must not stop maintenance or other cleanups.
+                    pass
         for sid in list(self.sessions):
-            if len(self.sessions) > self.settings.max_sessions * 2 and self.sessions[sid].closed:
+            if (
+                len(self.sessions) > self.settings.max_sessions * 2
+                and self.sessions[sid].closed and not self.sessions[sid].cleanup_pending
+            ):
                 del self.sessions[sid]
 
     async def maintain(self):
@@ -1728,7 +1807,11 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
 
     async def shutdown(self):
         for session in list(self.sessions.values()):
-            await self.close_session(session)
+            try:
+                await self.close_session(session)
+            except HTTPException:
+                # The durable unfinished row survives shutdown for startup recovery.
+                pass
         await self.speech.close()
         if self.social is not None:
             await self.social.aclose()

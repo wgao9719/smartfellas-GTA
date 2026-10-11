@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 from fastapi import HTTPException
@@ -84,3 +85,35 @@ async def test_bridge_identity_cannot_open_administrator_diagnostics(client):
     )
     assert response.status_code == 401
     assert (await client.get("/v1/admin/sessions/missing/diagnostics")).status_code == 404
+
+
+async def test_cleanup_failure_is_visible_without_leaking_exception_text(client, monkeypatch):
+    session = await open_profile(client)
+    end_session = client.repository.end_session
+
+    def fail(*args):
+        raise sqlite3.OperationalError("private-path-or-secret-must-not-appear")
+
+    monkeypatch.setattr(client.repository, "end_session", fail)
+    with pytest.raises(HTTPException):
+        await client.runtime.close_session(session)
+    overview = await client.get("/v1/admin/overview")
+    cleanup = overview.json()["session_cleanup"]
+    assert cleanup["status"] == "pending"
+    assert "Session-only history may remain on disk" in cleanup["message"]
+    assert cleanup["sessions"] == [{
+        "profile_id": session.request.profile_id, "session_id": session.id,
+        "error_type": "OperationalError",
+    }]
+    diagnostic = await client.get(f"/v1/admin/sessions/{session.id}/diagnostics")
+    assert diagnostic.json()["cleanup_pending"] is True
+    assert diagnostic.json()["cleanup_error_type"] == "OperationalError"
+    assert "private-path-or-secret-must-not-appear" not in overview.text + diagnostic.text
+    assert session.token not in overview.text + diagnostic.text
+    page = await client.get("/dashboard")
+    assert 'id="cleanup-status"' in page.text
+    assert 'id="cleanup-details"' in page.text
+    monkeypatch.setattr(client.repository, "end_session", end_session)
+    await client.runtime.expire_sessions()
+    overview = (await client.get("/v1/admin/overview")).json()
+    assert overview["session_cleanup"]["status"] == "complete"

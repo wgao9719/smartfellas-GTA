@@ -285,3 +285,26 @@ The worktree has its own `.venv`, created with uv 0.12.17 and the explicit Pytho
 | `uv run --frozen pytest -W error` | 1,502 passed, 1 skipped in 178.10 seconds |
 
 The 157 new tests cover synthetic secrets and personal data through dialogue, actions and repair, embeddings, a social invitation/turn, and skill requests. They also cover nested/clipped JSON, credential values with escapes, punctuation, Windows usernames with spaces, safe failures, debug-log capture, and unchanged game dialogue, dates, coordinates, IDs and local payloads. The sole full-suite skip is the opt-in real whisper.cpp check. No adapter source changed, so separate C# tests, adapter builds, and live bridge checks were not rerun. No real cloud request or GTA/native validation was performed. Pattern-based filtering is not a guarantee of anonymity or detection of every personal fact or encoded secret; real provider and native acceptance remain pending.
+
+## Retryable session cleanup on Windows
+
+On 2026-10-11, TOWER-PENGU reproduced audit `b-sections-6-11.md` finding 2 in the `win/fix-session-cleanup` worktree, based on Windows validation commit `f84de44`. A separate `.venv` was created with `uv sync --frozen --group dev --python C:\Users\Brian\AppData\Roaming\uv\python\cpython-3.12.14-windows-x86_64-none\python.exe`. Toolchain: uv 0.12.17, Python 3.12.14, Windows PowerShell 5.1.
+
+Before implementation, `uv run --frozen pytest -W error tests/test_session_cleanup.py -q` reported **1 failed**: after an injected first-attempt SQLite `OperationalError`, a second close returned without deleting the ambient actor. The runtime marked the session closed before the purge, then skipped every subsequent attempt. This violated FR-ID-03's session-only ambient memory requirement; the fix follows SPECS.md §§8.3, 9.3, and 17.
+
+SQLite schema v5 adds a cleanup-pending table. Closing revokes authorization, joins session work, and records pending intent before the purge. Purging ambient actors and bindings, setting the original end timestamp, and removing pending intent commit together. Failed operations retain retry state. Maintenance retries failed closes without terminating its loop, and startup recovers all unfinished sessions before accepting new opens. The existing unfinished session row covers failure or process death before the pending marker can be written. Affected profiles cannot open another session while cleanup is pending; pending sessions are not pruned. The admin overview and dashboard show affected IDs and safe error types, including recovery failures without a live session.
+
+Regression coverage includes explicit close and maintenance retry, repeated failures with another session still closing, database reopen and startup retry, failure to write the marker or read recovery inventory, transaction rollback partway through the purge, migration from v4, repeated-close idempotence, pending session reuse/pruning, ambient actor/memory/FTS removal, and unchanged pinned/curated history. A close-time subtitle regression was also reproduced and fixed: trusted internal render receipts still settle for durable actors after authorization closes, while external acknowledgments remain rejected. Canceling startup releases the database and service ownership lease.
+
+Final checks used the process-local uv PATH, `LLS_DOTNET`, and `RestoreSources` settings documented above:
+
+| Command | Observed result |
+|---|---|
+| `uv run --frozen ruff check service tests tools` | Passed |
+| `uv run --frozen pytest -W error tests/test_session_cleanup.py tests/test_admin_diagnostics.py -q` | 13 passed in 4.47 seconds |
+| `uv run --frozen pytest -W error` | **1,360 passed, 1 skipped in 178.64 seconds**; exit 0 |
+| `git diff --check` | Passed |
+
+The full suite adds 15 passing regressions to the supplied Windows baseline; the opt-in real whisper.cpp test remains skipped. An earlier full run passed 1,359 tests with one skip before the startup-cancellation regression was added, so the full suite was rerun against the final code.
+
+These checks use temporary databases, synthetic failures, fake providers, and simulated speech. No adapter files changed, and C# tests/builds or live bridge checks were not rerun for this fix. GTA, launchers, real microphone/model providers, and native gameplay were not exercised. Cleanup remains pending while storage is unavailable; no claim is made that unavailable storage can be erased immediately.
