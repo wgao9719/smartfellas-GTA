@@ -4,6 +4,8 @@ Date: 2026-10-10. Environment: macOS 27.0, arm64, Python 3.12.4, uv 0.12.17, .NE
 
 These results concern the local working tree based on `200c39cfc02323f8d2811f180bd8606964810f1a`. The implementation remains uncommitted. Later changes require their own checks. No G0–G4 gate has passed.
 
+The sections up to [Pending acceptance](#pending-acceptance) record the first session. [Second session](#second-session-second-mac-windows-ci-and-closed-handoff-issues) records the continuation committed on `living-los-santos-foundation`.
+
 ## Verified locally
 
 | Check | Result | Boundary |
@@ -95,11 +97,11 @@ Repeated confirmed hearing now affects the listener’s later partner preference
 
 Independent review found two defects and verified their fixes. Speaker-only memories could displace heard encounters from the retained-history window. Canonical replay could also restore an erased ordinary memory even when adaptation ignored it. Separate decision/hearing windows and suppression checks now cover both paths.
 
-The history read uses indexed owner-first joins and a fixed 4,000,000 SQLite-instruction ceiling. An in-memory measurement with 128 owners and 100 decision anchors each used approximately 3.135 million instructions and 152 milliseconds. A regression covers that dataset. The complete 1,026-test Python run includes it. Larger or mixed dense histories can still exhaust the ceiling. Exhaustion stops scheduling without reserving model calls.
+The history read uses indexed owner-first joins and a fixed 4,000,000 SQLite-instruction ceiling. An in-memory measurement with 128 owners and 100 decision anchors each used approximately 3.135 million instructions and 152 milliseconds. A regression covers that dataset. The complete 1,026-test Python run includes it. Larger or mixed dense histories can still exhaust the ceiling. Exhaustion stops scheduling without reserving model calls. The second session replaced this read with bounded per-owner windows. See [Second session](#second-session-second-mac-windows-ci-and-closed-handoff-issues).
 
 The four-process HTTP probe verifies source-linked topic selection after restart and deletion. It does not prove that deleting one memory erases every independent later quotation. The broader social suite checks private boundaries, fair partner choice, stale-read cancellation, malformed decisions, retained-source correction, replay suppression, and bounded context.
 
-The incoming Claude validators prompted a separate read-only audit. Current GTA text sinks already remove formatting tokens, but subtitle acknowledgments still report the original text. The adapter also uses a six-civilian-model allowlist without explicit police, military, or gang role detection. These are remaining native-delivery and classification gaps. Typed/PTT whisper controls and a user-facing ambient adoption flow remain unfinished.
+The incoming Claude validators prompted a separate read-only audit. Current GTA text sinks already remove formatting tokens, but subtitle acknowledgments still report the original text. The adapter also uses a six-civilian-model allowlist without explicit police, military, or gang role detection. These are remaining native-delivery and classification gaps. Typed/PTT whisper controls and a user-facing ambient adoption flow remain unfinished. The second session closed these gaps. "Whisper controls" meant whisper mode, not whisper.cpp transcription.
 
 ## Rendered dashboard check
 
@@ -121,12 +123,102 @@ The incoming Claude plan prompted a microphone readiness review. The real microp
 
 ## Pending acceptance
 
-The Windows rig has not connected. Tailscale deployment, game loading, native action behavior, microphone permission, actual voice models, save restoration, and performance remain unverified. A second Mac has not reproduced the build.
+The Windows rig has not connected. Tailscale deployment, game loading, native action behavior, microphone permission, actual voice models, save restoration, and performance remain unverified. A second Mac reproduced the Mac-side build and checks, but not deployment or reload on the rig.
 
 Grounded native observations remain disabled. Native action capabilities remain absent from Release builds until the rig validates them. Development autonomous social scheduling and virtual neighborhood simulation have local evidence. Native NPC-to-NPC interaction, native learned behaviors, and neighborhood changes remain unfinished.
 
 Real provider performance and billing comparison remain unverified. Service authorization outcomes and acknowledged action outcomes persist as distinct canonical events and private memories. These events do not establish native acceptance.
 
-The workflow in `.github/workflows/ci.yml` defines Windows and macOS checks. No GitHub Actions run has been observed for this working tree.
+The workflow in `.github/workflows/ci.yml` defines Windows and macOS checks. The first run, for `a2727d8`, passed on macOS and failed on Windows. The second session fixed those failures. A new Windows run must confirm the fixes.
 
-The first Windows CI run of the committed foundation exposed two product defects. Speech processes opened their suspended child with `PROCESS_SET_INFORMATION` instead of `PROCESS_SET_QUOTA`, so every Job Object assignment failed and no speech executable could run on Windows. `Settings.from_env()` also resolved the user profile when `LLS_DATABASE` was explicit, which raises on Windows without `USERPROFILE` and `HOMEPATH`. Both are fixed with macOS-runnable regressions; a Windows CI run must still confirm them.
+## Second session: second Mac, Windows CI, and closed handoff issues
+
+Date: 2026-10-11. Environment: Apple M4, macOS 15.3.1 (24D70), 24 GB, uv 0.9.16 with Python 3.12.12, and .NET SDK 10.0.401 installed with the official `dotnet-install.sh` into `.dotnet/`.
+
+### Second Mac reproduction of `a2727d8`
+
+The second Mac followed [Mac development](mac-development.md) and the README checks without other guidance.
+
+| Check | Result |
+|---|---|
+| `uv run --frozen ruff check service tests tools` | Passed |
+| `uv run --frozen pytest -q -W error` | 1,026 passed in 100.45 seconds |
+| `dotnet test adapter/LivingNPC.Core.Tests/...` | 104 passed |
+| `dotnet build adapter/LivingNPC.GameAdapter/... --configuration Release` | Passed with zero warnings. The first attempt failed while NuGet downloaded `Microsoft.NETFramework.ReferenceAssemblies.net48` 1.0.3. An immediate retry passed. |
+| Live bridge, speech, process-death, action-outcome, social, autonomous social, social adaptation, skill, skill autonomy, neighborhood, and neighborhood autonomy checks | All passed |
+| `trial_skill.py --demo`, `learn_skill.py --demo`, `neighborhood_demo.py`, `simulated_load.py`, `python -m service.lls --demo` | All passed |
+| `tools/deploy_adapter.py --configuration Release` | Staged a bundle whose build identity names `a2727d8` with a clean tree |
+
+This reproduces the Mac half of G0-7. Deployment to the rig, `Reload()`, and in-game behavior remain unverified, so G0-7 is not done.
+
+### First GitHub Actions run
+
+Run `38090114882` checked `a2727d8` after the branch was pushed. The macOS backend jobs for Python 3.11 and 3.12 and the macOS adapter job passed. The Windows backend jobs failed with 9 or 10 test failures and 5 errors. The Windows adapter job failed in the process-death check. The failing steps hid every later Windows step.
+
+| Failure | Cause | Fix |
+|---|---|---|
+| Four speech process tests | Product defect. `OpenProcess` lacked `PROCESS_SET_QUOTA`, so `AssignProcessToJobObject` always failed and no speech executable could run on Windows. | Correct access mask and a regression with a fake kernel32 |
+| Four network-consent tests | The Proactor event loop connects through overlapped `ConnectEx`, which bypassed the probe | The probe intercepts `sock_connect` on both event loop families and backstops raw proactor connects |
+| Synthetic load test | The network guard broke the Proactor loop's loopback self-pipe | The tool creates its loop before arming the guard |
+| Five trigger and neighborhood errors | pytest put an oversized parameter into `PYTEST_CURRENT_TEST`, which exceeds Windows' environment limit | Short explicit test IDs |
+| One Python 3.11 scheduler failure | Lifespan maintenance raced the test's frozen clock | The fixture stops the background maintenance task |
+| Process-death check | `dotnet build` ran with a minimal environment that Windows NuGet cannot use | Filtered inherited environment and captured build output on failure |
+| Neighborhood live checks (hidden) | Product defect. `Settings.from_env()` resolved the user profile even with an explicit `LLS_DATABASE`. | Lazy profile resolution |
+
+These fixes passed on macOS. A new Windows CI run must confirm them.
+
+### Windows product audit
+
+A read-only audit found Windows defects that CI does not exercise.
+
+- SSH deployment built a remote command of about 10,000 characters. Windows OpenSSH runs commands through cmd.exe, which stops at 8,191. Deployment now uploads `deploy.ps1` and a JSON plan and runs a 114-character command.
+- Local deployment staged DLLs inside `scripts\`, where ScriptHookVDotNet loads every DLL. It now stages beside `scripts\`.
+- Device names matched several Windows host APIs and failed. Names now resolve within one host API, WASAPI opens with automatic conversion, and errors keep the driver's reason.
+- Speech subprocesses inherited the whole service environment, including `LLM_API_KEY` and `LLS_BRIDGE_TOKEN`. They now receive an allowlisted environment. SAPI uses PowerShell from the system directory with a pinned output format.
+- Path settings now expand `~` and environment variables and refuse relative results.
+- The demo's JSON output no longer fails on a cp1252 console.
+
+The audit also suggested `SO_EXCLUSIVEADDRUSE` for the listening socket. It was not adopted. Microsoft documents that such a port cannot be rebound while accepted connections linger, which would break the documented service-restart recovery.
+
+### Handoff issues closed
+
+| Handoff issue | Resolution | Remaining boundary |
+|---|---|---|
+| "Typed input and push-to-talk are not connected to whisper.cpp" | The handoff note misread the audit. whisper.cpp was already connected. The audit meant whisper-mode controls. A hold-to-whisper key and a `/w ` typed prefix now lock the whisper flag per capture. The 3 m whisper radius limits development bystander hearing. | Key conflicts, the radius, and native hearing need the rig |
+| Subtitle receipts differed from displayed text | One display rule in Python and C# with shared fixtures. Producers normalize before speech, queuing, receipts, and memories. The adapter refuses unsafe text instead of rewriting it. | GTA font coverage and subtitle wrapping need the rig |
+| Six-model protected-role allowlist | A shared role table and classifier. Model, ped type, and relationship group must all indicate a civilian. The service recomputes the role and keeps the stricter policy. Missing facts are protected. | Every sampled value needs the rig. See the [capability sheet](actions/ped-classification-and-pin.md). |
+| No user-facing pin | F8 twice, or the dashboard, pins an eligible ambient civilian. The actor is promoted in place, so its conversation memories survive session closure with valid provenance. | Persistence natives are Debug-only and unverified. Pinned characters are not re-embodied in later sessions. |
+| Dense social-history read capped at 4,000,000 steps | The cost came from an unindexed `scrub_audit` scan per candidate. Schema v4 adds indexes and bounded per-owner reads. | One bad owner still fails the whole read closed |
+| Later quotes survived memory deletion | Deleting a memory also deletes the same actor's later lines that carried those words. Other actors' hearing memories remain. | Paraphrase through general recall is untracked. Canonical events keep the words. |
+
+Two further defects were found and fixed. A pruned or recycled runtime handle could never bind again in the same session, so long sessions lost targetable peds. whisper.cpp ran with `-oj`, which carries no token probabilities, so voice turns could never become action-eligible.
+
+### Real whisper.cpp check on the Mac
+
+whisper.cpp v1.9.5 (`d1be6fde`) built from the official source with Metal, with `ggml-base.en.bin` (SHA-256 `a03779c8…`). Neither file is in Git.
+
+| Input | Result before | Result now |
+|---|---|---|
+| `say "Please look at me."` | Text with unknown confidence | Text with confidence 0.884, action-eligible |
+| `say -v Whisper` | Not measured | Text with confidence 0.815, dialogue only |
+| Low hiss | `[BLANK_AUDIO]` as player text | Gated before transcription |
+| Broadband noise | `(blender whirring)` as player text | Empty transcript |
+| Digital silence | "You" at confidence 0.109 | Gated before transcription |
+
+The silence gate defaults to −60 dBFS RMS. Transcripts below confidence 0.3 start no turn. Windows microphones, headset levels, and noisy rooms still need rig measurements.
+
+### Final local check
+
+The integrated branch at `0adde69` passed these checks on the second Mac:
+
+- `ruff check service tests tools`.
+- 1,319 pytest tests, with four skips: three Windows-only deployment tests and the opt-in real whisper.cpp test.
+- 271 C# tests.
+- `net48` Release and Debug builds with zero warnings.
+- The live bridge check in typed, speech, whisper, speech-plus-whisper, and pin modes.
+- The process-death, action-outcome, social, autonomous social, social adaptation, skill, skill autonomy, neighborhood, and neighborhood autonomy checks.
+- The skill, neighborhood, and service demos.
+- The synthetic load check with zero network attempts.
+- Release deployment staging.
+
+No Windows CI run has checked this branch yet. No result here establishes GTA behavior.

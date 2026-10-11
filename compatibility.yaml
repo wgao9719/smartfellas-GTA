@@ -28,7 +28,8 @@ mac_toolchain:
   core_target: netstandard2.0
   test_target: net10.0
   python: '3.11+'
-  second_mac_reproduction: UNVERIFIED
+  second_mac_build_and_tests: PASSED_LOCAL  # 2026-10-11, Apple M4, macOS 15.3.1, .NET SDK 10.0.401
+  second_mac_reproduction: UNVERIFIED  # G0-7 also needs deploy and Reload() on the rig
 network:
   release: loopback only
   development: explicit private IPv4 or Tailscale CGNAT address with bootstrap token and peer allowlist
@@ -43,6 +44,12 @@ actions:
   wander_nearby: NOT_IMPLEMENTED
   flee_from_threat: NOT_IMPLEMENTED
   play_verified_gesture: NOT_IMPLEMENTED
+adapter_features:
+  ped_role_classifier: UNVERIFIED  # docs/actions/ped-classification-and-pin.md
+  actor_pin: UNVERIFIED
+  pin_persistence: DEV_ONLY_UNVERIFIED
+  whisper_key: UNVERIFIED
+  display_rule: 1
 acceptance:
   baseline_five_minutes: UNVERIFIED
   mac_dll_loaded_on_rig: UNVERIFIED

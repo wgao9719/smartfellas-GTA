@@ -1,13 +1,13 @@
 # G0 toolchain status
 
-G0 is **not done**. The source builds on this Mac. No Windows rig, second Mac, game native, microphone, or gameplay performance check has passed.
+G0 is **not done**. The source builds on two Macs. No Windows rig, game native, microphone, or gameplay performance check has passed. The second Mac repeated only the Mac half of G0-7.
 
 | Evidence | Current result |
 |---|---|
-| .NET SDK | 10.0.100, macOS arm64 |
+| .NET SDK | 10.0.100 on the first Mac and 10.0.401 on the second, both macOS arm64 |
 | Public compile reference | SHVDN v3.6.0, SHA-256 pinned in `compatibility.yaml` |
 | Adapter build | `net48`, Debug and Release compile successfully |
-| Pure C# tests | 187 tests pass on `net10.0`. One reads `GTA.PedHash` from the compile reference |
+| Pure C# tests | 271 tests pass on `net10.0`. One reads `GTA.PedHash` from the compile reference |
 | Actual C# → Python HTTP round trip | Passed with a simulated game and explicit fake provider |
 | Native actions | `face_player` and `wait_here` have provisional executors. Runtime support is unverified. |
 | Release native capabilities | Empty until the rig establishes support |
