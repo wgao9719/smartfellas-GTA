@@ -18,7 +18,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import Field, ValidationError, field_validator
 
 from .embeddings import EmbeddingConfig
-from .gateway_config import GatewayConfig, validate_local_endpoint
+from .gateway_config import (
+    HOSTED_PROVIDERS,
+    GatewayConfig,
+    hosted_endpoint,
+    validate_local_endpoint,
+)
 from .protocol import DisplayName, StrictModel
 from .settings import Settings
 
@@ -58,17 +63,18 @@ class BackupRequest(StrictModel):
 
 
 class ProviderConfiguration(StrictModel):
-    provider: Literal["disabled", "fake", "local_openai", "openai"]
+    provider: Literal["disabled", "fake", "local_openai", "openai", "anthropic"]
     dialogue_model: str = Field(default="", max_length=128)
     action_model: str = Field(default="", max_length=128)
     openai_base_url: str = Field(default="https://api.openai.com/v1", max_length=512)
+    anthropic_base_url: str = Field(default="https://api.anthropic.com/v1", max_length=512)
     local_base_url: str = Field(default="http://127.0.0.1:1234/v1", max_length=512)
     ai_gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
     _local_endpoint = field_validator("local_base_url")(validate_local_endpoint)
 
-    @field_validator("openai_base_url")
+    @field_validator("openai_base_url", "anthropic_base_url")
     @classmethod
     def remote_endpoint(cls, value):
         endpoint = urlsplit(value)
@@ -230,10 +236,15 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
         async with mutation_lock:
             configuration = runtime.provider.configuration_summary()
             embedding = configuration["embedding"]
-            if configuration["provider"] != "openai" and embedding["provider"] != "openai":
+            hosted = configuration["provider"] in HOSTED_PROVIDERS
+            if not hosted and embedding["provider"] != "openai":
                 raise HTTPException(409, "select and save a hosted provider first")
+            # Embedding-only consent names the OpenAI-compatible endpoint embeddings use.
+            endpoint = (
+                hosted_endpoint(configuration) if hosted else configuration["openai_base_url"]
+            )
             if (
-                body.endpoint != configuration["openai_base_url"]
+                body.endpoint != endpoint
                 or body.configuration_revision != configuration_revision()
             ):
                 raise HTTPException(409, "the provider configuration changed; review it again")
@@ -241,7 +252,7 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             required = {
                 configuration["dialogue_model"],
                 configuration["action_model"] or configuration["dialogue_model"],
-            } if configuration["provider"] == "openai" else set()
+            } if hosted else set()
             if embedding["provider"] == "openai":
                 required.add(embedding["model"])
             if not required.issubset(prices):

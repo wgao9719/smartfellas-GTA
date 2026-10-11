@@ -86,7 +86,7 @@ def supporting_json(kind, value):
         if (
             value["status"] != "ok" or value["schema_version"] != 1
             or type(value["release_mode"]) is not bool or value["game_verified"] is not False
-            or value["provider"] not in {"disabled", "fake", "openai", "local_openai"}
+            or value["provider"] not in {"disabled", "fake", "openai", "anthropic", "local_openai"}
             or value["speech"] not in {"disabled", "configured"}
             or build["kind"] != "source_tree" or build["packaged_build"] is not False
             or build["build_commit"] is not None

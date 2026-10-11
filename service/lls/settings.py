@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, field_validator, model_validator
 
 from .embeddings import EmbeddingConfig
-from .gateway_config import GatewayConfig
+from .gateway_config import HOSTED_PROVIDERS, GatewayConfig, hosted_endpoint
 from .neighborhood_scheduler import NeighborhoodSchedulerConfig
 from .protocol import StrictModel
 from .skill_scheduler import SkillSchedulerConfig
@@ -42,9 +42,12 @@ class Settings(StrictModel):
     snapshot_interval_seconds: float = Field(default=3600, ge=0, allow_inf_nan=False)
     snapshot_retention_count: int = Field(default=24, ge=1, le=1000)
     raw_event_retention_days: int = Field(default=7, ge=1, le=365)
-    provider: Literal["disabled", "fake", "openai", "local_openai"] = "disabled"
+    provider: Literal["disabled", "fake", "openai", "anthropic", "local_openai"] = "disabled"
     cloud_opt_in: bool = False
     openai_base_url: str = "https://api.openai.com/v1"
+    anthropic_base_url: str = "https://api.anthropic.com/v1"
+    # Claude effort for every request; "" omits the field for models without effort support.
+    anthropic_effort: Literal["", "low", "medium", "high", "xhigh", "max"] = "medium"
     local_base_url: str = "http://127.0.0.1:1234/v1"
     model_timeout_seconds: float = Field(default=30, ge=1, le=120)
     grounding_classifier_enabled: bool = True
@@ -109,11 +112,11 @@ class Settings(StrictModel):
             raise ValueError("non-loopback bind requires development LAN and source allowlist")
         for source in self.allow_sources:
             ipaddress.ip_address(source)
-        if self.provider == "openai" and not self.dialogue_model.strip():
+        if self.provider in HOSTED_PROVIDERS and not self.dialogue_model.strip():
             raise ValueError("remote provider requires explicit model configuration")
-        if self.provider in {"openai", "local_openai"}:
+        if self.provider in HOSTED_PROVIDERS | {"local_openai"}:
             endpoint = urlsplit(
-                self.local_base_url if self.provider == "local_openai" else self.openai_base_url
+                self.local_base_url if self.provider == "local_openai" else hosted_endpoint(self)
             )
             if (
                 endpoint.username
@@ -181,6 +184,11 @@ class Settings(StrictModel):
             action_model=os.environ.get("LLM_ACTION_MODEL", ""),
             local_base_url=os.environ.get("LLS_LOCAL_BASE_URL", "http://127.0.0.1:1234/v1"),
             openai_base_url=os.environ.get("LLS_OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            anthropic_base_url=os.environ.get(
+                "LLS_ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1"
+            ),
+            anthropic_effort=os.environ.get("LLS_ANTHROPIC_EFFORT", "medium"),
+            ai_gateway=cls.gateway_file(cls.env_path("LLS_AI_GATEWAY_FILE")),
             embedding=EmbeddingConfig(
                 provider=os.environ.get("LLS_EMBEDDING_PROVIDER", "disabled"),
                 model=os.environ.get("LLM_EMBEDDING_MODEL", ""),
@@ -221,3 +229,10 @@ class Settings(StrictModel):
     @staticmethod
     def audio_device(value):
         return device_selector(value)
+
+    @staticmethod
+    def gateway_file(path):
+        """Prices and limits from a reviewed JSON file; saved dashboard settings still win."""
+        if not path:
+            return GatewayConfig()
+        return GatewayConfig.model_validate_json(Path(path).read_text(encoding="utf-8"))

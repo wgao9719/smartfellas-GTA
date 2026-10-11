@@ -66,7 +66,9 @@ class OutboundGate:
         return saved is True
 
     @asynccontextmanager
-    async def request(self, *, local, model, prompt_bytes, output_tokens, budget_class):
+    async def request(
+        self, *, local, model, prompt_bytes, output_tokens, budget_class, provider=None
+    ):
         task = asyncio.current_task()
         async with self.lock:
             raise_if_cancelling()
@@ -101,7 +103,7 @@ class OutboundGate:
                     self.ledger.reserve,
                     now=self.utc_now(),
                     budget_class=budget_class,
-                    provider="local_openai" if local else "openai",
+                    provider=provider or ("local_openai" if local else "openai"),
                     model=model,
                     micro_usd=charge,
                     limit=getattr(self.config, budget_class),

@@ -36,6 +36,16 @@ The filter preserves ordinary game dialogue and leaves local inference and store
 
 Select **Revoke cloud consent** to stop remote requests. The runtime cancels active turns and speech, joins cleanup, and persists revoked consent. This state survives restart even when `LLS_CLOUD_OPT_IN=1` remains in the environment. Ordinary shutdown does not revoke stored consent.
 
+## Claude
+
+The **Claude (Anthropic Messages API)** provider (`LLS_PROVIDER=anthropic`) calls `https://api.anthropic.com/v1/messages` directly rather than through Anthropic's OpenAI-compatibility layer. That layer ignores `response_format`, rejects `temperature` below 1 on current models, and cannot set effort. The consent, reservation, scrubber, redirect and fallback rules above apply unchanged. `LLM_API_KEY` holds the Anthropic key, which is sent only in the `x-api-key` header. When that variable is unset, `python -m service.lls` loads it at startup from the git-ignored `secrets/LLM_API_KEY.txt`, or from `LLS_API_KEY_FILE`. With a hosted provider selected and no key anywhere, it creates that file as a commented template and names it in the startup error. See `secrets/README.md`.
+
+- **Effort.** Every request sets `output_config.effort` from `LLS_ANTHROPIC_EFFORT` (default `medium`). Claude Opus 5.5 always thinks adaptively. Thinking is never spoken or stored, but it counts toward each request's output limit and is billed as output, so give dialogue and action limits room for it. `tools/windows-rig/claude-gateway.json` uses 2,048 and 1,024 tokens. Set the variable to an empty value for a model without effort support.
+- **Actions.** The action stage uses structured outputs. The JSON grammar cannot express numeric or string bounds, so the request schema omits `minimum`, `maximum`, `minLength` and `maxLength`. The prompt still states them, and the service validates every proposal against the full registry schema. A refusal or an exhausted output limit selects no action.
+- **Grounding checks.** The sentence classifier returns a `yes`/`no` enum through structured outputs, sends no `temperature`, and has 512 output tokens and a 3-second deadline. A timeout or invalid verdict withholds the sentence, as for other providers.
+- **Usage.** Streamed `message_start` and `message_delta` counts settle each reservation. Input includes any cache reads and writes, at the configured input price.
+- **Configuration without the dashboard.** `LLS_AI_GATEWAY_FILE` loads prices and limits from a JSON `GatewayConfig`. Saved dashboard settings still override the environment and this file. The rig's `start-service.ps1 -Provider claude` uses `claude-gateway.json`. Its Opus 5.5 prices ($4 input and $20 output per million tokens) are estimates to check against Anthropic's current pricing.
+
 ## Reservations and estimates
 
 Every HTTP model attempt first reserves a request and its maximum configured estimated cost in SQLite. Action-schema repair requires a separate reservation. Foreground and background requests have separate limits. The default background allowance is zero. Local attempts also consume request allowances, with no hosted monetary charge.
