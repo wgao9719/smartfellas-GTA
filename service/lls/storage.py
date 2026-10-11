@@ -369,8 +369,12 @@ class Repository:
             existing = self.connection.execute(
                 "SELECT * FROM profiles WHERE profile_id=?", (profile_id,)
             ).fetchone()
-            if existing and save_slot and existing["save_slot"] != save_slot:
+            if existing and save_slot and existing["save_slot"] not in ("", save_slot):
                 raise ValueError("profile already belongs to another save association")
+            if existing and save_slot and not existing["save_slot"]:
+                self.connection.execute(
+                    "UPDATE profiles SET save_slot=? WHERE profile_id=?", (save_slot, profile_id)
+                )
             self.connection.execute(
                 "INSERT OR IGNORE INTO profiles VALUES(?,?,?,?,NULL)",
                 (profile_id, save_slot, _json(settings or {}), _now()),

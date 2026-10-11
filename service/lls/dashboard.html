@@ -67,6 +67,12 @@
     <button id="refresh">Refresh dashboard</button>
   </div>
   <p id="status" role="status" aria-live="polite">Connecting to the local service…</p>
+  <section aria-labelledby="association-title">
+    <h2 id="association-title">Choose the save before connecting</h2>
+    <p class="warning">A different save can inherit the wrong memories. Set ProfileId and SaveSlot in the adapter INI for the loaded save, then confirm in game (F10 by default). Use a new profile for an unknown or different save lineage, including saves with the same game date.</p>
+    <p class="small muted">The profile list is for inspecting memories. It does not select the game's save association. Selecting a timeline does not confirm a save slot.</p>
+    <p id="profile-warning" class="warning" role="status"></p>
+  </section>
   <section id="provider-controls" aria-labelledby="provider-title">
     <h2 id="provider-title">AI provider</h2>
     <p id="provider-summary" class="muted">Loading provider settings…</p>
@@ -368,6 +374,7 @@
     if(generation!==refreshGeneration)return;
     const data=await api('/overview');
     if(generation!==refreshGeneration)return;
+    el('profile-warning').textContent=data.profile_warning||'';
     el('provider').textContent='Provider: '+data.provider;
     el('sessions').textContent=JSON.stringify(data.sessions,null,2);
     const selectedSession=el('diagnostic-session').value;
@@ -399,7 +406,9 @@
     const data=await api('/sessions/'+encodeURIComponent(session)+'/diagnostics');
     if(generation!==diagnosticsGeneration)return;
     el('diagnostic-summary').textContent=(data.closed?'Closed':'Active')+' · '+data.protagonist_id+
-      ' · '+data.game_datetime+' · '+data.actors.length+' nearby characters · Provider: '+data.provider;
+      ' · '+data.game_datetime+' · '+data.actors.length+' nearby characters · Provider: '+data.provider+
+      ' · Profile: '+data.profile_id+' · Save slot: '+data.save_slot+
+      ' · Selection: '+(data.profile_confirmed?'manually confirmed':'unconfirmed');
     const values={actors:{actors:data.actors,world:data.world},commands:data.commands,trace:data.trace,
       perception:{perception:data.perception,triggers:data.triggers,social:data.social,social_scheduler:data.social_scheduler},
       manifest:{manifest:data.manifest,heartbeat:data.heartbeat,game_verified:data.game_verified}};

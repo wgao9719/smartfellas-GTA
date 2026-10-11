@@ -259,6 +259,8 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             {
                 "session_id": session.id,
                 "profile_id": session.request.profile_id,
+                "save_slot": session.request.save_slot,
+                "profile_confirmed": session.request.profile_confirmed,
                 "branch_id": session.branch_id,
                 "protagonist_id": session.request.protagonist_id,
                 "game_datetime": session.game_datetime,
@@ -275,6 +277,7 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
                 "speech": "unverified",
                 "game_verified": False,
                 "selected_branches": getattr(runtime, "selected_branches", {}),
+                "profile_warning": runtime.profile_warning,
             }
         )
 
@@ -340,6 +343,8 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             {
                 "session_id": session.id,
                 "profile_id": session.request.profile_id,
+                "save_slot": session.request.save_slot,
+                "profile_confirmed": session.request.profile_confirmed,
                 "branch_id": session.branch_id,
                 "protagonist_id": session.request.protagonist_id,
                 "game_datetime": session.game_datetime,

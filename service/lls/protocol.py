@@ -89,7 +89,9 @@ class Manifest(StrictModel):
 
 class SessionOpen(StrictModel):
     schema_version: Literal[1] = 1
-    profile_id: Identifier
+    profile_id: Identifier | None = None
+    save_slot: Identifier | None = None
+    profile_confirmed: bool = False
     parent_branch_id: Identifier | None = None
     protagonist_id: Protagonist
     game_datetime: datetime

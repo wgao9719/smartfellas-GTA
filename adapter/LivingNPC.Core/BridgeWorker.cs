@@ -88,7 +88,14 @@ namespace LivingNPC.Core
                     session = value; online = true;
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
-                catch (PermanentFailure e) { LastFailure = "session_rejected_" + e.Status; Notices.ReplaceOldest(LastFailure); return; }
+                catch (PermanentFailure e)
+                {
+                    LastFailure = "session_rejected_" + e.Status;
+                    Notices.ReplaceOldest(e.Status == 409
+                        ? "Save/profile association refused. Verify ProfileId, SaveSlot and ParentBranchId in LivingNPC.ini, then reload and confirm. Use a new profile for a different save."
+                        : LastFailure);
+                    return;
+                }
                 catch (Exception e) { Fail(e); await Delay(1000).ConfigureAwait(false); }
             }
             if (session != null) await Task.WhenAll(ControlLoop(), EventLoop(), PollLoop()).ConfigureAwait(false);

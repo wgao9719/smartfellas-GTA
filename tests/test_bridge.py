@@ -37,6 +37,17 @@ async def client(tmp_path):
             yield client
 
 
+async def test_session_open_requires_explicit_save_profile_selection(client):
+    body = fixture_session()
+    body.pop("save_slot", None)
+    body.pop("profile_confirmed", None)
+    response = await client.post("/v1/bridge/sessions", json=body)
+    assert response.status_code == 409
+    assert "save" in response.json()["detail"].lower()
+    assert client.app.state.runtime.sessions == {}
+    assert client.app.state.repository.list_profiles() == []
+
+
 async def open_ready(client, *, capabilities=None, capability_flags=None, actor_overrides=None):
     body = fixture_session()
     if capabilities is not None:

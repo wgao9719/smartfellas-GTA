@@ -62,4 +62,22 @@ public class BridgeTests
         Assert.Equal("instance-1", Assert.Single(batch.Commands).RuntimeInstanceId);
         Assert.Equal(TimeSpan.Zero, batch.Commands[0].ExpiresAt.Offset);
     }
+    [Fact] public async Task AssociationConflictStopsWithoutExposingResponseBody()
+    {
+        var calls = 0;
+        var rejected = new Handler((_, _) => {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict) { Content = new StringContent("private response body") });
+        });
+        using var worker = new BridgeWorker(new Uri("http://127.0.0.1:8765"), new SessionRequest(), "", eventHandler: rejected);
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (worker.Notices.Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(5);
+        Assert.True(worker.Notices.TryTake(out var notice));
+        Assert.Contains("Save/profile association refused", notice);
+        Assert.Contains("ProfileId, SaveSlot and ParentBranchId", notice);
+        Assert.DoesNotContain("private response body", notice);
+        Assert.Equal("session_rejected_409", worker.LastFailure);
+        Assert.Null(worker.Session); Assert.False(worker.Online); Assert.False(worker.RequiresReconnect);
+        Assert.Equal(1, calls);
+    }
 }

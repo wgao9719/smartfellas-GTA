@@ -11,7 +11,7 @@ G0 is not done. No game, loader, or SHVDN combination is currently certified by 
 7. Confirm Story Mode starts without adapter errors.
 8. Copy the staged adapter bundle into the game's existing `scripts` directory.
 9. Copy `scripts/LivingNPC/LivingNPC.ini.example` to `scripts/LivingNPC/LivingNPC.ini`. Preserve an existing INI.
-10. Set `ScriptHookVBuild` to the installed build in the INI.
+10. Set `ScriptHookVBuild` to the installed build in the INI. Set `[Service]` `ProfileId` and `SaveSlot` for the loaded save as described under [Save/profile association](#saveprofile-association).
 11. Install Python 3.11 or 3.12 for the local service.
 12. Install the project dependencies with `uv sync --group dev`.
 13. Start the local service.
@@ -22,7 +22,7 @@ G0 is not done. No game, loader, or SHVDN combination is currently certified by 
 
 14. Check `http://127.0.0.1:8765/health`.
 15. Start Story Mode and inspect the latest `scripts/LivingNPC/LivingNPC-*.log` for `adapter_loaded`.
-16. Press F6 near an ordinary pedestrian. Expect `Target: Nearby resident (Available)`.
+16. Read the save/profile warning and press F10 only after checking that the configured profile and save label match the loaded save. Then press F6 near an ordinary pedestrian. Expect `Target: Nearby resident (Available)`.
 17. Press F7 to enter a message.
 18. Hold N to request microphone capture.
 19. Release N to stop capture and start transcription.
@@ -81,7 +81,7 @@ Without this setting, a pinned ped is registered but the game may still despawn 
 1. Stop the service during a pending interaction.
 2. Verify regular GTA play continues.
 3. Restart the service.
-4. Verify the adapter opens a fresh session after authentication invalidates the old session.
+4. Verify the adapter requests save/profile confirmation after authentication invalidates the old session. Confirm the matching association and verify it opens a fresh session.
 5. Confirm old replies cannot act on the new runtime generation.
 6. Reload the adapter after changing the DLL.
 7. Compare the logged informational version with `scripts/adapter-build.json`.
@@ -90,7 +90,17 @@ If the loader locks a DLL, close GTA before deployment. The deployment tool stor
 
 SHVDN loads every DLL below `scripts`. Local deployment therefore stages files in a temporary `lls-stage-*` directory beside `scripts`, on the same volume. An interrupted deployment can leave that directory behind, but never a second adapter copy inside `scripts`. Delete a leftover `lls-stage-*` directory after the interrupted deployment ends.
 
-The default profile is `default`. Use a distinct `ProfileId` for each save lineage when automatic timeline association is ambiguous. G0 must test full in-game dates after restart and rewind. Same-date divergent saves remain an explicit selection case.
+## Save/profile association
+
+There is no default profile. Set `[Service]` `ProfileId` to the profile you choose for the loaded Story Mode save and `SaveSlot` to a stable manual label for that save lineage. Use a distinct profile and label for a different lineage, including different slots saved at the same game date/time. These fields do not identify a save automatically; the adapter has no verified stable engine save GUID. Reload the adapter after changing the INI.
+
+Before every new bridge session, the adapter displays a warning and waits for `[Input]` `ConfirmProfileKey` (default F10). Check the configured association against the loaded save before confirming. This applies to first startup, detected loads and rewinds, transport reconnects, and protagonist switches. It also applies after pause, missions, cutscenes, and other unsafe-world states that already close the bridge. These transitions conservatively require confirmation too. Check F10 for binding conflicts on the rig. Until confirmation, no service session opens and no existing memories attach.
+
+The service requires `profile_id`, `save_slot`, and `profile_confirmed=true` on session-open. The first explicit association is stored, including for an existing profile whose association was empty. A stored nonempty association cannot be changed through session-open. A missing confirmation or a mismatched save label refuses the session. Select the matching profile and label, or choose a new profile for an unknown or different save; matching timestamps alone never establish an association.
+
+After association, existing timeline behavior applies: an earlier full game date opens a branch with future records excluded. `ParentBranchId` selects the intended existing timeline when its history is ambiguous; it does not override the profile/save association check. Keep the same profile and save label across Michael, Franklin, and Trevor within that save. Memories and relationships remain separate for each protagonist.
+
+G0 must test first load, continuation, earlier-save rewind, different-slot equal-time saves, and protagonist switching. Loading-state detection and full-date restoration still require native verification. The adapter may miss a load boundary; dates cannot resolve equal-time divergent saves. Reload the adapter and select the correct association whenever a save change was not detected.
 
 ## Evidence required before release
 

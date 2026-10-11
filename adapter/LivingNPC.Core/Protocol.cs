@@ -20,7 +20,9 @@ namespace LivingNPC.Core
     public sealed class SessionRequest
     {
         public int SchemaVersion { get; set; } = 1;
-        public string ProfileId { get; set; } = "default";
+        public string ProfileId { get; set; } = "";
+        public string SaveSlot { get; set; } = "";
+        public bool ProfileConfirmed { get; set; }
         public string? ParentBranchId { get; set; }
         public string ProtagonistId { get; set; } = "franklin";
         public string GameDatetime { get; set; } = "";
