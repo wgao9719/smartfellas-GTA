@@ -40,11 +40,11 @@ namespace LivingNPC.GameAdapter
         public LivingNpcScript()
         {
             Interval = 0;
-            game = new GtaGameAdapter();
             var assembly = typeof(LivingNpcScript).Assembly;
             // SHVDN supplies the script directory even when it loads an assembly from bytes.
             var scriptsDirectory = BaseDirectory;
             log = new AdapterLog(AdapterPaths.DataDirectory(scriptsDirectory));
+            game = new GtaGameAdapter(log);
             adapterVersion = ((System.Reflection.AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute))).InformationalVersion;
             log.Write("adapter_loaded", "version=" + adapterVersion + " module_id=" + assembly.ManifestModule.ModuleVersionId);
             try
