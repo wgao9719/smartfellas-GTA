@@ -3,7 +3,7 @@
 # -Provider claude sends NPC context to Anthropic's API. Choosing it is the explicit cloud opt-in.
 #   Paste your Anthropic key into secrets\LLM_API_KEY.txt (git-ignored); see secrets\README.md.
 param([ValidateSet('fake','local_openai','claude','disabled')][string]$Provider = 'fake',
-      [string]$Model = 'claude-opus-5-5',
+      [string]$Model = 'claude-sonnet-5',
       [string]$Repo = '')
 . (Join-Path $PSScriptRoot 'rig-paths.ps1')
 if (-not $Repo) { $Repo = $script:RigRepo }

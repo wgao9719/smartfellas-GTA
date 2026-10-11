@@ -21,7 +21,7 @@ from service.lls.providers import OpenAIProvider, ProviderResponseError
 from service.lls.settings import Settings
 from service.lls.storage import Repository
 
-MODEL = "claude-opus-5-5"
+MODEL = "claude-sonnet-5"
 
 
 @pytest.fixture

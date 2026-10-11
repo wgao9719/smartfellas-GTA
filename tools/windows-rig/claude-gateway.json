@@ -1,5 +1,7 @@
 {
   "prices": {
+    "claude-sonnet-5": {"input_usd_per_million": 2, "output_usd_per_million": 10},
+    "claude-sonnet-5-5": {"input_usd_per_million": 2, "output_usd_per_million": 10},
     "claude-opus-5-5": {"input_usd_per_million": 4, "output_usd_per_million": 20}
   },
   "foreground": {"max_requests": 600, "max_estimated_usd": 15},
