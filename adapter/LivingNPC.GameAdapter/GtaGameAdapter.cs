@@ -237,12 +237,20 @@ namespace LivingNPC.GameAdapter
         public void Release(Command command, ActorState actor, string actionId)
         {
             OnScriptThread();
-            if (tasks.TryGetValue(command.Id, out var task) && bindings.TryGetValue(actor.ActorId, out var binding) && Valid(binding))
+            try
             {
+                if (!tasks.TryGetValue(command.Id, out var task) || !bindings.TryGetValue(actor.ActorId, out var binding) || command.ActorId != actor.ActorId ||
+                    binding.Instance != actor.RuntimeInstanceId || binding.Instance != command.RuntimeInstanceId ||
+                    binding.Generation != actor.Generation || binding.Generation != command.RuntimeGeneration || !Valid(binding)) return;
+                // A decorator proves identity, not ownership. Refresh even within the same frame.
+                binding.Facts = null;
+                var classified = PedClassifier.Classify(Sample(binding.Ped, binding));
+                if (classified.Policy == ControlPolicy.Protected || (classified.Ownership != Ownership.Ambient && classified.Ownership != Ownership.ModOwned)) return;
                 var statusNow = Function.Call<int>(Hash.GET_SCRIPT_TASK_STATUS, binding.Ped.Handle, task.Hash);
                 if (statusNow == 0 || statusNow == 1) binding.Ped.Task.ClearAll();
             }
-            tasks.Remove(command.Id);
+            catch (Exception) { }
+            finally { tasks.Remove(command.Id); }
         }
         public void Reset() { OnScriptThread(); foreach (var binding in bindings.Values) ReleasePersistence(binding); bindings.Clear(); dropped.Clear(); tasks.Clear(); SelectedActorId = null; Recording = false; ClearSubtitle(); }
         // Dialogue renders verbatim. Unsafe text never renders, so it never earns a subtitle receipt.

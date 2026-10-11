@@ -53,9 +53,7 @@ namespace LivingNPC.Core
                 // Reserve enough space for terminal results. The worker retains failed sends.
                 if (Acks.Remaining < 4) break;
                 var actor = game.Resolve(item.Command.ActorId!);
-                var invalid = actor == null || !actor.Exists || !actor.Alive || actor.Generation != Generation || actor.RuntimeInstanceId != item.Instance;
-                var unsafeActor = actor != null && (actor.Busy || actor.InCombat || actor.Policy == ControlPolicy.Protected || actor.Ownership == Ownership.GameScriptOwned || actor.Distance > 15);
-                if (invalid || !world.Safe || unsafeActor)
+                if (!MayRelease(item, actor, world))
                 {
                     // Never clear tasks after an engine/mission takeover.
                     Acknowledge(item.Command, "canceled", "actor_or_world_changed"); ForgetAction(item); continue;
@@ -139,6 +137,9 @@ namespace LivingNPC.Core
             Acknowledge(command, "started", "task_dispatched", new Dictionary<string, object> { ["task_dispatched"] = true });
         }
         private void ForgetAction(Active item) { game.Forget(item.Command); active.Remove(item.Command.ActorId!); }
+        private bool MayRelease(Active item, ActorState? actor, WorldState world) =>
+            world.Safe && actor != null && actor.Exists && actor.Alive && actor.Generation == Generation && actor.RuntimeInstanceId == item.Instance &&
+            !actor.Busy && !actor.InCombat && actor.Policy != ControlPolicy.Protected && actor.Ownership != Ownership.GameScriptOwned && actor.Distance <= 15;
         private static Dictionary<string, object> Rendered(Subtitle subtitle) => new Dictionary<string, object> { ["text"] = subtitle.Text, ["delivery"] = "subtitle", ["display_rule"] = DisplayText.Rule };
         private static bool AudioForScene(Subtitle subtitle, string scene) => (string?)subtitle.Command.Payload["delivery_mode"] == "audio" && (string?)subtitle.Command.Payload["scene_id"] == scene;
         private void ReplacePriorAudio(string scene)
@@ -194,8 +195,7 @@ namespace LivingNPC.Core
             {
                 if (!string.IsNullOrWhiteSpace(sceneId) && (string?)item.Command.Payload["scene_id"] != sceneId) continue;
                 var actor = game.Resolve(item.Command.ActorId!);
-                if (world.Safe && actor != null && actor.Exists && actor.Alive && !actor.Busy && !actor.InCombat && actor.RuntimeInstanceId == item.Instance && actor.Ownership != Ownership.GameScriptOwned)
-                    game.Release(item.Command, actor, item.Action);
+                if (MayRelease(item, actor, world)) game.Release(item.Command, actor!, item.Action);
                 Acknowledge(item.Command, "canceled", "user_cancel"); ForgetAction(item);
             }
             // Local cancellation invalidates every already queued command, including late speech.
