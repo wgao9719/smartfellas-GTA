@@ -28,6 +28,12 @@ The confirmed source is the delivered quote. `reported_event_id` preserves the c
 
 Receipt freshness uses command creation time. A delayed acknowledgment cannot make old words eligible for a new report. This conservative rule can reject delayed speech. Trusted adapter delivery timestamps remain future work.
 
+## Overheard player speech
+
+A `player.spoke` incident must be audible and must name the scene of an utterance that the service accepted in the current epoch within the last 30 seconds. Its whisper flag must match the accepted utterance. The runtime replaces the incident text with the accepted words, because the adapter cannot know a voice transcript. The addressee is excluded, so it keeps only its conversation memory.
+
+The normal hearing radius applies to ordinary speech, and the whisper radius applies to whispers. A caller therefore cannot claim normal volume for a whisper. Bystanders remember `I overheard the player whisper: ...` or `I overheard the player say: ...` with `heard` provenance.
+
 ## Trigger integration
 
 The runtime can receive a validated `TriggerEngine` through dependency injection. It does not enable the pilot trigger pack automatically. Rules can retain thoughts, write private knowledge, suggest eligible actions, or queue authored remarks.

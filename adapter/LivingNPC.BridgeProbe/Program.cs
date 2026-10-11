@@ -10,7 +10,8 @@ using Newtonsoft.Json.Linq;
 var endpoint = new Uri(args.Length > 0 ? args[0] : "http://127.0.0.1:8765");
 var speechMode = args.Contains("--speech");
 var crashMode = args.Contains("--crash");
-if (speechMode && crashMode) throw new InvalidOperationException("Crash and speech probes are separate.");
+var whisperMode = args.Contains("--whisper");
+if (crashMode && (speechMode || whisperMode)) throw new InvalidOperationException("The crash probe runs alone.");
 if (!endpoint.IsLoopback) throw new InvalidOperationException("The simulated bridge probe requires loopback.");
 var generation = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 var request = new SessionRequest { ProfileId = "csharp-probe-" + Guid.NewGuid().ToString("N"), ProtagonistId = "franklin", RuntimeGeneration = generation, GameDatetime = "2013-09-17T12:00:00", Capabilities = new[] { "face_player", "wait_here" }, Manifest = new Dictionary<string, object> {
@@ -28,8 +29,12 @@ var actorPayload = new { runtime_handle = 42, runtime_instance_id = "probe-insta
 bridge.Events.TryAdd(Envelope("world.snapshot", null, worldPayload));
 var actorSnapshot = Envelope("actor.snapshot", "probe-npc", actorPayload);
 bridge.Events.TryAdd(actorSnapshot);
-var sceneId = Guid.NewGuid().ToString("N");
-if (!speechMode) bridge.Events.TryAdd(Envelope("player.utterance_text", "probe-npc", new { text = "Please look at me.", input_mode = "typed", scene_id = sceneId }));
+// The real adapter input builders bind the scene and parse "/w" before anything reaches the service.
+var input = new ConversationInput();
+if (!input.TryBind(game.Resolve("probe-npc"), game.ReadWorld(), generation)) throw new InvalidOperationException("Probe target binding failed.");
+var sceneId = input.SceneId!;
+if (!speechMode) bridge.Events.TryAdd(Envelope("player.utterance_text", "probe-npc", input.TypedPayload((whisperMode ? "/w " : "") + "Please look at me.")!));
+else input.StartPushToTalk(1, whisperMode);
 var acks = new List<Ack>();
 var received = new Dictionary<string, Command>();
 var states = new HashSet<string>();
@@ -73,7 +78,7 @@ while (DateTimeOffset.UtcNow < deadline)
     }
     if (crashMode && withdrawalAnnounced) { await Task.Delay(20); continue; }
     if (speechMode && !pttStarted && actorSnapshot.Accepted)
-        pttStarted = bridge.Controls.TryAdd(Envelope("voice.ptt_started", "probe-npc", new { scene_id = sceneId, runtime_instance_id = "probe-instance" }));
+        pttStarted = bridge.Controls.TryAdd(Envelope("voice.ptt_started", "probe-npc", input.ControlPayload()!));
     if (DateTimeOffset.UtcNow >= nextSnapshot)
     {
         bridge.Snapshots.ReplaceOldest(Envelope("world.snapshot", null, worldPayload));
@@ -96,7 +101,10 @@ while (DateTimeOffset.UtcNow < deadline)
         Console.Out.Flush(); crashAnnounced = true;
     }
     if (speechMode && !pttStopped && game.Status == "recording")
-        pttStopped = bridge.Controls.TryAdd(Envelope("voice.ptt_stopped", "probe-npc", new { scene_id = sceneId, runtime_instance_id = "probe-instance" }));
+    {
+        input.StopPushToTalk(1);
+        pttStopped = bridge.Controls.TryAdd(Envelope("voice.ptt_stopped", "probe-npc", input.ControlPayload()!));
+    }
     if (game.Starts == 1 && acks.Exists(a => a.Status == "completed" && a.Reason == "simulated_heading_observed") && finalMarker != null && acks.Exists(a => a.CommandId == finalMarker && a.Status == "completed") && bridge.Acks.Count == 0) break;
     await Task.Delay(20);
 }
@@ -120,7 +128,7 @@ if (game.Rendered.Any(r => !DisplayText.IsSafe(r.Speaker) || !DisplayText.IsSafe
     throw new InvalidOperationException("Display-safe subtitle round trip failed: " + Wire.Encode(new { game.Rendered, renderedAcks }));
 var close = new StringContent(Wire.Encode(new { runtime_generation = generation }), System.Text.Encoding.UTF8, "application/json");
 (await http.PostAsync("/v1/bridge/sessions/" + bridge.Session.SessionId + "/close", close)).EnsureSuccessStatusCode();
-Console.WriteLine(Wire.Encode(new { status = "passed", mode = speechMode ? "simulated_game_speech" : "simulated_game", game_verified = false, audio_hardware_verified = false, subtitles = game.Subtitles, expected_text_chunks = expectedText, final_marker_acknowledged = true, native_simulations = game.Starts, acks = acks.Count, display_rule = DisplayText.Rule, display_safe_subtitles = game.Rendered.Count, ptt_recording_confirmed = states.Contains("recording"), ptt_stop_sent = pttStopped, audio_text_chunks = audioChunks, subtitle_delivery_acks = subtitleAcks }));
+Console.WriteLine(Wire.Encode(new { status = "passed", mode = speechMode ? "simulated_game_speech" : "simulated_game", whisper = whisperMode, game_verified = false, audio_hardware_verified = false, subtitles = game.Subtitles, expected_text_chunks = expectedText, final_marker_acknowledged = true, native_simulations = game.Starts, acks = acks.Count, display_rule = DisplayText.Rule, display_safe_subtitles = game.Rendered.Count, ptt_recording_confirmed = states.Contains("recording"), ptt_stop_sent = pttStopped, audio_text_chunks = audioChunks, subtitle_delivery_acks = subtitleAcks }));
 
 sealed class FakeGame : IGameAdapter
 {

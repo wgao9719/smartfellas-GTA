@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from service.lls.__main__ import fixture_event, fixture_session
 from service.lls.app import create_app
 from service.lls.display import is_display_safe
-from service.lls.protocol import ActionProposal, Event
+from service.lls.protocol import ActionProposal, Event, VoiceControl
 from service.lls.providers import FakeProvider
 from service.lls.runtime import now
 from service.lls.settings import Settings
@@ -896,6 +896,53 @@ async def test_runtime_command_normalizes_presentation_fields_but_not_dialogue(c
     )
     with pytest.raises(ValidationError):
         runtime.command(session, "dialogue.chunk", "npc-1", {**payload, "text": "Hi ~r~there"})
+
+
+@pytest.mark.parametrize("whisper", [True, False])
+async def test_typed_whisper_reaches_event_memory_and_context(client, whisper):
+    sid, _ = await open_ready(client)
+    runtime, repo = client.app.state.runtime, client.app.state.repository
+    provider = ContextProvider()
+    runtime.provider = provider
+    session = runtime.sessions[sid]
+    payload = {"text": "Keep this quiet.", "scene_id": "quiet", "whisper": whisper}
+    event = fixture_event(sid, 3, "player.utterance_text", payload, "npc-1")
+    response = await client.post(
+        "/v1/bridge/events:batch", json={"session_id": sid, "events": [event]}
+    )
+    assert response.status_code == 200, response.text
+    await session.task
+    row = repo.connection.execute(
+        "SELECT data FROM events WHERE profile_id=? AND event_id=?", ("fake-demo", "demo-3")
+    ).fetchone()
+    stored = json.loads(row["data"])["payload"]
+    assert (stored["whisper"], stored["input_mode"]) == (whisper, "typed")
+    assert provider.contexts[0]["input"] == "Keep this quiet."
+    assert provider.contexts[0]["input_volume"] == ("whisper" if whisper else "normal")
+    remembered = repo.retrieve_memories(
+        "fake-demo", session.branch_id, "npc-1", "franklin", session.game_datetime, "quiet",
+        session_id=sid,
+    )
+    verb = "whispered" if whisper else "said"
+    assert [m["text"] for m in remembered if m["text"].startswith("The player")] == [
+        f"The player {verb}: Keep this quiet."
+    ]
+    receipt = session.player_speech["quiet"]
+    assert (receipt["event_id"], receipt["whisper"], receipt["epoch"]) == (
+        "demo-3", whisper, session.epoch
+    )
+
+
+async def test_voice_control_whisper_is_optional_and_strictly_boolean(client):
+    control = {"scene_id": "scene", "runtime_instance_id": "ped-1"}
+    assert VoiceControl.model_validate(control).whisper is False
+    assert VoiceControl.model_validate({**control, "whisper": True}).whisper is True
+    sid, _ = await open_ready(client)
+    for value in ("yes", 1, None):
+        event = fixture_event(sid, 3, "voice.ptt_started", {**control, "whisper": value}, "npc-1")
+        assert (await client.post("/v1/bridge/control", json=event)).status_code == 422
+    event = fixture_event(sid, 3, "voice.ptt_started", control, "npc-1")
+    assert (await client.post("/v1/bridge/control", json=event)).status_code == 200
 
 
 @pytest.mark.asyncio

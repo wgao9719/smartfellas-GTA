@@ -481,6 +481,107 @@ async def test_report_requires_actual_delivered_quote_and_stays_reported(scene):
     assert not any(c.get("_autonomous") for c in session.commands.values())
 
 
+async def add_bystander(client, session, actor_id, x):
+    actor = {
+        k: v
+        for k, v in session.actors["npc-1"].items()
+        if not k.startswith("_") and k != "allowed_actions"
+    }
+    actor.update(
+        runtime_handle=50 + int(x), runtime_instance_id="ped-" + actor_id,
+        name="Bystander", position={"x": x, "y": 0.0, "z": 0.0},
+    )
+    event = fixture_event(session.id, session.last_seq + 1, "actor.snapshot", actor, actor_id)
+    response = await client.post(
+        "/v1/bridge/events:batch", json={"session_id": session.id, "events": [event]}
+    )
+    assert response.status_code == 200, response.text
+
+
+def player_speech(session, clock, *, whisper, scene_id="player-scene", modality="audible"):
+    body = batch(session, clock, scene_id=scene_id)
+    body["incident"].update(
+        event_id="player-speech-1", event_type="player.spoke", modality=modality,
+        whisper=whisper, text="A caller cannot choose these words.",
+    )
+    witness = body["witnesses"][0]
+    body["witnesses"] = [witness] + [
+        {**witness, "actor_id": actor_id, "runtime_instance_id": "ped-" + actor_id,
+         "position": {"x": x, "y": 0.0, "z": 0.0}}
+        for actor_id, x in (("near", 2.0), ("far", 4.0))
+    ]
+    return body
+
+
+def overheard(runtime, session, actor_id):
+    rows = runtime.repo.retrieve_memories(
+        session.request.profile_id, session.branch_id, actor_id, "franklin",
+        session.game_datetime, "fountain", session_id=session.id,
+    )
+    return sorted(row["text"] for row in rows if row["text"].startswith("I overheard"))
+
+
+async def say_to_target(client, session, whisper):
+    payload = {"text": "Meet me by the fountain.", "scene_id": "player-scene", "whisper": whisper}
+    event = fixture_event(
+        session.id, session.last_seq + 1, "player.utterance_text", payload, "npc-1"
+    )
+    response = await client.post(
+        "/v1/bridge/events:batch", json={"session_id": session.id, "events": [event]}
+    )
+    assert response.status_code == 200, response.text
+    await session.task
+
+
+@pytest.mark.parametrize("whisper", [True, False])
+async def test_player_speech_is_overheard_only_within_its_volume_radius(scene, whisper):
+    client, runtime, session, clock = scene
+    await add_bystander(client, session, "near", 2.0)
+    await add_bystander(client, session, "far", 4.0)
+    await say_to_target(client, session, whisper)
+    response = await client.post("/v1/bridge/perception", json=player_speech(
+        session, clock, whisper=whisper
+    ))
+    assert response.status_code == 200, response.text
+    verb = "whisper" if whisper else "say"
+    expected = [f"I overheard the player {verb}: Meet me by the fountain."]
+    assert overheard(runtime, session, "near") == expected
+    assert overheard(runtime, session, "far") == ([] if whisper else expected)
+    assert overheard(runtime, session, "npc-1") == []
+    assert len(response.json()["accepted_event_ids"]) == (1 if whisper else 2)
+    target = runtime.repo.retrieve_memories(
+        "fake-demo", session.branch_id, "npc-1", "franklin", session.game_datetime,
+        "fountain", session_id=session.id,
+    )
+    assert [m["text"] for m in target if m["text"].startswith("The player")] == [
+        ("The player whispered: " if whisper else "The player said: ")
+        + "Meet me by the fountain."
+    ]
+
+
+@pytest.mark.parametrize("fault", ["louder", "quieter", "scene", "stale", "canceled", "visual"])
+async def test_player_speech_requires_a_current_matching_utterance(scene, fault):
+    client, runtime, session, clock = scene
+    await add_bystander(client, session, "near", 2.0)
+    await add_bystander(client, session, "far", 4.0)
+    await say_to_target(client, session, fault == "louder")
+    claimed = {"louder": False, "quieter": True}.get(fault, False)
+    if fault == "stale":
+        clock.wall += timedelta(seconds=31)
+    if fault == "canceled":
+        cancel = fixture_event(session.id, session.last_seq + 1, "scene.cancel", {})
+        assert (await client.post("/v1/bridge/control", json=cancel)).status_code == 200
+    body = player_speech(
+        session, clock, whisper=claimed,
+        scene_id="other-scene" if fault == "scene" else "player-scene",
+        modality="visual" if fault == "visual" else "audible",
+    )
+    response = await client.post("/v1/bridge/perception", json=body)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "player speech requires a current accepted utterance"
+    assert overheard(runtime, session, "near") == overheard(runtime, session, "far") == []
+
+
 async def test_clock_injection_controls_authorization_and_expiry(scene):
     client, runtime, session, clock = scene
     assert session.id == "ses_1"

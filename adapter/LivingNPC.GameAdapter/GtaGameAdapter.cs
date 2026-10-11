@@ -176,13 +176,13 @@ namespace LivingNPC.GameAdapter
         public void ShowSubtitle(string speaker, string text) { OnScriptThread(); SubtitleRendered = false; subtitle = DisplayText.IsSafe(speaker) && DisplayText.IsSafe(text) ? speaker + ": " + text : ""; subtitleUntil = DateTimeOffset.UtcNow.AddSeconds(30); }
         public void ClearSubtitle() { OnScriptThread(); subtitle = ""; SubtitleRendered = false; }
         public void ShowStatus(string state, string message) { OnScriptThread(); Recording = state == "recording"; status = DisplayText.Clean(message); }
-        public void Render(string? typed)
+        public void Render(string? typed, bool whispering = false)
         {
             OnScriptThread();
             if (Game.IsPaused) return;
-            if (typed != null) GTA.UI.Screen.ShowSubtitle("You: " + DisplayText.Clean(typed) + "_", 100);
+            if (typed != null) GTA.UI.Screen.ShowSubtitle(TypedInput.Echo(typed) + "_", 100);
             else if (subtitle.Length > 0 && DateTimeOffset.UtcNow < subtitleUntil) { GTA.UI.Screen.ShowSubtitle(subtitle, 100); SubtitleRendered = true; }
-            if (Recording) GTA.UI.Screen.ShowHelpTextThisFrame("Living Los Santos: Recording");
+            if (Recording) GTA.UI.Screen.ShowHelpTextThisFrame(whispering ? "Living Los Santos: Recording (whispering)" : "Living Los Santos: Recording");
             else if (status.Length > 0) GTA.UI.Screen.ShowHelpTextThisFrame(status);
         }
     }

@@ -126,6 +126,7 @@ class Empty(StrictModel):
 class VoiceControl(StrictModel):
     scene_id: Identifier
     runtime_instance_id: Identifier
+    whisper: bool = False
 
 
 class WorldObservation(StrictModel):

@@ -4,6 +4,7 @@ import asyncio
 
 from fastapi import HTTPException
 
+from .perception import PerceptionLimits
 from .protocol import Ack, Event
 from .speech import SpeechUnavailable
 from .speech_coordinator import SpeechCoordinator, SpeechIdentity
@@ -53,10 +54,26 @@ class SpeechRuntime:
                 {"state": state, "message": message, "scene_id": identity.scene_id},
             )
 
+    def whisper_too_far(self, session, actor_id, scene_id, identity=None):
+        """FR-PER-04: refuse a whisper the target cannot hear. Nothing opens or runs."""
+        if session.actors[actor_id]["distance"] <= PerceptionLimits().whisper_hearing_meters:
+            return False
+        if identity is None:
+            self.command(
+                session,
+                "status",
+                actor_id,
+                {"state": "unavailable", "message": "Too far to whisper.", "scene_id": scene_id},
+            )
+        else:
+            self.speech_status(session, identity, "unavailable", "Too far to whisper.")
+        return True
+
     def cancel_speech(self, session):
         identity = session.speech_identity
         session.speech_identity = None
         session.speech_state = "idle"
+        session.speech_whisper = False
         task = session.voice_task
         if task is not None and not task.done():
             task.cancel()
@@ -92,6 +109,7 @@ class SpeechRuntime:
         if erase:
             await self.speech.forget(session_id=session.id)
             session.delivered_utterances.clear()
+            session.player_speech.clear()
             for command in session.commands.values():
                 command.pop("_subtitle_ack", None)
 
@@ -141,14 +159,29 @@ class SpeechRuntime:
             self.command(session, "scene.cancel", None, {"scene_id": None})
             identity = self.speech_identity(session, event.actor_id, event.payload["scene_id"])
             session.speech_identity = identity
+            # Volume is part of the capture lock. A stop cannot change it.
+            session.speech_whisper = event.payload["whisper"]
+            if session.speech_whisper and self.whisper_too_far(
+                session, event.actor_id, identity.scene_id, identity
+            ):
+                session.speech_state = "refused"
+                return
             session.speech_state = "opening_mic"
             session.voice_task = asyncio.create_task(self.start_voice_capture(session, identity))
         else:
             identity = session.speech_identity
-            if identity is None or identity != self.speech_identity(
-                session, event.actor_id, event.payload["scene_id"]
+            scene_id = event.payload["scene_id"]
+            if (
+                identity is None
+                or identity != self.speech_identity(session, event.actor_id, scene_id)
+                or event.payload["whisper"] != session.speech_whisper
             ):
                 raise HTTPException(409, "push-to-talk stop does not match its capture")
+            if session.speech_state == "refused":
+                # The refused start opened no microphone. Releasing the key only ends it.
+                session.speech_identity, session.speech_state = None, "idle"
+                session.speech_whisper = False
+                return
             if session.speech_state not in {"opening_mic", "recording"}:
                 raise HTTPException(409, "push-to-talk capture is not recording")
             start_task = session.voice_task
@@ -205,7 +238,7 @@ class SpeechRuntime:
                         "text": receipt.text,
                         "scene_id": identity.scene_id,
                         "input_mode": "voice",
-                        "whisper": False,
+                        "whisper": session.speech_whisper,
                         "consent": False,
                     },
                 }
@@ -213,13 +246,13 @@ class SpeechRuntime:
             async with session.lock:
                 if not self.speech_identity_current(identity):
                     return
-                await self.accept_utterance_locked(
+                if await self.accept_utterance_locked(
                     session,
                     transcript,
                     voice_action_eligible=receipt.action_eligible,
                     voice_identity=identity,
-                )
-                self.speech_status(session, identity, "generating", "Thinking")
+                ):
+                    self.speech_status(session, identity, "generating", "Thinking")
         except SpeechUnavailable:
             self.speech_status(session, identity, "unavailable", "Transcription is unavailable.")
         except asyncio.CancelledError:

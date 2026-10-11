@@ -26,9 +26,13 @@ G0 is not done. No game, loader, or SHVDN combination is currently certified by 
 17. Press F7 to enter a message.
 18. Hold N to request microphone capture.
 19. Release N to stop capture and start transcription.
-20. Press Backspace to cancel the current interaction.
+20. Hold B to request a whispered capture. Release B to stop it.
+21. Start a typed message with `/w ` to whisper it. Start it with `//` to send a literal leading slash.
+22. Press Backspace to cancel the current interaction.
 
-The service defaults to AI disabled. The fake provider is for simulation tests. A hosted provider requires explicit configuration and cloud consent. PTT may report that speech is unavailable until microphone and transcription support is configured. The adapter shows `Recording` only after a service status confirms it.
+The service defaults to AI disabled. The fake provider is for simulation tests. A hosted provider requires explicit configuration and cloud consent. PTT may report that speech is unavailable until microphone and transcription support is configured. The adapter shows `Recording` only after a service status confirms it, and `Recording (whispering)` for a whisper capture.
+
+A whisper reaches only a target within the whisper hearing radius, which defaults to 3 meters. A more distant target shows `Too far to whisper.` and the service opens no microphone and runs no turn. `WhisperKey=B` is a provisional default. Verify on the rig that B does not conflict with a game binding before you rely on it.
 
 The [speech runtime configuration](speech-coordinator.md#runtime-configuration) selects local speech programs, models, and audio devices. Startup does not open the microphone. Audio runs on the service computer, including a Mac during Tailscale development.
 
@@ -148,7 +152,7 @@ WARNING: Keep the bridge token private. Share it only with the authorized servic
 13. Start Story Mode with the recorded compatible loader and SHVDN release.
 14. Inspect the latest adapter log for `adapter_loaded`, `installed_dll`, and `bridge_ready`.
 15. Compare its version and installed DLL hash with the deployment manifest.
-16. Run the target, text, PTT, and cancel checks from the setup procedure.
+16. Run the target, text, PTT, whisper, and cancel checks from the setup procedure.
 17. Run the provisional action capability sheet with the explicit Debug opt-in.
 18. Record redeployment, `Reload()`, DLL-lock behavior, rollback, and service-restart recovery.
 19. Repeat latency and performance trials with the service running locally on Windows.

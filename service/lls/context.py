@@ -23,6 +23,7 @@ def build_context(
     game_datetime,
     byte_budget,
     action_outcomes=(),
+    input_volume="normal",
 ):
     def record(item, identity):
         return {
@@ -43,6 +44,7 @@ def build_context(
         },
         "protagonist_id": protagonist_id,
         "input": input_text,
+        "input_volume": input_volume,
         "world": {
             **{k: v for k, v in world.items() if not k.startswith("_")},
             "game_datetime": game_datetime,

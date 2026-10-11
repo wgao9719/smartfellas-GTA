@@ -35,6 +35,7 @@ def stored_payloads(database, event_type):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--speech", action="store_true", help="Use synthetic audio devices")
+    parser.add_argument("--whisper", action="store_true", help="Whisper the typed or spoken input")
     args = parser.parse_args()
     bundled = ROOT / ".dotnet" / ("dotnet.exe" if os.name == "nt" else "dotnet")
     dotnet = os.environ.get("LLS_DOTNET") or shutil.which("dotnet")
@@ -106,6 +107,7 @@ def main():
                         "--",
                         endpoint,
                         *(["--speech"] if args.speech else []),
+                        *(["--whisper"] if args.whisper else []),
                     ],
                     cwd=ROOT,
                     env=environment,
@@ -119,13 +121,21 @@ def main():
                     assert is_display_safe(payload["text"]) and payload["text"].strip(), payload
                     assert payload["display_rule"] == DISPLAY_RULE, payload
                     assert payload["speaker"] == "Probe Neighbor", payload
+                # The adapter parses "/w". The service stores literal text with the locked volume.
+                [spoken] = stored_payloads(database, "player.utterance_text")
+                assert spoken["text"] == "Please look at me.", spoken
+                assert spoken["whisper"] is args.whisper, spoken
+                assert spoken["input_mode"] == ("voice" if args.speech else "typed"), spoken
                 print(
                     json.dumps(
                         {
-                            "check": "durable_display_receipts",
+                            "check": "durable_receipts",
                             "delivered_events": len(delivered),
                             "display_rule": DISPLAY_RULE,
                             "speaker": "Probe Neighbor",
+                            "utterance_events": 1,
+                            "utterance_whisper": spoken["whisper"],
+                            "utterance_input_mode": spoken["input_mode"],
                         },
                         sort_keys=True,
                     )

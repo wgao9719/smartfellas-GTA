@@ -1,4 +1,5 @@
 import asyncio
+import json
 import threading
 import wave
 from contextlib import asynccontextmanager
@@ -204,23 +205,22 @@ def speech_scene(tmp_path):
     return create
 
 
-async def control(client, session, kind, *, scene="voice-scene", instance="ped-1", seq=None):
-    event = fixture_event(
-        session.id,
-        seq or session.last_seq + 1,
-        kind,
-        {"scene_id": scene, "runtime_instance_id": instance},
-        "npc-1",
-    )
+async def control(
+    client, session, kind, *, scene="voice-scene", instance="ped-1", seq=None, whisper=None
+):
+    payload = {"scene_id": scene, "runtime_instance_id": instance}
+    if whisper is not None:
+        payload["whisper"] = whisper
+    event = fixture_event(session.id, seq or session.last_seq + 1, kind, payload, "npc-1")
     return await client.post("/v1/bridge/control", json=event)
 
 
-async def say(client, session):
+async def say(client, session, *, whisper=False):
     event = fixture_event(
         session.id,
         session.last_seq + 1,
         "player.utterance_text",
-        {"text": "Hello.", "scene_id": "typed-scene"},
+        {"text": "Hello.", "scene_id": "typed-scene", "whisper": whisper},
         "npc-1",
     )
     return await client.post(
@@ -317,14 +317,86 @@ async def test_ptt_uses_dialogue_pipeline_with_internal_confidence_gate(
         )
 
 
-@pytest.mark.parametrize("field", ["scene", "instance"])
+@pytest.mark.parametrize("field", ["scene", "instance", "whisper"])
 async def test_ptt_stop_cannot_change_locked_target(speech_scene, field):
     async with speech_scene() as (client, runtime, session, microphone, *rest):
-        assert (await control(client, session, "voice.ptt_started")).status_code == 200
+        whisper = field == "whisper"
+        response = await control(client, session, "voice.ptt_started", whisper=whisper)
+        assert response.status_code == 200
         await session.voice_task
-        response = await control(client, session, "voice.ptt_stopped", **{field: "different"})
+        changed = {"whisper": False} if whisper else {field: "different"}
+        response = await control(client, session, "voice.ptt_stopped", **changed)
         assert response.status_code == 409
         assert microphone.active
+
+
+def stored_utterances(runtime):
+    rows = runtime.repo.connection.execute("SELECT data FROM events").fetchall()
+    events = [json.loads(row["data"]) for row in rows]
+    return [e["payload"] for e in events if e["event_type"] == "player.utterance_text"]
+
+
+async def test_whisper_ptt_locks_volume_into_the_transcript(speech_scene):
+    async with speech_scene() as values:
+        client, runtime, session, microphone, transcriber, synthesizer, playback, provider = values
+        response = await control(client, session, "voice.ptt_started", whisper=True)
+        assert response.status_code == 200
+        await session.voice_task
+        response = await control(client, session, "voice.ptt_stopped", whisper=True)
+        assert response.status_code == 200
+        await session.voice_task
+        await session.task
+        [payload] = stored_utterances(runtime)
+        assert (payload["text"], payload["input_mode"], payload["whisper"]) == (
+            "Please look at me.", "voice", True
+        )
+        assert provider.contexts[0]["input_volume"] == "whisper"
+        assert session.player_speech["voice-scene"]["whisper"] is True
+        heard = runtime.repo.retrieve_memories(
+            "fake-demo", session.branch_id, "npc-1", "franklin", session.game_datetime,
+            "look", session_id=session.id,
+        )
+        assert "The player whispered: Please look at me." in [m["text"] for m in heard]
+
+
+async def move_target(client, session, distance):
+    actor = session.actors["npc-1"]
+    snapshot = {k: v for k, v in actor.items() if not k.startswith("_") and k != "allowed_actions"}
+    event = fixture_event(
+        session.id, session.last_seq + 1, "actor.snapshot", {**snapshot, "distance": distance},
+        "npc-1",
+    )
+    response = await client.post(
+        "/v1/bridge/events:batch", json={"session_id": session.id, "events": [event]}
+    )
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize("mode", ["ptt", "typed", "moved_during_capture"])
+async def test_whisper_beyond_hearing_radius_opens_nothing_and_runs_no_turn(speech_scene, mode):
+    async with speech_scene() as values:
+        client, runtime, session, microphone, transcriber, synthesizer, playback, provider = values
+        if mode == "moved_during_capture":
+            await control(client, session, "voice.ptt_started", whisper=True)
+            await session.voice_task
+            await move_target(client, session, 4)
+            await control(client, session, "voice.ptt_stopped", whisper=True)
+            await session.voice_task
+        else:
+            await move_target(client, session, 4)
+        if mode == "ptt":
+            response = await control(client, session, "voice.ptt_started", whisper=True)
+            assert response.status_code == 200 and session.speech_state == "refused"
+            response = await control(client, session, "voice.ptt_stopped", whisper=True)
+            assert response.status_code == 200 and session.speech_state == "idle"
+            assert not microphone.opened.is_set()
+        elif mode == "typed":
+            assert (await say(client, session, whisper=True)).status_code == 200
+        status = [c["payload"] for c in session.commands.values() if c["kind"] == "status"][-1]
+        assert (status["state"], status["message"]) == ("unavailable", "Too far to whisper.")
+        assert session.task is None and provider.contexts == []
+        assert stored_utterances(runtime) == [] and not session.player_speech
+        assert not microphone.active
 
 
 async def test_cancel_joins_transcription_and_prevents_late_turn(speech_scene):

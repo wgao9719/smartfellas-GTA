@@ -84,6 +84,8 @@ Service startup never opens the microphone. In the game, holding the configured 
 
 The adapter locks the scene, actor, runtime instance, and generation at key-down. It waits for the target snapshot's HTTP receipt before sending the capture request. Releasing the key before that receipt prevents a late microphone opening.
 
+Holding the configured whisper key starts the same capture with `whisper=true`. The adapter and the service lock the flag with the capture identity, and a stop with a different flag receives the existing 409 mismatch. Only the key that started a capture can stop it. The transcript event keeps the locked flag, the target remembers that the player whispered, and the model context marks `input_volume` as `whisper`. When the target's known distance exceeds the whisper hearing radius, the service reports `Too far to whisper.` without opening the microphone or running a turn. The same check applies when a typed or transcribed whisper is accepted.
+
 The adapter displays `Recording` only after a bound service status confirms capture. Target changes, cancellation, unsafe world state, and reconnect reset local input. The service cancels its matching speech operation and joins cleanup.
 
 Audio subtitles arrive when software playback starts. A later audio chunk can replace an earlier audio subtitle. The adapter acknowledges only text that it rendered. The backend owns playback completion receipts and prevents duplicate memory records across audio and subtitle delivery.
@@ -104,6 +106,15 @@ Speech synthesis receives the same display-rule text as the audio subtitle. Mark
    uv run python tests/live_bridge_check.py --speech
    ```
 
+3. Run both checks with whispered input.
+
+   ```sh
+   uv run python tests/live_bridge_check.py --whisper
+   uv run python tests/live_bridge_check.py --speech --whisper
+   ```
+
 The speech check verifies bound capture, confirmed recording, transcription, two audio chunks, rendered subtitles, and the final marker through real HTTP. Its native action uses a simulated executor. No microphone, speaker, or model file is opened by the fixture.
+
+Each check reads the temporary database afterward. Delivery receipts must quote display-safe text with `display_rule` 1. The whisper checks send a typed `/w ` message or a whispered capture through the C# input builders, and the stored utterance must have `whisper=true` with no `/w` prefix.
 
 Hardware audio, Windows process ownership, native GTA interaction, and Tailscale operation remain unverified. Focused tests use mocked devices and providers.
