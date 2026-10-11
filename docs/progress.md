@@ -19,15 +19,19 @@ The following commit fixes those failures. Its own Windows run must confirm them
 
 ## Done
 
+- Schema-v1 command versions are explicit and required on both bridge sides. Session opening reports actionable major-version mismatches and negotiates optional capabilities. Shared Python/C# contract fixtures preserve the spec examples and explain deliberate differences; see [wire contract](wire-contract.md).
 - Authenticated Python service with streaming dialogue, action proposals, acknowledgments, cancellation, and durable action outcomes.
 - SQLite memory with scoped knowledge, relationships, save-timeline branches, and optional semantic retrieval.
 - Provider controls with budgets, explicit cloud consent, and a local OpenAI-compatible option. AI starts disabled.
+- Shared filtering at the hosted HTTP boundary removes recognizable secrets and personal data from dialogue, action retries, embeddings, social turns, and skill requests. Synthetic HTTP tests cover filtering and unchanged ordinary game content; real provider and GTA behavior remain unverified.
 - Pilot pack of 12 original characters. Spawn locations and voices are placeholders.
 - C# adapter that builds for `net48` on a Mac against the pinned SHVDN reference. Release builds advertise no native actions.
 - Speech probes and a speech coordinator with push-to-talk, subtitles, and delivery receipts.
 - Development perception, social scenes, social scheduler, social adaptation, 48-character neighborhood simulation, and skill learning with automatic practice.
 - Local dashboard for inspection, memory edits, export, backups, and diagnostics.
-- Character-scoped export, source conversation erasure, and configurable seven-day raw-history retention. Schema v5 preserves durable memories and relationships; [policy and migration limits](privacy-retention.md) distinguish retained experiences from raw transcripts.
+- Character-scoped export, source conversation erasure, and configurable seven-day raw-history retention. Schema v6 preserves durable memories and relationships; [policy and migration limits](privacy-retention.md) distinguish retained experiences from raw transcripts.
+- Retryable session cleanup with SQLite-persisted pending state, startup recovery, and dashboard diagnostics. Failed cleanup blocks reuse until ambient history is purged; pinned and durable memories are preserved. See the [Windows cleanup validation](development-validation.md#retryable-session-cleanup-on-windows).
+- Integrated cleanup v5 and retention v6 with real upgrade fixtures and direct fresh-v6 creation. [Windows integration checks](erasure-retention-integration.md) pass except the separately owned crash-recovery memory assertion; retention failures no longer stop cleanup retries.
 - CI workflow for macOS and Windows in `.github/workflows/ci.yml`.
 
 ### Added in the second session

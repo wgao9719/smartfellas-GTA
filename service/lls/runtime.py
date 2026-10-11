@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import secrets
+import sqlite3
 import time
 from collections import OrderedDict, deque
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager
@@ -13,8 +14,11 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
+from .action_registry import ACTION_IDS
 from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
+from .bridge_limits import MAX_BODY_BYTES
 from .context import build_context
 from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
 from .memory_index import MemoryIndex
@@ -25,7 +29,7 @@ from .perception import DeliveredUtterance, PerceptionLimits, witnesses_for
 from .perception_bridge import DEVELOPMENT_PERCEPTION_CAPABILITY
 from .protocol import Command
 from .providers import create_provider, effective_provider_settings, persist_provider_configuration
-from .roles import ROLE_POLICIES, ownership_from_facts, revalidate
+from .roles import ROLE_POLICIES, TABLE_VERSION, ownership_from_facts, revalidate
 from .runtime_outcomes import OutcomeRuntime
 from .runtime_pin import PinRuntime
 from .runtime_skills import SkillRuntime
@@ -126,6 +130,7 @@ class Session:
     cancel_seq: int = 0
     epoch: int = 0
     closed: bool = False
+    cleanup_pending: bool = False
     turns: deque = field(default_factory=deque)
     heartbeat: dict = field(default_factory=dict)
     trace: deque = field(default_factory=lambda: deque(maxlen=200))
@@ -151,7 +156,11 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             self.settings = effective_provider_settings(settings, repository)
             self.repo = repository
             self.sessions = {}
+            self.cleanup_pending = {}
+            self.cleanup_recovery_pending = True
+            self.cleanup_recovery_error = None
             self.selected_branches = {}
+            self.profile_warning = None
             self.profile_locks = {}
             self.open_lock = asyncio.Lock()
             self.configuration_lock = asyncio.Lock()
@@ -293,14 +302,36 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
     async def open(self, request):
         await self.expire_sessions()
         async with self.open_lock:
+            if (
+                not (request.profile_id or "").strip()
+                or not (request.save_slot or "").strip()
+                or not request.profile_confirmed
+            ):
+                self.profile_warning = (
+                    "Confirm the profile and save slot for this load before attaching memories. "
+                    "A different or unknown save needs explicit selection or a new profile."
+                )
+                raise HTTPException(409, self.profile_warning)
             async with self.profile_lock(request.profile_id):
                 return await self._open_locked(request)
 
     async def _open_locked(self, request):
+        if self.cleanup_recovery_pending or any(
+            profile == request.profile_id for profile, _ in self.cleanup_pending
+        ):
+            raise HTTPException(503, "session cleanup pending; retry after database recovery")
         if len([s for s in self.sessions.values() if not s.closed]) >= self.settings.max_sessions:
             raise HTTPException(429, "session limit reached")
         if request.manifest.service_host_mode == "dev_lan" and not self.settings.dev_lan:
             raise HTTPException(403, "dev-LAN unavailable")
+        try:
+            await self.db("create_profile", request.profile_id, save_slot=request.save_slot)
+        except ValueError:
+            self.profile_warning = (
+                "This profile belongs to another save slot. Select the matching profile "
+                "or a new profile before attaching memories; the association was not changed."
+            )
+            raise HTTPException(409, self.profile_warning) from None
         session_id = self.id_factory("ses")
         branch = await self.db(
             "start_session",
@@ -314,13 +345,50 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         if isinstance(branch, dict):
             branch = branch["branch_id"]
         await self.thread_job(install_pilot_pack, self.repo, request.profile_id)
+        supported_flags = {
+            "typed_input", "subtitles", "actor_pin", "role_classifier_v1",
+            "role_table_" + TABLE_VERSION,
+        }
+        if self.settings.speech.enabled:
+            supported_flags.add("ptt_control")
+        for enabled, feature in (
+            (self.settings.dev_perception, "development:perception:v1"),
+            (self.settings.dev_social, "development:social:v1"),
+            (self.settings.dev_skills, "development:skills:v1"),
+            (self.settings.dev_neighborhood, "development:neighborhood:v1"),
+        ):
+            if enabled and not self.settings.release:
+                supported_flags.add(feature)
+        for actor in await self.db("list_actors", request.profile_id):
+            if (
+                actor.get("actor_kind") == "anchored_service"
+                and actor.get("control_policy") == "service_limited"
+                and actor.get("service_integration_id")
+            ):
+                supported_flags.add("service:" + actor["service_integration_id"])
+        # Existing authorization paths consume only the negotiated intersection.
+        request = request.model_copy(deep=True)
+        request.capabilities = list(
+            dict.fromkeys(
+                capability for capability in request.capabilities if capability in ACTION_IDS
+            )
+        )
+        request.manifest.capability_flags = list(
+            dict.fromkeys(
+                flag for flag in request.manifest.capability_flags if flag in supported_flags
+            )
+        )
         session = Session(session_id, secrets.token_urlsafe(32), request, branch)
         session.last_activity = self.clock()
         session.game_datetime = request.game_datetime.isoformat()
         self.sessions[session.id] = session
+        self.profile_warning = None
         # Closed sessions cannot accumulate forever.
         for sid in list(self.sessions):
-            if len(self.sessions) > self.settings.max_sessions * 2 and self.sessions[sid].closed:
+            if (
+                len(self.sessions) > self.settings.max_sessions * 2
+                and self.sessions[sid].closed and not self.sessions[sid].cleanup_pending
+            ):
                 del self.sessions[sid]
         return session
 
@@ -360,10 +428,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         presented = {"dialogue.chunk": "speaker", "status": "message"}.get(kind)
         if presented and isinstance(payload.get(presented), str):
             payload = {**payload, presented: display_text(payload[presented])}
-        session.command_seq += 1
         command = {
+            "schema_version": 1,
             "id": self.id_factory("cmd"),
-            "seq": session.command_seq,
+            "seq": session.command_seq + 1,
             "kind": kind,
             "session_id": session.id,
             "actor_id": actor_id,
@@ -374,6 +442,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             "payload": payload,
         }
         Command.model_validate(command)
+        response = JSONResponse({"commands": [command], "cursor": command["seq"]})
+        if len(response.body) > MAX_BODY_BYTES:
+            raise HTTPException(413, "single command exceeds bridge body limit")
+        session.command_seq = command["seq"]
         command.update(
             state="queued",
             _game_datetime=session.game_datetime,
@@ -1459,7 +1531,12 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             return result
 
     async def acknowledge_locked(self, session, command_id, ack, *, internal_audio=False):
-        self.ensure_current(session, ack.runtime_generation)
+        if internal_audio and session.closed and session.cleanup_pending:
+            # Closing still settles trusted render receipts before purging ambient rows.
+            if ack.runtime_generation != session.request.runtime_generation:
+                raise HTTPException(409, "stale runtime generation")
+        else:
+            self.ensure_current(session, ack.runtime_generation)
         command = session.commands.get(command_id)
         if command is None:
             raise HTTPException(404, "unknown command")
@@ -1660,24 +1737,36 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
 
     async def close_session_locked(self, session):
         """Close after the caller acquires session.lock, including admin transactions."""
-        if session.closed:
+        if session.closed and not session.cleanup_pending:
             return
-        self.cancel(session)
-        await self.stop_session_work(session)
-        await self.speech.forget(session_id=session.id)
-        if self.social is not None:
-            await self.social.forget_session(session.id)
-        if self.social_scheduler is not None:
-            self.social_scheduler.forget(session.id)
-        if self.neighborhood.scheduler is not None:
-            self.neighborhood.scheduler.forget(session.id)
-        session.social_scenes.clear()
-        if self.trigger_engine:
-            self.trigger_engine.cancel_session(session.id)
+        profile = session.request.profile_id
+        cleanup_key = (profile, session.id)
+        self.cleanup_pending.setdefault(cleanup_key, None)
+        session.cleanup_pending = True
+        # Revoke authorization immediately; closed does not imply the purge committed.
         session.closed = True
-        if session.task:
-            await asyncio.gather(session.task, return_exceptions=True)
-        await self.db("end_session", session.request.profile_id, session.id)
+        try:
+            self.cancel(session)
+            if session.task:
+                await asyncio.gather(session.task, return_exceptions=True)
+            await self.stop_session_work(session)
+            await self.speech.forget(session_id=session.id)
+            if self.social is not None:
+                await self.social.forget_session(session.id)
+            if self.social_scheduler is not None:
+                self.social_scheduler.forget(session.id)
+            if self.neighborhood.scheduler is not None:
+                self.neighborhood.scheduler.forget(session.id)
+            session.social_scenes.clear()
+            if self.trigger_engine:
+                self.trigger_engine.cancel_session(session.id)
+            await self.db("begin_session_cleanup", profile, session.id)
+            await self.db("end_session", profile, session.id)
+        except Exception as exc:
+            self.cleanup_pending[cleanup_key] = type(exc).__name__
+            raise HTTPException(503, "session cleanup pending; automatic retry scheduled") from exc
+        session.cleanup_pending = False
+        self.cleanup_pending.pop(cleanup_key, None)
         session.actors.clear()
         session.commands.clear()
         session.action_outcomes.clear()
@@ -1688,22 +1777,77 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         session.delivery_turns.clear()
         session.changed.set()
 
+    def cleanup_diagnostics(self):
+        pending = [
+            {"profile_id": profile, "session_id": sid, "error_type": error}
+            for (profile, sid), error in sorted(self.cleanup_pending.items())
+        ]
+        return {
+            "status": "pending" if pending or self.cleanup_recovery_pending else "complete",
+            "message": (
+                "Session cleanup pending. Session-only history may remain on disk; "
+                "cleanup retries automatically each maintenance tick and at startup."
+                if pending or self.cleanup_recovery_pending else "No session cleanup pending."
+            ),
+            "recovery_pending": self.cleanup_recovery_pending,
+            "recovery_error_type": self.cleanup_recovery_error,
+            "sessions": pending,
+        }
+
     async def expire_sessions(self):
+        async with self.open_lock:
+            if self.cleanup_recovery_pending:
+                try:
+                    unfinished = await self.db("unfinished_sessions")
+                except Exception as exc:
+                    self.cleanup_recovery_error = type(exc).__name__
+                else:
+                    # A crash may precede the pending marker write. All unfinished
+                    # sessions belong to the previous service owner at startup.
+                    for row in unfinished:
+                        self.cleanup_pending.setdefault(
+                            (row["profile_id"], row["session_id"]), None
+                        )
+                    self.cleanup_recovery_pending = False
+                    self.cleanup_recovery_error = None
+            for profile, sid in list(self.cleanup_pending):
+                if sid in self.sessions:
+                    continue
+                try:
+                    await self.db("begin_session_cleanup", profile, sid)
+                    await self.db("end_session", profile, sid)
+                except Exception as exc:
+                    self.cleanup_pending[(profile, sid)] = type(exc).__name__
+                else:
+                    self.cleanup_pending.pop((profile, sid), None)
         for session in list(self.sessions.values()):
             if (
-                not session.closed
-                and self.clock() - session.last_activity > self.settings.session_timeout_seconds
+                session.cleanup_pending or (
+                    not session.closed
+                    and self.clock() - session.last_activity > self.settings.session_timeout_seconds
+                )
             ):
-                await self.close_session(session)
+                try:
+                    await self.close_session(session)
+                except HTTPException:
+                    # One unavailable purge must not stop maintenance or other cleanups.
+                    pass
         for sid in list(self.sessions):
-            if len(self.sessions) > self.settings.max_sessions * 2 and self.sessions[sid].closed:
+            if (
+                len(self.sessions) > self.settings.max_sessions * 2
+                and self.sessions[sid].closed and not self.sessions[sid].cleanup_pending
+            ):
                 del self.sessions[sid]
 
     async def maintain(self):
         while True:
             await asyncio.sleep(1)
             self.refresh_speech_status()
-            await self.expire_raw_history()
+            try:
+                await self.expire_raw_history()
+            except sqlite3.OperationalError:
+                # Retry retention next tick without blocking pending session cleanup.
+                pass
             if self.neighborhood.scheduler is not None:
                 self.neighborhood.scheduler.tick()
             if self.skill_scheduler is not None and self._skills_first:
@@ -1748,7 +1892,11 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
 
     async def shutdown(self):
         for session in list(self.sessions.values()):
-            await self.close_session(session)
+            try:
+                await self.close_session(session)
+            except HTTPException:
+                # The durable unfinished row survives shutdown for startup recovery.
+                pass
         await self.speech.close()
         if self.social is not None:
             await self.social.aclose()

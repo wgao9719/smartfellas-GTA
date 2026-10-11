@@ -30,6 +30,10 @@ For example, a local endpoint can be `http://127.0.0.1:1234/v1`. The service ref
 
 Saving configuration always revokes cloud consent. Enabling cloud sends selected character context, relevant memories, and dialogue to the saved endpoint. The consent request binds the full saved configuration, including models, prices, and budgets. A stale dashboard cannot approve a changed configuration.
 
+Every hosted model request passes a shared scrubber immediately before HTTP dispatch. It replaces recognizable API keys/tokens, configured bridge and provider credential values, authorization strings, private-key blocks, e-mail addresses, telephone and card-like numbers, IP addresses, Windows user-profile paths, and associated usernames with `[REDACTED]`. Filtering includes nested persona/context JSON, action-repair messages, social dialogue, skill candidates, and embeddings. Request bodies are not logged; HTTP failures retain the filtered request. The provider credential is still sent in its required authentication header.
+
+The filter preserves ordinary game dialogue and leaves local inference and stored memories unchanged. It recognizes patterns and configured values; it is not a guarantee of anonymity or detection of every personal fact, encoding, or novel secret format. Cloud consent is still required.
+
 Select **Revoke cloud consent** to stop remote requests. The runtime cancels active turns and speech, joins cleanup, and persists revoked consent. This state survives restart even when `LLS_CLOUD_OPT_IN=1` remains in the environment. Ordinary shutdown does not revoke stored consent.
 
 ## Reservations and estimates

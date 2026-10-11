@@ -89,13 +89,15 @@ class Manifest(StrictModel):
 
 class SessionOpen(StrictModel):
     schema_version: Literal[1] = 1
-    profile_id: Identifier
+    profile_id: Identifier | None = None
+    save_slot: Identifier | None = None
+    profile_confirmed: bool = False
     parent_branch_id: Identifier | None = None
     protagonist_id: Protagonist
     game_datetime: datetime
     runtime_generation: int = Field(ge=0)
     manifest: Manifest
-    capabilities: list[ActionId] = Field(default_factory=list, max_length=16)
+    capabilities: list[Identifier] = Field(default_factory=list, max_length=16)
 
 
 class Position(StrictModel):
@@ -305,6 +307,7 @@ class SessionResponse(StrictModel):
     policy_version: str
     schema_version: Literal[1] = 1
     capabilities: list[ActionId]
+    capability_flags: list[Identifier] = Field(default_factory=list, max_length=64)
     branch_id: Identifier
 
 
@@ -340,6 +343,7 @@ class PinCommand(StrictModel):
 
 
 class Command(StrictModel):
+    schema_version: Literal[1]
     id: Identifier
     seq: int = Field(ge=1)
     kind: Literal["dialogue.chunk", "action.execute", "scene.cancel", "status", "actor.pin"]

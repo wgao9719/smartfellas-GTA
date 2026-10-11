@@ -7,6 +7,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup><EmbeddedResource Include="../../tests/fixtures/display_text.json" LogicalName="LivingNPC.Tests.display_text.json" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../../tests/fixtures/wire_contract.json" LogicalName="LivingNPC.Tests.wire_contract.json" /></ItemGroup>
   <ItemGroup>
     <None Include="../../tests/fixtures/ped_role_vectors.json" Link="ped_role_vectors.json" CopyToOutputDirectory="PreserveNewest" />
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"><_Parameter1>ShvdnReference</_Parameter1><_Parameter2>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../vendor-refs/ScriptHookVDotNet3.dll'))</_Parameter2></AssemblyAttribute>

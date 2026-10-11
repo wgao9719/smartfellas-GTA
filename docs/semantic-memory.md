@@ -31,6 +31,7 @@ Both modes reject embedded credentials, query strings, and fragments. Disabled c
 The service does not download models or start an embedding server.
 
 Remote embeddings send query text and authorized memory text to the configured provider.
+The shared [outbound scrubber](provider-controls.md#hosted-ai) filters secrets and recognizable personal data before HTTP dispatch, without changing locally stored source text.
 Remote requests require the existing cloud consent, an environment `LLM_API_KEY`, configured model pricing, and available request budgets.
 Saving changed provider configuration revokes cloud consent. The embedding configuration participates in the consent revision.
 Local requests never receive the hosted API key. The client disables redirects and environment proxies.

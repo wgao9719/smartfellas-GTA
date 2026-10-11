@@ -263,11 +263,14 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             {
                 "session_id": session.id,
                 "profile_id": session.request.profile_id,
+                "save_slot": session.request.save_slot,
+                "profile_confirmed": session.request.profile_confirmed,
                 "branch_id": session.branch_id,
                 "protagonist_id": session.request.protagonist_id,
                 "game_datetime": session.game_datetime,
                 "closed": session.closed,
                 "actor_count": len(session.actors),
+                "cleanup_pending": session.cleanup_pending,
             }
             for session in runtime.sessions.values()
         ]
@@ -275,10 +278,12 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             {
                 "profiles": await runtime.db("list_profiles"),
                 "sessions": sessions,
+                "session_cleanup": runtime.cleanup_diagnostics(),
                 "provider": runtime.provider.name,
                 "speech": "unverified",
                 "game_verified": False,
                 "selected_branches": getattr(runtime, "selected_branches", {}),
+                "profile_warning": runtime.profile_warning,
             }
         )
 
@@ -344,11 +349,17 @@ def create_admin_router(settings, runtime, repository) -> APIRouter:
             {
                 "session_id": session.id,
                 "profile_id": session.request.profile_id,
+                "save_slot": session.request.save_slot,
+                "profile_confirmed": session.request.profile_confirmed,
                 "branch_id": session.branch_id,
                 "protagonist_id": session.request.protagonist_id,
                 "game_datetime": session.game_datetime,
                 "closed": session.closed,
                 "provider": runtime.provider.name,
+                "cleanup_pending": session.cleanup_pending,
+                "cleanup_error_type": runtime.cleanup_pending.get(
+                    (session.request.profile_id, session.id)
+                ),
                 "manifest": session.request.manifest.model_dump(),
                 "world": {k: v for k, v in session.world.items() if not k.startswith("_")},
                 "actors": [

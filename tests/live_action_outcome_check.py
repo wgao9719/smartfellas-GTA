@@ -7,12 +7,12 @@ action is executed. Service authorization outcomes never prove native effects.
 import asyncio
 import json
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import httpx
+from live_cleanup import temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -178,7 +178,7 @@ def verify(database, branch, outcomes):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="lls-action-outcomes-") as temporary:
+    with temporary_directory(prefix="lls-action-outcomes-") as temporary:
         directory = Path(temporary)
         database = directory / "skills.sqlite3"
         with Repository(database) as repo:

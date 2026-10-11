@@ -54,8 +54,10 @@ Neighborhood events encode durable simulation state and are outside this raw-his
 policy. The service does not keep raw microphone recordings by default; temporary
 capture/playback cleanup is unchanged.
 
-Schema **v5** adds indexed UTC collection timestamps using the existing forward-only
-migration chain. Earlier databases lack collection times, so existing events receive
+Schema **v6** adds indexed UTC collection timestamps after the unchanged **v4 → v5**
+session-cleanup migration. Existing databases advance **v5 → v6**; fresh databases
+create both tables in one transaction and write v6 directly. Earlier databases lack
+collection times, so existing events receive
 a fresh retention window at migration. Reopening does not restart that window.
 Earlier releases did not record all general-recall dependencies; missing historical
 links cannot be reconstructed. Reset the character or delete the profile to erase
@@ -72,5 +74,8 @@ of forensic removal from storage media or external providers.
 Regression tests reproduce source-text export leakage, general-recall paraphrases,
 stale cached hearing, absent retention, and missing actor export before their fixes.
 Coverage includes source replay suppression, gaps in derivation chains, actor/profile
-isolation, clock boundaries, durable relationship preservation, and schema v1/v2/v3/v4
-upgrades. See [Development validation](development-validation.md) for the final run.
+isolation, clock boundaries, durable relationship preservation, and schema v1/v2/v3/v4/v5
+upgrades. Genuine older-schema fixtures check preserved data and cleanup intent;
+a SQLite trace verifies direct fresh-v6 creation, and v7 is refused. Transient
+retention database errors retry without stopping pending session cleanup.
+See [Development validation](development-validation.md) for the final run.

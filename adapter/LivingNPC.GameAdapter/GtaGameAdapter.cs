@@ -30,6 +30,7 @@ namespace LivingNPC.GameAdapter
             public bool ObservedActive;
         }
         private const string Decorator = "lls_runtime_binding_v1";
+        private readonly AdapterLog log;
         private readonly int thread = Thread.CurrentThread.ManagedThreadId;
         private readonly Dictionary<string, Binding> bindings = new Dictionary<string, Binding>();
         private readonly Dictionary<string, TaskRecord> tasks = new Dictionary<string, TaskRecord>();
@@ -39,11 +40,13 @@ namespace LivingNPC.GameAdapter
         private string subtitle = "", status = "Living Los Santos: connecting";
         private DateTimeOffset subtitleUntil;
         public string? SelectedActorId { get; private set; }
+        public void ClearSelection() { OnScriptThread(); SelectedActorId = null; }
         public bool Recording { get; private set; }
         public bool SubtitleRendered { get; private set; }
         public void Forget(Command command) { OnScriptThread(); tasks.Remove(command.Id); }
-        public GtaGameAdapter()
+        public GtaGameAdapter(AdapterLog log)
         {
+            this.log = log;
             if (!Function.Call<bool>(Hash.DECOR_IS_REGISTERED_AS_TYPE, Decorator, 3)) Function.Call(Hash.DECOR_REGISTER, Decorator, 3);
         }
         private void OnScriptThread() { if (Thread.CurrentThread.ManagedThreadId != thread) throw new InvalidOperationException("Game API outside script thread"); }
@@ -56,23 +59,38 @@ namespace LivingNPC.GameAdapter
                 CutsceneActive = Game.IsCutsceneActive, RandomEventActive = Game.IsRandomEventActive, Paused = Game.IsPaused,
                 Loading = Game.IsLoading, GameDatetime = World.CurrentDate, ProtagonistId = protagonist, Known = protagonist != "unknown" };
         }
-        // Binds the nearest registered or fully civilian ambient ped. Refused peds are never decorated.
-        public ActorState? SelectNearest(long generation, out ActorState? refusal)
+        // Binds a nearby civilian in the camera cone. Refused peds are never decorated.
+        public ActorState? SelectTarget(long generation, out ActorState? refusal)
         {
-            OnScriptThread(); refusal = null;
+            OnScriptThread(); refusal = null; SelectedActorId = null;
             if (!ReadWorld().Safe) return null;
             var player = Game.Player.Character;
-            foreach (var ped in World.GetNearbyPeds(player, 8f).Where(p => p.Exists() && !p.IsDead).OrderBy(p => p.Position.DistanceTo(player.Position)))
+            var playerPosition = player.Position;
+            var cameraPosition = ToCoreVector(GameplayCamera.Position); var lookDirection = ToCoreVector(GameplayCamera.Direction);
+            var nearby = World.GetNearbyPeds(player, (float)TargetScorer.MaximumDistance).Where(p => p.Exists() && !p.IsDead).ToDictionary(p => p.Handle);
+            var candidates = nearby.Values.Select(p => new { Ped = p, Position = p.Position })
+                .Select(p => new TargetCandidate(p.Ped.Handle, p.Position.DistanceTo(playerPosition), ToCoreVector(p.Position)));
+            var eligible = new List<TargetCandidate>(); var registered = new Dictionary<int, Binding>();
+            // Refusal feedback remains nearest by player distance, independently of the camera cone.
+            foreach (var candidate in candidates.OrderBy(c => c.Distance).ThenBy(c => c.Handle))
             {
+                var ped = nearby[candidate.Handle];
                 var existing = bindings.Values.FirstOrDefault(b => b.Ped.Handle == ped.Handle && b.Generation == generation && Valid(b));
-                if (existing != null) { SelectedActorId = existing.ActorId; return Resolve(existing.ActorId); }
-                var facts = Sample(ped, null); var classified = PedClassifier.Classify(facts);
-                if (classified.Ownership != Ownership.Ambient || classified.Role != PedRole.Civilian || classified.Policy != ControlPolicy.Ambient)
+                var facts = Sample(ped, existing); var classified = PedClassifier.Classify(facts);
+                if ((classified.Ownership != Ownership.Ambient && (existing == null || classified.Ownership != Ownership.ModOwned)) ||
+                    classified.Role != PedRole.Civilian || classified.Policy != ControlPolicy.Ambient)
                 {
                     refusal ??= new ActorState { Name = PedRoleTable.Label(classified.Role), Role = classified.Role, RoleReason = classified.Reason, Ownership = classified.Ownership,
-                        Policy = classified.Policy, Facts = facts, Exists = true, Alive = true, Generation = generation, Distance = ped.Position.DistanceTo(player.Position) };
+                        Policy = classified.Policy, Facts = facts, Exists = true, Alive = true, Generation = generation, Distance = (float)candidate.Distance };
                     continue;
                 }
+                eligible.Add(candidate);
+                if (existing != null) registered[ped.Handle] = existing;
+            }
+            foreach (var candidate in TargetScorer.Rank(eligible, cameraPosition, lookDirection))
+            {
+                if (registered.TryGetValue(candidate.Handle, out var existing)) { SelectedActorId = existing.ActorId; return Resolve(existing.ActorId); }
+                var ped = nearby[candidate.Handle];
                 if (bindings.Count >= 36) return null;
                 var id = Guid.NewGuid().ToString();
                 var marker = new Random(Guid.NewGuid().GetHashCode()).Next(1, int.MaxValue);
@@ -83,6 +101,7 @@ namespace LivingNPC.GameAdapter
             }
             return null;
         }
+        private static TargetVector ToCoreVector(Vector3 vector) => new TargetVector(vector.X, vector.Y, vector.Z);
         // Static facts are cached per binding. Dynamic facts are sampled at most once per frame.
         private PedFacts? Sample(Ped ped, Binding? binding)
         {
@@ -237,7 +256,7 @@ namespace LivingNPC.GameAdapter
         public void Release(Command command, ActorState actor, string actionId)
         {
             OnScriptThread();
-            try
+            TaskReleaseGuard.Run(() =>
             {
                 if (!tasks.TryGetValue(command.Id, out var task) || !bindings.TryGetValue(actor.ActorId, out var binding) || command.ActorId != actor.ActorId ||
                     binding.Instance != actor.RuntimeInstanceId || binding.Instance != command.RuntimeInstanceId ||
@@ -248,9 +267,7 @@ namespace LivingNPC.GameAdapter
                 if (classified.Policy == ControlPolicy.Protected || (classified.Ownership != Ownership.Ambient && classified.Ownership != Ownership.ModOwned)) return;
                 var statusNow = Function.Call<int>(Hash.GET_SCRIPT_TASK_STATUS, binding.Ped.Handle, task.Hash);
                 if (statusNow == 0 || statusNow == 1) binding.Ped.Task.ClearAll();
-            }
-            catch (Exception) { }
-            finally { tasks.Remove(command.Id); }
+            }, () => tasks.Remove(command.Id), log);
         }
         public void Reset() { OnScriptThread(); foreach (var binding in bindings.Values) ReleasePersistence(binding); bindings.Clear(); dropped.Clear(); tasks.Clear(); SelectedActorId = null; Recording = false; ClearSubtitle(); }
         // Dialogue renders verbatim. Unsafe text never renders, so it never earns a subtitle receipt.

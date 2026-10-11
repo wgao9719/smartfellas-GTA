@@ -145,76 +145,25 @@ class Repository:
 
     def _migrate(self) -> None:
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version > 5:
+        if version > 6:
             raise RuntimeError("database schema is newer than this service")
-        if version == 5:
+        if version == 6:
             return
-        if version == 4:
-            # Old schemas have game time only. Start their wall-clock retention window
-            # at migration rather than treating a fictional game date as collection time.
-            self.connection.executescript("""
-            BEGIN IMMEDIATE;
-            CREATE TABLE IF NOT EXISTS event_retention (
-              profile_id TEXT NOT NULL, event_id TEXT NOT NULL,
-              recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000+00:00','now')),
-              PRIMARY KEY(profile_id,event_id),
-              FOREIGN KEY(profile_id,event_id) REFERENCES events ON DELETE CASCADE
+        # Share the exact schema definitions between upgrades and direct creation.
+        # Each existing database advances in its own forward-only transaction.
+        updates = {
+            1: """
+            CREATE TABLE ai_requests (
+              request_id TEXT PRIMARY KEY, day TEXT NOT NULL, budget_class TEXT NOT NULL,
+              provider TEXT NOT NULL, model TEXT NOT NULL, reserved_micro_usd INTEGER NOT NULL,
+              charged_micro_usd INTEGER NOT NULL, state TEXT NOT NULL,
+              input_tokens INTEGER, output_tokens INTEGER, price_json TEXT,
+              created_at TEXT NOT NULL
             );
-            INSERT OR IGNORE INTO event_retention(profile_id,event_id)
-              SELECT profile_id,event_id FROM events;
-            CREATE INDEX IF NOT EXISTS event_retention_age ON event_retention(recorded_at);
-            PRAGMA user_version=5;
-            COMMIT;
-            """)
-            return
-        if version == 3:
-            # Social windows index only decision- and hearing-shaped memories, so action
-            # outcomes and reports never lengthen a walk. Erasure markers and source events
-            # gain lookups. The source index leads with event_id: on default statistics a
-            # profile-first index wins profile+memory_id joins and scans the whole profile.
-            # Derivations hold only identifiers: this actor's memories citing the derived
-            # event repeat or answer this actor's memories citing the source event.
-            self.connection.executescript("""
-            BEGIN IMMEDIATE;
-            CREATE INDEX IF NOT EXISTS scrub_lookup ON scrub_audit(profile_id,operation,object_id);
-            CREATE INDEX IF NOT EXISTS memory_social_window
-              ON memories(profile_id,actor_id,protagonist_id,provenance,game_datetime)
-              WHERE provenance='system_fact' AND substr(text,1,11)='I chose to '
-              OR provenance='reported' AND instr(text,' told me: ')>1;
-            CREATE INDEX IF NOT EXISTS memory_source_event ON memory_sources(event_id,profile_id);
-            CREATE TABLE IF NOT EXISTS memory_derivations (
-              profile_id TEXT NOT NULL REFERENCES profiles ON DELETE CASCADE,
-              actor_id TEXT NOT NULL, source_event_id TEXT NOT NULL,
-              derived_event_id TEXT NOT NULL,
-              PRIMARY KEY(profile_id,actor_id,source_event_id,derived_event_id)
-            );
-            -- Recover what earlier speaker events prove: the speaker's two copies of each
-            -- line, and lines retold from a source. Topic and heard-line carriers before
-            -- v4 left no record and cannot be recovered.
-            WITH spoken AS (
-              SELECT profile_id,event_id,json_extract(data,'$.payload.teller_id') AS actor_id,
-                json_extract(data,'$.payload.delivery_receipt_id') AS receipt_id,
-                json_extract(data,'$.payload.reported_event_id') AS source_id
-              FROM events WHERE json_extract(data,'$.event_type')='social.quote_delivered'
-              AND json_extract(data,'$.provenance')='directly_observed'
-              AND json_extract(data,'$.payload.teller_id') IS NOT NULL
-            )
-            INSERT OR IGNORE INTO memory_derivations
-            SELECT profile_id,actor_id,receipt_id,event_id FROM spoken WHERE receipt_id IS NOT NULL
-            UNION ALL SELECT profile_id,actor_id,event_id,receipt_id FROM spoken
-              WHERE receipt_id IS NOT NULL
-            UNION ALL SELECT profile_id,actor_id,source_id,receipt_id FROM spoken
-              WHERE source_id IS NOT NULL AND receipt_id IS NOT NULL
-            UNION ALL SELECT profile_id,actor_id,source_id,event_id FROM spoken
-              WHERE source_id IS NOT NULL;
-            PRAGMA user_version=4;
-            COMMIT;
-            """)
-            self._migrate()
-            return
-        if version == 2:
-            self.connection.executescript("""
-            BEGIN IMMEDIATE;
+            CREATE INDEX ai_requests_day_class ON ai_requests(day,budget_class);
+            CREATE TABLE service_settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+            """,
+            2: """
             CREATE TABLE IF NOT EXISTS skill_versions (
               profile_id TEXT NOT NULL REFERENCES profiles ON DELETE CASCADE,
               skill_id TEXT NOT NULL, version INTEGER NOT NULL, source TEXT NOT NULL,
@@ -246,30 +195,65 @@ class Repository:
                 ON DELETE CASCADE,
               FOREIGN KEY(profile_id,event_id) REFERENCES events ON DELETE CASCADE
             );
-            PRAGMA user_version=3;
-            COMMIT;
-            """)
-            self._migrate()
-            return
-        if version == 1:
-            self.connection.executescript("""
-            BEGIN IMMEDIATE;
-            CREATE TABLE ai_requests (
-              request_id TEXT PRIMARY KEY, day TEXT NOT NULL, budget_class TEXT NOT NULL,
-              provider TEXT NOT NULL, model TEXT NOT NULL, reserved_micro_usd INTEGER NOT NULL,
-              charged_micro_usd INTEGER NOT NULL, state TEXT NOT NULL,
-              input_tokens INTEGER, output_tokens INTEGER, price_json TEXT,
-              created_at TEXT NOT NULL
+            """,
+            # Actor-local derivations and bounded social-history indexes.
+            3: """
+            CREATE INDEX IF NOT EXISTS scrub_lookup ON scrub_audit(profile_id,operation,object_id);
+            CREATE INDEX IF NOT EXISTS memory_social_window
+              ON memories(profile_id,actor_id,protagonist_id,provenance,game_datetime)
+              WHERE provenance='system_fact' AND substr(text,1,11)='I chose to '
+              OR provenance='reported' AND instr(text,' told me: ')>1;
+            CREATE INDEX IF NOT EXISTS memory_source_event ON memory_sources(event_id,profile_id);
+            CREATE TABLE IF NOT EXISTS memory_derivations (
+              profile_id TEXT NOT NULL REFERENCES profiles ON DELETE CASCADE,
+              actor_id TEXT NOT NULL, source_event_id TEXT NOT NULL,
+              derived_event_id TEXT NOT NULL,
+              PRIMARY KEY(profile_id,actor_id,source_event_id,derived_event_id)
             );
-            CREATE INDEX ai_requests_day_class ON ai_requests(day,budget_class);
-            CREATE TABLE service_settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);
-            PRAGMA user_version=2;
-            COMMIT;
-            """)
-            self._migrate()
-            return
-        self.connection.executescript("""
-        BEGIN IMMEDIATE;
+            -- Recover what earlier speaker events prove: the speaker's two copies of each
+            -- line, and lines retold from a source. Topic and heard-line carriers before
+            -- v4 left no record and cannot be recovered.
+            WITH spoken AS (
+              SELECT profile_id,event_id,json_extract(data,'$.payload.teller_id') AS actor_id,
+                json_extract(data,'$.payload.delivery_receipt_id') AS receipt_id,
+                json_extract(data,'$.payload.reported_event_id') AS source_id
+              FROM events WHERE json_extract(data,'$.event_type')='social.quote_delivered'
+              AND json_extract(data,'$.provenance')='directly_observed'
+              AND json_extract(data,'$.payload.teller_id') IS NOT NULL
+            )
+            INSERT OR IGNORE INTO memory_derivations
+            SELECT profile_id,actor_id,receipt_id,event_id FROM spoken WHERE receipt_id IS NOT NULL
+            UNION ALL SELECT profile_id,actor_id,event_id,receipt_id FROM spoken
+              WHERE receipt_id IS NOT NULL
+            UNION ALL SELECT profile_id,actor_id,source_id,receipt_id FROM spoken
+              WHERE source_id IS NOT NULL AND receipt_id IS NOT NULL
+            UNION ALL SELECT profile_id,actor_id,source_id,event_id FROM spoken
+              WHERE source_id IS NOT NULL;
+            """,
+            # v4 -> v5 remains the session-cleanup migration.
+            4: """
+            CREATE TABLE IF NOT EXISTS session_cleanup_pending (
+              profile_id TEXT NOT NULL, session_id TEXT NOT NULL,
+              PRIMARY KEY(profile_id,session_id),
+              FOREIGN KEY(profile_id,session_id) REFERENCES game_sessions ON DELETE CASCADE
+            );
+            """,
+            # v5 -> v6 adds collection time. Existing game dates cannot tell us
+            # when raw history was collected, so migration starts its window.
+            5: """
+            CREATE TABLE IF NOT EXISTS event_retention (
+              profile_id TEXT NOT NULL, event_id TEXT NOT NULL,
+              recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f000+00:00','now')),
+              PRIMARY KEY(profile_id,event_id),
+              FOREIGN KEY(profile_id,event_id) REFERENCES events ON DELETE CASCADE
+            );
+            INSERT OR IGNORE INTO event_retention(profile_id,event_id)
+              SELECT profile_id,event_id FROM events;
+            CREATE INDEX IF NOT EXISTS event_retention_age ON event_retention(recorded_at);
+            """,
+        }
+        if version == 0:
+            initial = """
         CREATE TABLE profiles (
           profile_id TEXT PRIMARY KEY, save_slot TEXT NOT NULL, settings TEXT NOT NULL,
           created_at TEXT NOT NULL, active_branch TEXT
@@ -364,10 +348,17 @@ class Repository:
           audit_id INTEGER PRIMARY KEY, profile_id TEXT NOT NULL,
           operation TEXT NOT NULL, object_id TEXT NOT NULL, created_at TEXT NOT NULL
         );
-        PRAGMA user_version=1;
-        COMMIT;
-        """)
-        self._migrate()
+            """
+            self.connection.executescript(
+                "BEGIN IMMEDIATE;\n" + initial + "".join(updates.values())
+                + "\nPRAGMA user_version=6;\nCOMMIT;"
+            )
+            return
+        for previous in range(version, 6):
+            self.connection.executescript(
+                "BEGIN IMMEDIATE;\n" + updates[previous]
+                + f"\nPRAGMA user_version={previous + 1};\nCOMMIT;"
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -388,8 +379,12 @@ class Repository:
             existing = self.connection.execute(
                 "SELECT * FROM profiles WHERE profile_id=?", (profile_id,)
             ).fetchone()
-            if existing and save_slot and existing["save_slot"] != save_slot:
+            if existing and save_slot and existing["save_slot"] not in ("", save_slot):
                 raise ValueError("profile already belongs to another save association")
+            if existing and save_slot and not existing["save_slot"]:
+                self.connection.execute(
+                    "UPDATE profiles SET save_slot=? WHERE profile_id=?", (save_slot, profile_id)
+                )
             self.connection.execute(
                 "INSERT OR IGNORE INTO profiles VALUES(?,?,?,?,NULL)",
                 (profile_id, save_slot, _json(settings or {}), _now()),
@@ -485,6 +480,11 @@ class Repository:
             if existing:
                 if existing["ended_at"]:
                     raise ValueError("cannot reuse an ended gameplay session")
+                if self.connection.execute(
+                    "SELECT 1 FROM session_cleanup_pending WHERE profile_id=? AND session_id=?",
+                    (profile_id, session_id),
+                ).fetchone():
+                    raise ValueError("cannot reuse a gameplay session pending cleanup")
                 return dict(existing)
             branch_id = self.open_timeline(
                 profile_id, game_datetime, parent_branch_id=parent_branch_id
@@ -494,6 +494,37 @@ class Repository:
                 (profile_id, session_id, branch_id, _date(game_datetime)),
             )
             return {"profile_id": profile_id, "session_id": session_id, "branch_id": branch_id}
+
+    def unfinished_sessions(self) -> list[dict]:
+        with self._lock:
+            return [
+                dict(row)
+                for row in self.connection.execute(
+                    "SELECT g.profile_id,g.session_id FROM game_sessions g "
+                    "LEFT JOIN session_cleanup_pending p USING(profile_id,session_id) "
+                    "WHERE g.ended_at IS NULL OR p.session_id IS NOT NULL "
+                    "ORDER BY g.profile_id,g.session_id"
+                )
+            ]
+
+    def begin_session_cleanup(self, profile_id: str, session_id: str) -> None:
+        with self._lock, self.connection:
+            self.connection.execute(
+                "INSERT OR IGNORE INTO session_cleanup_pending(profile_id,session_id) "
+                "SELECT profile_id,session_id FROM game_sessions "
+                "WHERE profile_id=? AND session_id=? AND ended_at IS NULL",
+                (profile_id, session_id),
+            )
+
+    def pending_session_cleanups(self) -> list[dict]:
+        with self._lock:
+            return [
+                dict(row)
+                for row in self.connection.execute(
+                    "SELECT profile_id,session_id FROM session_cleanup_pending "
+                    "ORDER BY profile_id,session_id"
+                )
+            ]
 
     def end_session(self, profile_id: str, session_id: str) -> None:
         with self._lock, self.connection:
@@ -507,8 +538,13 @@ class Repository:
                 (profile_id, session_id),
             )
             self.connection.execute(
-                "UPDATE game_sessions SET ended_at=? WHERE profile_id=? AND session_id=?",
+                "UPDATE game_sessions SET ended_at=COALESCE(ended_at,?) "
+                "WHERE profile_id=? AND session_id=?",
                 (_now(), profile_id, session_id),
+            )
+            self.connection.execute(
+                "DELETE FROM session_cleanup_pending WHERE profile_id=? AND session_id=?",
+                (profile_id, session_id),
             )
 
     def register_actor(self, profile_id: str, actor: dict) -> dict:
