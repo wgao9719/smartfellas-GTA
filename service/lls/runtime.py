@@ -13,8 +13,10 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
 from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
+from .bridge_limits import MAX_BODY_BYTES
 from .context import build_context
 from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
 from .memory_index import MemoryIndex
@@ -390,10 +392,9 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
         presented = {"dialogue.chunk": "speaker", "status": "message"}.get(kind)
         if presented and isinstance(payload.get(presented), str):
             payload = {**payload, presented: display_text(payload[presented])}
-        session.command_seq += 1
         command = {
             "id": self.id_factory("cmd"),
-            "seq": session.command_seq,
+            "seq": session.command_seq + 1,
             "kind": kind,
             "session_id": session.id,
             "actor_id": actor_id,
@@ -404,6 +405,10 @@ class Runtime(SpeechRuntime, SocialRuntime, SkillRuntime, OutcomeRuntime, PinRun
             "payload": payload,
         }
         Command.model_validate(command)
+        response = JSONResponse({"commands": [command], "cursor": command["seq"]})
+        if len(response.body) > MAX_BODY_BYTES:
+            raise HTTPException(413, "single command exceeds bridge body limit")
+        session.command_seq = command["seq"]
         command.update(
             state="queued",
             _game_datetime=session.game_datetime,

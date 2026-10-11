@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from service.lls.__main__ import (
@@ -15,6 +16,7 @@ from service.lls.__main__ import (
     fixture_session,
 )
 from service.lls.app import create_app
+from service.lls.bridge_limits import LIMITS_PATH, MAX_BODY_BYTES, MAX_COMMANDS
 from service.lls.display import is_display_safe
 from service.lls.protocol import ActionProposal, Event, VoiceControl
 from service.lls.providers import FakeProvider
@@ -108,6 +110,115 @@ async def utterance(client, sid, text="Please look at me.", seq=3):
         "/v1/bridge/events:batch", json={"session_id": sid, "events": [event]}
     )
     return response, event
+
+
+def test_bridge_limits_match_shared_adapter_contract():
+    limits = json.loads(LIMITS_PATH.read_text(encoding="utf-8"))
+    assert limits == {"max_body_bytes": MAX_BODY_BYTES, "max_commands": MAX_COMMANDS}
+    assert MAX_BODY_BYTES == 256 * 1024
+    assert MAX_COMMANDS == 64
+
+
+@pytest.mark.parametrize(
+    "text", ["short", "a" * 4000, "\u754c" * 4000], ids=["count", "bytes", "utf8"]
+)
+async def test_command_backlog_drains_in_bounded_ordered_pages(client, text):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    queued = [
+        runtime.command(
+            session, "dialogue.chunk", "npc-1",
+            {"text": text, "speaker": "Neighbor", "scene_id": "backlog",
+             "turn_id": "backlog", "chunk_index": index, "final": index == 79},
+        )
+        for index in range(80)
+    ]
+    cursor, received, pages = 0, [], []
+    while len(received) < len(queued):
+        response = await client.get(
+            "/v1/bridge/commands", params={"after": cursor, "wait_seconds": 0}
+        )
+        assert response.status_code == 200, response.text
+        page = response.json()
+        assert len(response.content) <= MAX_BODY_BYTES
+        assert 0 < len(page["commands"]) <= MAX_COMMANDS
+        assert page["cursor"] == page["commands"][-1]["seq"] > cursor
+        # Retrying a page must not remove commands or advance a hidden cursor.
+        retry = await client.get(
+            "/v1/bridge/commands", params={"after": cursor, "wait_seconds": 0}
+        )
+        assert retry.content == response.content
+        received.extend(page["commands"])
+        pages.append(page)
+        cursor = page["cursor"]
+    assert len(pages) > 1
+    assert [command["id"] for command in received] == [command["id"] for command in queued]
+    assert [command["seq"] for command in received] == list(range(1, 81))
+    assert all(command["payload"]["text"] == text for command in received)
+    assert all(command["state"] == "queued" for command in queued)
+    drained = await client.get(
+        "/v1/bridge/commands", params={"after": cursor, "wait_seconds": 0}
+    )
+    assert drained.json() == {"commands": [], "cursor": cursor}
+
+
+async def test_oversized_single_command_is_rejected_before_enqueue(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    with pytest.raises(HTTPException) as error:
+        runtime.command(session, "status", None, {"state": "ready", "message": "x" * (256 * 1024)})
+    assert error.value.status_code == 413
+    assert error.value.detail == "single command exceeds bridge body limit"
+    assert not session.commands
+    assert session.command_seq == 0
+    command = runtime.command(session, "status", None, {"state": "ready", "message": "Ready"})
+    response = await client.get("/v1/bridge/commands?wait_seconds=0")
+    assert [item["id"] for item in response.json()["commands"]] == [command["id"]]
+    assert response.json()["cursor"] == 1
+
+
+async def test_command_page_counts_envelope_and_cursor_at_exact_byte_limit(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    timestamp = now()
+    runtime.utc_now = lambda: timestamp
+    session.command_seq = 9998
+    first = runtime.command(session, "status", None, {"state": "ready", "message": "x"})
+    measured = await client.get("/v1/bridge/commands?wait_seconds=0")
+    # Seq and cursor both grow a digit on the next command. JSON quotes also cost bytes.
+    first["state"] = "completed"
+    text = '"' + "x" * (MAX_BODY_BYTES - len(measured.content) - 3)
+    fitting = runtime.command(session, "status", None, {"state": "ready", "message": text})
+    last = runtime.command(session, "status", None, {"state": "ready", "message": "last"})
+    response = await client.get("/v1/bridge/commands?wait_seconds=0")
+    assert len(response.content) == MAX_BODY_BYTES
+    assert [c["id"] for c in response.json()["commands"]] == [fitting["id"]]
+    assert response.json()["cursor"] == 10000
+    next_page = await client.get("/v1/bridge/commands?after=10000&wait_seconds=0")
+    assert [c["id"] for c in next_page.json()["commands"]] == [last["id"]]
+    with pytest.raises(HTTPException) as error:
+        runtime.command(session, "status", None, {"state": "ready", "message": text + "x"})
+    assert error.value.status_code == 413
+
+
+async def test_command_poll_reports_oversized_queued_command_without_skipping_it(client):
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    session = runtime.sessions[sid]
+    first = runtime.command(session, "status", None, {"state": "ready", "message": "first"})
+    oversized = runtime.command(session, "status", None, {"state": "ready", "message": "bad"})
+    last = runtime.command(session, "status", None, {"state": "ready", "message": "last"})
+    # Defensive handling of an invalid in-memory producer mutation after enqueue.
+    oversized["payload"]["message"] = "x" * MAX_BODY_BYTES
+    first_page = await client.get("/v1/bridge/commands?wait_seconds=0")
+    assert first_page.json()["cursor"] == first["seq"]
+    response = await client.get("/v1/bridge/commands?after=1&wait_seconds=0")
+    assert response.status_code == 413
+    assert response.json()["detail"] == "single command exceeds bridge body limit"
+    assert oversized["state"] == last["state"] == "queued"
 
 
 class ContextProvider(FakeProvider):
