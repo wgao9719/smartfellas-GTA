@@ -739,3 +739,105 @@ Observed follow-up checks on TOWER-PENGU, using process-local `LLS_DOTNET` and `
 | `git diff --check` | Passed |
 
 Every final live-check invocation above exited 0 and completed its owned-process and temporary-directory cleanup. The action-outcome check also had an earlier successful invocation before repeating it with the documented .NET environment. The additional autonomous social mode was run because it is a documented live check. These remain fake-game, synthetic-audio, and local HTTP/ASGI validations; native GTA behavior, real audio hardware, and real model providers remain unverified.
+
+## Bounded grounding classifier on Windows
+
+On 2026-10-11, work continued directly on `win/validation` in the `integration`
+worktree, starting at `1caa66b`. No branch/worktree was created. The existing QA
+service on port 8765 and llama.cpp on port 8091 were left running. The existing
+Windows Python 3.12.14/uv environment and the process-local .NET/RestoreSources
+settings above were used; no provider/cloud environment setting was changed.
+
+Before production changes, the new runtime regression failed because
+`Someone down the block pays for errands.` survived a job request even with an
+injected classifier returning `yes`. Seven initial unit cases also failed because
+there was no asynchronous second gate, and the provider regression failed because
+there was no classifier method. During integration, another failing regression
+showed a cancellation-suppressing classifier could return `no` after its timeout;
+the final helper checks the timeout scope's expired state. Two social regressions
+reproduced loss of the local fallback route across a worker-task boundary; the
+selected classifier now travels back with that worker's result.
+
+The fix retains deterministic grounding and adds a broad prefilter followed by an
+optional, sequential, 800 ms yes/no model check. It preserves the plain-text
+sentence stream and separate action stage required by FR-DLG-02/03, plus the
+agent-design story/economy boundaries. Only strict `no` permits a candidate;
+malformed/error/timeout/budget-denied results drop it. Fake/disabled providers are
+inert by default. Provider tests cover cloud consent, outbound scrubbing, local
+payloads, request and cost settlement, background budgets, nested streaming
+reservations and fallback routing. Streaming tests cover delivery order, action
+input, neutral fallback, cancellation and late results. No adapter source changed.
+
+The holdout remains reporting-only in `tests/fixtures/grounding_holdout.json`;
+`grounding_corpus.json` is unchanged. The five verbatim unsafe examples and two
+reconstructions are distinguished, and the 16 ordinary controls are explicitly
+independent because the user's original ordinary list was not supplied.
+
+`uv run --frozen python tools/benchmark_grounding_model.py` exercised the real
+existing `qwen2.5-7b-instruct` alias at `http://127.0.0.1:8091/v1`, with isolated
+temporary SQLite budgets. Final run: 12:15:30.611-12:16:07.636 UTC (37.025 s), one
+sequential pass without warmup, 671 corpus gate cases and 23 holdout cases.
+
+| Set | Final miss rate | Final false-positive rate | Added gate latency p50 / p95 |
+|---|---:|---:|---:|
+| Full corpus | 0/179 (0%) | 0/246 (0%) | 92.898 / 105.396 ms |
+| Holdout, including two reconstructed blocked examples | 1/7 (14.29%) | 0/16 (0%) | 99.995 / 109.400 ms |
+| Verbatim unsafe holdout subset | 1/5 (20%) | Not applicable | Included above |
+
+Before the classifier, the deterministic holdout miss rate was 5/7 (5/5 verbatim).
+All corpus adversarial lines already failed the deterministic gate and made no
+classifier requests. Corpus ordinary lines were checked with both neutral and
+job-request contexts; a unique line would count as a false positive if either
+version changed. Added latency subtracts a paired deterministic call; p95 uses
+nearest rank. Actual candidate-call p50/p95 was 99.159/108.222 ms on the corpus
+and 100.510/109.423 ms on the holdout.
+
+All 367 classifier calls completed without malformed output, timeout or provider
+error. The ledger recorded 82,410 input and 734 output tokens, with zero pending
+or uncertain reservations. The initial prompt produced 60/246 corpus and 2/16
+holdout-control false positives. One corpus-only prompt calibration removed those
+false positives; it did not fix the remaining well-formed `no` for the held-out
+Michael/therapist rumor. No held-out line was added to the prompt or regression
+corpus. Raw initial/final records and hashes remain in Git-ignored
+`artifacts/grounding-model-benchmark-initial.json` and
+`artifacts/grounding-model-benchmark.json`. See
+[dialogue grounding](dialogue-grounding.md#bounded-provider-check) for design,
+configuration, denominators and limitations.
+
+Observed automated validation for this change:
+
+| Command | Result |
+|---|---|
+| `uv run --frozen ruff check service tests tools` | Passed |
+| `uv run --frozen pytest -W error tests/test_grounding_classifier.py tests/test_runtime_grounding_classifier.py tests/test_grounding_provider.py -q` | 59 passed in 5.16 s |
+| `uv run --frozen pytest -W error tests/test_grounding_social_classifier.py tests/test_social.py tests/test_runtime_grounding_classifier.py -q` | 99 passed in 6.99 s |
+| `uv run --frozen pytest -W error` | **2,710 passed, 1 skipped in 230.33 s**, exit 0 |
+| `git diff --check` | Passed |
+
+The single skip remains the opt-in real whisper.cpp check. The 61 new regressions
+are included in the full-suite total; focused test counts overlap that total.
+
+Isolated live probes (all use a fake game; speech and whisper modes use fixtures):
+
+| Command | Observed result |
+|---|---|
+| `uv run --frozen python tests/live_bridge_check.py` | Passed: 2 display-safe subtitles, 5 acknowledgments, 1 simulated action, 2 durable delivered events |
+| `uv run --frozen python tests/live_bridge_check.py --speech` | Passed: 2 audio/text chunks, 13 acknowledgments, PTT recording/stop confirmed, 2 durable events |
+| `uv run --frozen python tests/live_bridge_check.py --whisper` | Passed: 2 subtitles, 5 acknowledgments, typed whisper flag confirmed |
+| `uv run --frozen python tests/live_bridge_check.py --speech --whisper` | Passed: 2 audio/text chunks, 13 acknowledgments, PTT and voice whisper flag confirmed |
+| `uv run --frozen python tests/live_bridge_check.py --pin` | Passed: 1 pin, 8 durable memories, 1 pre-pin memory retained, post-pin turn delivered, ambient officer purged |
+| `uv run --frozen python tests/live_bridge_crash_check.py` | Passed: 1 task withdrawal, reconnect/stale-action rejection, durable started receipt in export, ambient history purged, no invented completion |
+| `uv run --frozen python tests/live_action_outcome_check.py` | Passed: 2 service outcomes and 2 private outcome memories after restart, duplicate cancellation suppressed, late completion rejected, 0 uninvolved outputs |
+| `uv run --frozen python tests/live_social_check.py` | Passed: 3 participants, 6 delivered turns, 12 reported memories, 3 opinions, 0 model requests |
+| `uv run --frozen python tests/live_social_check.py --autonomous` | Passed: 2 participants, 2 delivered turns, 2 reported memories, 2 opinions, 0 model requests |
+
+All nine live invocations exited 0 and completed their owned-service and temporary
+directory cleanup. Final Python processes matched the pre-probe baseline, with no
+remaining dotnet/fixture process. Listener owners were unchanged: port 8765 PID
+47148, port 8091 PID 67548. Neither existing service was stopped or rebound.
+
+These model measurements are standalone checks, not simultaneous live dialogue
+generation or native GTA latency. Server contention can produce more timeouts;
+inference deadlines do not bound durable cancellation cleanup or OS scheduling.
+Real hosted calls, real audio hardware, GTA/native behavior and rig acceptance
+remain unverified. No deployment or push was performed.

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .display import DISPLAY_MAX_CHARS, display_text
 from .gateway import GatewayProvider
-from .grounding import NEUTRAL_FALLBACK, grounded_text
+from .grounding import NEUTRAL_FALLBACK, grounded_text_checked
 from .perception import DeliveredUtterance, Incident, PerceptionLimits, Witness, witnesses_for
 from .providers import FakeProvider
 from .social_models import (
@@ -332,7 +332,7 @@ class SocialEngine:
                     output += part
                     if len(output) > self.config.max_text_characters:
                         raise SocialError("social model output exceeds its bound")
-            return output
+            return output, getattr(self.provider, "classify_grounding", None)
 
         worker = asyncio.create_task(consume())
         scene.worker = worker
@@ -342,11 +342,11 @@ class SocialEngine:
                 worker.cancel()
                 await asyncio.gather(worker, return_exceptions=True)
                 raise SocialUnavailable("social model call timed out")
-            result = worker.result()
+            result, classifier = worker.result()
             self._guard(scene)
             if scene.epoch != epoch:
                 raise SocialUnavailable("social generation became stale")
-            return result, carriers
+            return result, carriers, classifier
         except asyncio.CancelledError:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
@@ -418,7 +418,7 @@ class SocialEngine:
                     now + self.config.scene_cooldown_seconds
                 )
             for actor_id in start.participant_bindings:
-                text, _ = await self._model(scene, actor_id, "invitation")
+                text, _, _ = await self._model(scene, actor_id, "invitation")
                 decision = self._decision(text, {"accept", "refuse"})
                 if decision is None:
                     # An unavailable model decision closes this attempt. It is not
@@ -469,12 +469,16 @@ class SocialEngine:
                     retell_event_id,
                     env.game_datetime,
                 )
-            raw, carriers = await self._model(scene, actor_id, "turn", retelling)
+            raw, carriers, classifier = await self._model(scene, actor_id, "turn", retelling)
             # Delivery receipts must quote exactly what the subtitle shows.
             text = display_text(raw)
             if not text.strip() or (retelling is not None and text != retelling["text"]):
                 raise SocialError("social reply did not preserve the requested exact quote")
-            safe_text = display_text(grounded_text(text), DISPLAY_MAX_CHARS)
+            safe_text = display_text(await grounded_text_checked(
+                text, classifier=classifier,
+                budget_class="background",
+            ), DISPLAY_MAX_CHARS)
+            self._guard(scene)
             if safe_text != text:
                 # Filtered or clipped words cannot remain an exact retelling. Kept sentences
                 # still derive from their carriers for actor-local erasure.
@@ -504,7 +508,7 @@ class SocialEngine:
         try:
             if scene.status != "active" or actor_id not in scene.start.participant_bindings:
                 raise SocialConflict("only participants can decide their continued participation")
-            text, _ = await self._model(scene, actor_id, "participation")
+            text, _, _ = await self._model(scene, actor_id, "participation")
             decision = self._decision(text, {"continue", "withdraw"})
             if decision is None:
                 scene.decisions[actor_id] = "withdraw"

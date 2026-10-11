@@ -22,7 +22,7 @@ from .actions import POLICY_VERSION, ActionPolicy, ConversationPolicy
 from .bridge_limits import MAX_BODY_BYTES
 from .context import build_context
 from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
-from .grounding import NEUTRAL_FALLBACK, acknowledged_completion_lines, grounded_text
+from .grounding import NEUTRAL_FALLBACK, acknowledged_completion_lines, grounded_text_checked
 from .memory_index import MemoryIndex
 from .narration import SpeechMarkupFilter
 from .neighborhood_bridge import NeighborhoodBridge
@@ -968,7 +968,12 @@ class Runtime(
                     or not self.conversation_policy.check(actor, session.world).allowed
                 ):
                     continue
-                text = grounded_text(display_text(effect.text))
+                text = await grounded_text_checked(
+                    display_text(effect.text), classifier=self.grounding_classifier(),
+                    budget_class="background",
+                )
+                if session.closed or session.epoch != effect.epoch:
+                    continue
                 text = display_text(text if text.strip() else NEUTRAL_FALLBACK, DISPLAY_MAX_CHARS)
                 turn_id = self.id_factory("trigger")
                 # Authored speech is still only a queued command until its delivery acknowledgment.
@@ -1301,6 +1306,11 @@ class Runtime(
         )
         return True
 
+    def grounding_classifier(self):
+        if self.settings.grounding_classifier_enabled:
+            return getattr(self.provider, "classify_grounding", None)
+        return None
+
     async def turn(self, session, event, epoch, *, action_eligible=True):
         turn_id = self.id_factory("turn")
         actor_id = event.actor_id
@@ -1432,10 +1442,13 @@ class Runtime(
                         break
                     # Subtitles, speech, receipts, and memories all use the displayed text.
                     chunk = display_text(chunk)
-                    safe = grounded_text(
+                    safe = await grounded_text_checked(
                         chunk, player_text=event.payload["text"],
                         completion_lines=acknowledged_completion_lines(session, actor_id),
+                        classifier=self.grounding_classifier(),
                     )
+                    if session.closed or session.epoch != epoch:
+                        return
                     if safe != chunk:
                         session.trace.append({"turn_id": turn_id, "grounding": "sentence_refused"})
                         sentence_refused = True

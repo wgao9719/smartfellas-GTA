@@ -75,6 +75,7 @@ class GatewayProvider:
         self.failures = 0
         self.circuit_until = 0
         self.turn_routes = weakref.WeakKeyDictionary()
+        self.grounding_routes = weakref.WeakKeyDictionary()
         self.primary = (
             OpenAIProvider(settings, gate=self.gate, transport=transport)
             if self.name in {"openai", "local_openai"}
@@ -119,6 +120,20 @@ class GatewayProvider:
     async def aclose(self):
         await self.gate.aclose()
 
+    @property
+    def classify_grounding(self):
+        if self.name in {"disabled", "fake"} or not self.settings.grounding_classifier_enabled:
+            return None
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        # Resolve in the dialogue task before the bounded classifier runs in its own task.
+        provider = (
+            self.grounding_routes.get(task, self.primary) if task is not None else self.primary
+        )
+        return provider.classify_grounding
+
     def _failure(self, exc, provider):
         self.last_fallback_reason = type(exc).__name__
         if (
@@ -150,6 +165,7 @@ class GatewayProvider:
         for provider in candidates:
             emitted = False
             try:
+                self.grounding_routes[task] = provider
                 response = provider.dialogue(context, budget_class=budget_class)
                 async with aclosing(response) as stream:
                     async for chunk in stream:

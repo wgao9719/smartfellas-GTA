@@ -47,6 +47,7 @@ class Settings(StrictModel):
     openai_base_url: str = "https://api.openai.com/v1"
     local_base_url: str = "http://127.0.0.1:1234/v1"
     model_timeout_seconds: float = Field(default=30, ge=1, le=120)
+    grounding_classifier_enabled: bool = True
     model_response_bytes: int = Field(default=262144, ge=1024, le=1048576)
     context_byte_budget: int = Field(default=12000, ge=2048, le=48000)
     memory_token_budget: int = Field(default=512, ge=64, le=2048)
@@ -174,6 +175,7 @@ class Settings(StrictModel):
             snapshot_retention_count=int(os.environ.get("LLS_SNAPSHOT_RETENTION_COUNT", "24")),
             raw_event_retention_days=int(os.environ.get("LLS_RAW_EVENT_RETENTION_DAYS", "7")),
             provider=os.environ.get("LLS_PROVIDER", "disabled"),
+            grounding_classifier_enabled=os.environ.get("LLS_GROUNDING_CLASSIFIER", "1") == "1",
             cloud_opt_in=os.environ.get("LLS_CLOUD_OPT_IN", "0") == "1",
             dialogue_model=os.environ.get("LLM_DIALOGUE_MODEL", ""),
             action_model=os.environ.get("LLM_ACTION_MODEL", ""),

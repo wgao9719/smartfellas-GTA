@@ -1,5 +1,6 @@
 """Conservative English speech boundaries; narrative text cannot authorize facts."""
 
+import asyncio
 import re
 import unicodedata
 
@@ -299,6 +300,72 @@ def grounded_text(text, *, completion_lines=(), player_text=""):
             )
         ):
             kept.append(sentence)
+    return "".join(kept)
+
+
+CLASSIFIER_TIMEOUT_SECONDS = 0.8
+_CLASSIFIER_TOPIC = re.compile(
+    r"\b(?:work\w*|hir\w*|pay\w*|paid|cash|money|deliver\w*|drivers?|jobs?|gigs?|"
+    r"scores?|deals?|unlock\w*|discount\w*|free|owes?|owed|missions?|quests?|"
+    r"objectives?|rewards?|prices?|costs?|bucks|dollars?|income|earn\w*|heists?|"
+    r"opportunit\w*|errands?|rent|bills|loans?|credit|brib\w*|corrupt\w*)\b"
+)
+_CLASSIFIER_PERSON = re.compile(
+    rf"{_PERSON}|\b(?:simeon|denise|tanisha|stretch|molly|patricia|nervous ron)\b"
+)
+_CLASSIFIER_STORY = re.compile(
+    r"\b(?:is|are|was|were|has|have|had|been|seeing|saw|told|said|heard|knows?|"
+    r"secret\w*|reveal\w*|betray\w*|marri\w*|divorc\w*|dat\w*|love\w*|hate\w*|"
+    r"killed|dead|died|left|leaving|forg\w*|friends?|enemies|partners?|together|"
+    r"family|related|brothers?|sisters?|sons?|daughters?|parents?|loyal\w*)\b"
+)
+_CLASSIFIER_POLICE = re.compile(r"\b(?:police|cops?|officers?|sheriff|fib|iaa)\b")
+_CLASSIFIER_REQUEST = re.compile(
+    r"\b(?:work|jobs?|money|cash|missions?|quests?|gigs?|income|help|hiring|earn\w*)\b"
+)
+
+
+def grounding_candidate(sentence, *, player_text=""):
+    """Broad, cheap selection only; keywords never decide the model verdict."""
+    text = _normalized(sentence)
+    return bool(
+        _seeking_opportunity(player_text)
+        or _CLASSIFIER_REQUEST.search(_normalized(player_text))
+        or _CLASSIFIER_TOPIC.search(text)
+        or (_CLASSIFIER_PERSON.search(text) and _CLASSIFIER_STORY.search(text))
+        or _CLASSIFIER_POLICE.search(text)
+    )
+
+
+async def grounded_text_checked(
+    text, *, classifier=None, completion_lines=(), player_text="", budget_class="foreground",
+):
+    """Check surviving candidate sentences in order; only a strict 'no' permits speech."""
+    text = grounded_text(text, completion_lines=completion_lines, player_text=player_text)
+    if classifier is None or not text:
+        return text
+    allowed = {_normalized(line) for line in completion_lines}
+    kept = []
+    for match in re.finditer(r".+?(?:[.!?](?:\s+|$)|$)", text, re.DOTALL):
+        sentence = match.group()
+        if _normalized(sentence) not in allowed and grounding_candidate(
+            sentence, player_text=player_text,
+        ):
+            try:
+                # A child task owns its reservation while the dialogue request is streaming.
+                async with asyncio.timeout(CLASSIFIER_TIMEOUT_SECONDS) as deadline:
+                    verdict = await asyncio.create_task(classifier(
+                        sentence, player_text=player_text, budget_class=budget_class,
+                    ))
+                if asyncio.current_task().cancelling():
+                    raise asyncio.CancelledError
+                if deadline.expired():
+                    continue
+            except Exception:
+                continue
+            if not isinstance(verdict, str) or verdict.strip().casefold() != "no":
+                continue
+        kept.append(sentence)
     return "".join(kept)
 
 
