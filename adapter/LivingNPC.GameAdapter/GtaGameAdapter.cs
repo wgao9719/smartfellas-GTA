@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Threading;
 using GTA;
 using GTA.Math;
 using GTA.Native;
@@ -31,8 +30,7 @@ namespace LivingNPC.GameAdapter
         }
         private const string Decorator = "lls_runtime_binding_v1";
         private readonly AdapterLog log;
-        // SHVDN constructs scripts on its domain thread but ticks them on the script's own thread.
-        private int thread = -1;
+        private readonly ThreadAffinity thread = new ThreadAffinity();
         private readonly Dictionary<string, Binding> bindings = new Dictionary<string, Binding>();
         private readonly Dictionary<string, TaskRecord> tasks = new Dictionary<string, TaskRecord>();
         private readonly List<string> dropped = new List<string>();
@@ -50,8 +48,9 @@ namespace LivingNPC.GameAdapter
             this.log = log;
             if (!Function.Call<bool>(Hash.DECOR_IS_REGISTERED_AS_TYPE, Decorator, 3)) Function.Call(Hash.DECOR_REGISTER, Decorator, 3);
         }
-        public void BindScriptThread() { if (thread == -1) thread = Thread.CurrentThread.ManagedThreadId; }
-        private void OnScriptThread() { if (thread == -1 || Thread.CurrentThread.ManagedThreadId != thread) throw new InvalidOperationException("Game API outside script thread"); }
+        public bool IsScriptThread => thread.IsCurrent;
+        public void BindScriptThread() => thread.Bind();
+        private void OnScriptThread() => thread.Verify();
         public WorldState ReadWorld()
         {
             OnScriptThread();

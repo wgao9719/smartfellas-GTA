@@ -128,6 +128,37 @@ Record the 20-interaction trial ledger, 20-minute soak, FPS comparison, script t
 
 ## Installed paths and diagnostics
 
+The adapter reads INI text directly because SHVDN 3.7.0-nightly.193 truncates
+`URL=http://127.0.0.1:8765` to `http` in `ScriptSettings`. Keep that URL line
+uncommented with the fixed adapter, or omit it to select the same default. All
+settings use the adapter's parser, including `BootstrapToken`, `ProfileId`, and
+`SaveSlot`: section/key names are case-insensitive, surrounding whitespace is
+trimmed, and the last duplicate key wins. UTF BOMs and CRLF are supported. Put
+`;` or `//` comments on their own lines. Values are unquoted literals; embedded
+`//`, `:`, `=`, and `;` are preserved, and inline comments are not stripped.
+
+Service URLs must be absolute `http` URLs with a numeric IP, no credentials,
+path other than `/`, query, or fragment, and a nonzero port. Release permits
+loopback only (including `[::1]`). Debug permits private/Tailscale IPv4 only
+with `DevLAN=true` and a bootstrap token of at least 24 characters. Invalid URLs
+or prohibited DevLAN settings fall back to `http://127.0.0.1:8765`; the log writes
+the fixed code `configuration_endpoint_fallback` without the configured value.
+Malformed boolean/key settings use their defaults. Unreadable or malformed INI
+settings log `configuration_defaults_used`; a missing INI uses defaults. Empty
+profile/save defaults still require explicit configuration and confirmation.
+The first unpaused ticks display a configuration warning for eight seconds before input
+or connection can proceed (pausing restarts that notice interval); no configuration status calls the game in the
+constructor. Reload after correcting the INI.
+
+Thread affinity binds on the first tick, not during SHVDN's domain-thread
+construction. SHVDN dispatches queued keys before Tick, so keys are ignored
+until binding and the startup warning finish. Later keys must use that same
+thread. Bridge callbacks exchange queues only. Abort cleanup touches game and
+controller state only on the bound thread; domain-thread or pre-tick aborts log
+`abort_game_cleanup_skipped` and still attempt transport/log disposal. Native
+task/persistence cleanup during such aborts remains unverified. See the
+[runtime review](first-gta-adapter-fixes.md) for source evidence and limits.
+
 SQLite also needs a writable temporary directory, even when its database directory is writable. Check the service process's `TMP` and `TEMP` if `unable to open database file` appears during session cleanup. When both are absent, Windows can select `C:\Windows\`, while Python chooses a different fallback. Set them to an existing writable directory in the launch shell and restart the service. A nonstandard writable location is valid. See the [local Windows diagnosis](development-validation.md#local-windows-sqlite-temporary-directory-failure).
 
 If session cleanup fails, the dashboard's Live session area shows **Session cleanup pending**, with affected profile/session IDs and the exception type. The admin overview reports the same state even after a service restart. Closed sessions reject further game work; opening another session for an affected profile returns 503 until cleanup succeeds. The service retries on each maintenance tick and at startup. SQLite schema v5 persists cleanup intent, and startup also recovers unfinished sessions if the failure prevented that intent from being written. Only a committed purge clears pending state. Pinned and curated memories remain durable. History can remain on disk while storage is unavailable; restore writable database/temp paths or resolve locking/disk-space failures, then refresh the dashboard to confirm cleanup completed.

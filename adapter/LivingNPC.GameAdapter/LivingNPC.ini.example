@@ -1,6 +1,8 @@
 ; Install as scripts/LivingNPC/LivingNPC.ini. Logs use the same directory.
 
 [Service]
+; Read literally by the adapter (including : and //); do not quote values or add inline comments.
+; Use an absolute http URL with a numeric loopback IP and port. Invalid URLs fall back to this default.
 URL=http://127.0.0.1:8765
 ; Required: choose a unique profile for a new/unknown save lineage. Never reuse it for another slot.
 ProfileId=
@@ -8,8 +10,9 @@ ProfileId=
 SaveSlot=
 ; Set only when selecting an existing save lineage explicitly.
 ParentBranchId=
+; Debug only: permits private/Tailscale IPv4 with a bootstrap token of at least 24 characters.
 DevLAN=false
-; Prefer LLS_BRIDGE_TOKEN in the game process environment.
+; Prefer LLS_BRIDGE_TOKEN in the game process environment. INI token punctuation is preserved.
 BootstrapToken=
 
 [Input]

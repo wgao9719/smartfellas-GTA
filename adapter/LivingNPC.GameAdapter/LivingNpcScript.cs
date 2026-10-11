@@ -37,6 +37,9 @@ namespace LivingNPC.GameAdapter
         private readonly BoundedQueue<string> removedActors = new BoundedQueue<string>(128);
         private DateTimeOffset nextSample;
         private bool enabled;
+        private readonly string? configurationStatus;
+        private DateTimeOffset? configurationStatusUntil;
+        private bool readyForInput;
         public LivingNpcScript()
         {
             Interval = 0;
@@ -55,44 +58,46 @@ namespace LivingNPC.GameAdapter
             }
             catch (System.IO.IOException) { log.Write("installed_dll_hash_unavailable"); }
             catch (UnauthorizedAccessException) { log.Write("installed_dll_hash_unavailable"); }
-            var settings = ScriptSettings.Load(AdapterPaths.Configuration(scriptsDirectory));
-            profileId = settings.GetValue("Service", "ProfileId", "").Trim();
-            saveSlot = settings.GetValue("Service", "SaveSlot", "").Trim();
-            var configuredBranch = settings.GetValue("Service", "ParentBranchId", ""); parentBranchId = configuredBranch.Length == 0 ? null : configuredBranch;
-            bootstrapToken = Environment.GetEnvironmentVariable("LLS_BRIDGE_TOKEN") ?? settings.GetValue("Service", "BootstrapToken", "");
-            hookVersion = settings.GetValue("Compatibility", "ScriptHookVBuild", "UNVERIFIED");
-            serviceOs = settings.GetValue("Compatibility", "ServiceOS", "windows");
-            endpoint = new Uri(settings.GetValue("Service", "URL", "http://127.0.0.1:8765"));
-            var devLan = settings.GetValue("Service", "DevLAN", false);
-            var nativeOptIn = settings.GetValue("Development", "EnableUnverifiedActions", false);
-            var addressValid = IPAddress.TryParse(endpoint.Host, out var address);
-            var loopback = addressValid && IPAddress.IsLoopback(address!);
+            var settings = RawIni.Load(AdapterPaths.Configuration(scriptsDirectory));
+            profileId = settings.GetString("Service", "ProfileId", "");
+            saveSlot = settings.GetString("Service", "SaveSlot", "");
+            var configuredBranch = settings.GetString("Service", "ParentBranchId", ""); parentBranchId = configuredBranch.Length == 0 ? null : configuredBranch;
+            bootstrapToken = Environment.GetEnvironmentVariable("LLS_BRIDGE_TOKEN") ?? settings.GetString("Service", "BootstrapToken", "");
+            hookVersion = settings.GetString("Compatibility", "ScriptHookVBuild", "UNVERIFIED");
+            serviceOs = settings.GetString("Compatibility", "ServiceOS", "windows");
+            var devLan = settings.GetBoolean("Service", "DevLAN", false);
 #if DEVELOPMENT
-            enabled = endpoint.Scheme == "http" && endpoint.UserInfo.Length == 0 && endpoint.AbsolutePath == "/" &&
-                (loopback || (devLan && addressValid && PrivateDevAddress(address!) && bootstrapToken.Length >= 24));
-            capabilities = nativeOptIn ? new[] { "face_player", "wait_here" } : Array.Empty<string>();
+            const bool developmentBuild = true;
+            capabilities = settings.GetBoolean("Development", "EnableUnverifiedActions", false) ? new[] { "face_player", "wait_here" } : Array.Empty<string>();
 #else
-            enabled = endpoint.Scheme == "http" && endpoint.UserInfo.Length == 0 && endpoint.AbsolutePath == "/" && loopback && !devLan;
+            const bool developmentBuild = false;
             capabilities = Array.Empty<string>();
 #endif
-            targetKey = settings.GetValue("Input", "TargetKey", Keys.F6);
-            textKey = settings.GetValue("Input", "TextKey", Keys.F7);
-            pttKey = settings.GetValue("Input", "PttKey", Keys.N);
-            whisperKey = settings.GetValue("Input", "WhisperKey", Keys.B);
-            cancelKey = settings.GetValue("Input", "CancelKey", Keys.Back);
-            pinKey = settings.GetValue("Input", "PinKey", Keys.F8);
-            confirmProfileKey = settings.GetValue("Input", "ConfirmProfileKey", Keys.F10);
+            var serviceEndpoint = ServiceEndpoint.Resolve(settings.GetString("Service", "URL", ServiceEndpoint.DefaultUrl), devLan, developmentBuild, bootstrapToken);
+            endpoint = serviceEndpoint.Uri;
+            enabled = true;
+            targetKey = settings.GetEnum("Input", "TargetKey", Keys.F6);
+            textKey = settings.GetEnum("Input", "TextKey", Keys.F7);
+            pttKey = settings.GetEnum("Input", "PttKey", Keys.N);
+            whisperKey = settings.GetEnum("Input", "WhisperKey", Keys.B);
+            cancelKey = settings.GetEnum("Input", "CancelKey", Keys.Back);
+            pinKey = settings.GetEnum("Input", "PinKey", Keys.F8);
+            confirmProfileKey = settings.GetEnum("Input", "ConfirmProfileKey", Keys.F10);
 #if DEVELOPMENT
-            game.PinPersistence = settings.GetValue("Development", "EnableUnverifiedPinPersistence", false);
+            game.PinPersistence = settings.GetBoolean("Development", "EnableUnverifiedPinPersistence", false);
 #endif
+            if (settings.HasInvalidValues)
+            {
+                log.Write("configuration_defaults_used");
+                configurationStatus = "Living Los Santos: unreadable or invalid INI settings; defaults used. Check LivingNPC.ini and reload.";
+            }
+            if (serviceEndpoint.FellBack)
+            {
+                log.Write("configuration_endpoint_fallback");
+                configurationStatus = "Living Los Santos: invalid service URL or DevLAN settings; using http://127.0.0.1:8765. Check LivingNPC.ini and reload.";
+            }
             Tick += OnTick; KeyDown += OnKeyDown; KeyUp += OnKeyUp; Aborted += OnAborted;
             log.Write("configuration_loaded", "enabled=" + enabled + " capabilities=" + capabilities.Length);
-            if (!enabled) game.ShowStatus("error", "Living Los Santos: invalid endpoint or development settings.");
-        }
-        private static bool PrivateDevAddress(IPAddress address)
-        {
-            var b = address.GetAddressBytes();
-            return b.Length == 4 && (b[0] == 10 || b[0] == 192 && b[1] == 168 || b[0] == 172 && b[1] >= 16 && b[1] <= 31 || b[0] == 100 && b[1] >= 64 && b[1] <= 127);
         }
         private void Connect(WorldState world)
         {
@@ -122,6 +127,16 @@ namespace LivingNPC.GameAdapter
         private void OnTick(object sender, EventArgs args)
         {
             game.BindScriptThread();
+            if (configurationStatus != null && !readyForInput)
+            {
+                if (Game.IsPaused) { configurationStatusUntil = null; return; }
+                configurationStatusUntil ??= DateTimeOffset.UtcNow.AddSeconds(8);
+                if (DateTimeOffset.UtcNow < configurationStatusUntil.Value)
+                {
+                    game.ShowStatus("configuration", configurationStatus); game.Render(null); return;
+                }
+            }
+            readyForInput = true;
             if (!enabled) { game.Render(null); return; }
             var timer = Stopwatch.StartNew(); var world = game.ReadWorld();
             profileConfirmation.Observe(world, bridge?.RequiresReconnect == true);
@@ -237,7 +252,8 @@ namespace LivingNPC.GameAdapter
         }
         private void OnKeyDown(object sender, KeyEventArgs args)
         {
-            if (!enabled) return;
+            // SHVDN drains key events before Tick, including before the first thread binding.
+            if (!game.IsScriptThread || !readyForInput || !enabled) return;
             if (args.KeyCode == confirmProfileKey)
             {
                 if (!profileKeyHeld && !profileConfirmation.Confirmed) profileConfirmation.Confirm(game.ReadWorld(), profileId, saveSlot);
@@ -317,6 +333,7 @@ namespace LivingNPC.GameAdapter
         }
         private void OnKeyUp(object sender, KeyEventArgs args)
         {
+            if (!game.IsScriptThread || !readyForInput || !enabled) return;
             if (args.KeyCode == confirmProfileKey) profileKeyHeld = false;
             if (args.KeyCode != pttKey && args.KeyCode != whisperKey) return;
             heldTalkKeys.Remove(args.KeyCode);
@@ -330,10 +347,15 @@ namespace LivingNPC.GameAdapter
         // SHVDN may abort from its domain thread; cleanup is best effort and must never throw.
         private void OnAborted(object sender, EventArgs args)
         {
-            try { CancelInput(); } catch (Exception error) { log.Write("abort_cancel_failed type=" + error.GetType().Name); }
+            if (game.IsScriptThread)
+            {
+                try { CancelInput(); } catch (Exception) { log.Write("abort_cancel_failed"); }
+                try { game.Reset(); } catch (Exception) { log.Write("abort_reset_failed"); }
+            }
+            else log.Write("abort_game_cleanup_skipped");
             try { bridge?.Dispose(); } catch (Exception error) { log.Write("abort_bridge_failed type=" + error.GetType().Name); }
-            try { game.Reset(); } catch (Exception error) { log.Write("abort_reset_failed type=" + error.GetType().Name); }
-            log.Write("adapter_stopped"); log.Dispose();
+            log.Write("adapter_stopped");
+            try { log.Dispose(); } catch (Exception) { }
         }
     }
 }

@@ -4,7 +4,7 @@ Date: 2026-10-11. This note records the project state after the second working s
 
 ## Status
 
-Living Los Santos is a development foundation. **G0 through G4 have not passed.** No Windows GTA rig has connected, so nothing in this repository proves gameplay, Windows audio, or release readiness.
+Living Los Santos is a development foundation. **G0 through G4 have not passed.** The first reported Windows GTA run reached adapter startup after the `f013351` thread-binding hotfix, while the prologue kept gameplay interactions disabled. The [configuration/threading follow-up](first-gta-adapter-fixes.md) records the defects, automated checks, and remaining rig work. This does not establish gameplay, Windows audio, or release readiness.
 
 The Python service, the C# adapter, and the development autonomy features run and pass tests on macOS against a fake game. [Development validation](development-validation.md) records each check and what it does not prove.
 
