@@ -282,9 +282,7 @@ def test_windows_default_shells_run_deploy_script_and_remove_upload(tmp_path, mo
 def test_windows_deploy_script_rejects_corrupt_upload_and_rolls_back_locked_dll(
     tmp_path, monkeypatch
 ):
-    _, staged, _ = bundle(tmp_path)
-    scripts = tmp_path / "game" / "scripts"
-    scripts.mkdir(parents=True)
+    _, staged, scripts = bundle(tmp_path)
     for name in DEPLOY.FILES:
         (scripts / DEPLOY.installed_path(name)).parent.mkdir(exist_ok=True)
         (scripts / DEPLOY.installed_path(name)).write_bytes(b"old:" + name.encode())

@@ -7,12 +7,12 @@ import re
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+from live_cleanup import temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -250,7 +250,7 @@ def main():
     environment = {
         key: value for key, value in os.environ.items() if not key.startswith(("LLS_", "LLM_"))
     }
-    with tempfile.TemporaryDirectory(prefix="lls-social-probe-") as directory:
+    with temporary_directory(prefix="lls-social-probe-") as directory:
         with (Path(directory) / "service.log").open("w+") as log:
             process = subprocess.Popen(
                 [

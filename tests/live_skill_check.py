@@ -7,12 +7,12 @@ import re
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
+from live_cleanup import temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -299,7 +299,7 @@ async def exercise(endpoint, *, retained=False):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="lls-skill-probe-") as folder:
+    with temporary_directory(prefix="lls-skill-probe-") as folder:
         directory = Path(folder)
         with server(directory) as endpoint:
             trial_commands = asyncio.run(exercise(endpoint))

@@ -221,4 +221,16 @@ The integrated branch at `0adde69` passed these checks on the second Mac:
 - The synthetic load check with zero network attempts.
 - Release deployment staging.
 
-No Windows CI run has checked this branch yet. No result here establishes GTA behavior.
+### Second GitHub Actions run
+
+Run `38115204368` checked `18d3e29`. The macOS jobs passed. On Windows, every failure from the first run passed, including the speech process tests. The Job Object fix therefore holds on Windows.
+
+The run found five remaining Windows failures:
+
+- A role-change test waited only 10 milliseconds for the first dialogue chunk. It now waits for the chunk itself.
+- The social scheduler fixture let the lifespan maintenance loop tick concurrently. On a slow runner that tick canceled the driven worker. The fixture now stops background maintenance, like the neighborhood scheduler fixture.
+- The deployment script called `Get-FileHash`. Windows PowerShell 5.1 could not load it under the PowerShell 7 module path inherited in CI. The script now hashes with .NET directly.
+- One Windows deployment test created a folder its fixture had already created.
+- The Windows adapter job reached the live bridge check, and the check itself passed. Removing its temporary folder then failed, because the terminated service's interpreter still held the database. Terminating the virtual-environment launcher ends the real interpreter moments later. The seven live checks that stop a service now retry removal briefly.
+
+These fixes passed on macOS. A Windows run of the following commit must confirm them. No result here establishes GTA behavior.

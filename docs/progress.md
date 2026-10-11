@@ -8,7 +8,14 @@ Living Los Santos is a development foundation. **G0 through G4 have not passed.*
 
 The Python service, the C# adapter, and the development autonomy features run and pass tests on macOS against a fake game. [Development validation](development-validation.md) records each check and what it does not prove.
 
-The first GitHub Actions run passed on macOS and failed on Windows. This branch contains the fixes, but a new Windows CI run must still confirm them. That run requires pushing the branch.
+The first GitHub Actions run passed on macOS and failed on Windows. The second run, for `18d3e29`, confirmed those fixes on Windows: the speech process, network consent, synthetic load, and harness tests passed. It found five remaining Windows-only failures:
+
+- one role-change timing assumption;
+- one social-scheduler race with background maintenance;
+- three deployment-script tests that had never run before;
+- a live check that removed its database folder while the stopped service still held the file.
+
+The following commit fixes those failures. Its own Windows run must confirm them.
 
 ## Done
 
@@ -66,7 +73,7 @@ The handoff's six open issues are closed. The first handoff note described one o
 
 ## Next steps
 
-1. Push the branch and confirm the Windows CI jobs. Fix any failures that the earlier failures hid.
+1. Confirm that the latest Windows CI jobs pass. Fix any failures that earlier failing steps hid.
 2. Run the checks in the [README](../README.md#verify-the-implementation) to confirm that your machine matches this commit.
 3. Connect the Windows rig over Tailscale. Follow [Mac development](mac-development.md) and [Windows runtime](windows-runtime.md).
 4. Work through G0-1 to G0-7 and record evidence under `docs/evidence/g0/`. Include the [classification and pin capability sheet](actions/ped-classification-and-pin.md) checks.

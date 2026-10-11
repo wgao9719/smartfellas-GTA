@@ -5,13 +5,13 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+from live_cleanup import temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -109,7 +109,7 @@ def body(session, at):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="lls-neighborhood-http-") as temporary:
+    with temporary_directory(prefix="lls-neighborhood-http-") as temporary:
         directory = Path(temporary)
         pack = directory / "authored.json"
         pack.write_text(demo_pack(48).model_dump_json(), encoding="utf-8")

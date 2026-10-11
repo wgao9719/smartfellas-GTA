@@ -13,6 +13,7 @@ from test_runtime_social import heard_memories as memories
 from test_runtime_social import social_scene as social_scene
 
 from service.lls.__main__ import fixture_event
+from service.lls.runtime import Runtime
 from service.lls.settings import Settings
 from service.lls.social import FakeSocialProvider
 from service.lls.social_bridge import DEVELOPMENT_SOCIAL_CAPABILITY
@@ -20,8 +21,17 @@ from service.lls.social_scheduler import SocialScheduler, SocialSchedulerConfig,
 
 
 @pytest.fixture
-def automatic(social_scene):
+async def automatic(social_scene):
     client, runtime, session, clock = social_scene
+    # Lifespan maintenance ticks every wall-clock second, but these tests drive ticks
+    # themselves: on a slow runner an unrequested tick would cancel the driven worker.
+    (maintenance,) = [
+        task
+        for task in asyncio.all_tasks()
+        if getattr(task.get_coro(), "cr_code", None) is Runtime.maintain.__code__
+    ]
+    maintenance.cancel()
+    await asyncio.gather(maintenance, return_exceptions=True)
     runtime.settings.dev_social_autonomy = True
     runtime.social_scheduler = SocialScheduler(runtime)
     return client, runtime, session, clock
@@ -93,9 +103,14 @@ def test_scheduler_requires_a_separate_nonrelease_opt_in():
 
 async def test_maintenance_starts_scene_without_invite_or_turn_requests(automatic):
     _, runtime, session, _ = automatic
-    async with asyncio.timeout(2):
-        while not runtime.social_scheduler.diagnostics(session.id)["pending_command_id"]:
-            await asyncio.sleep(0.01)
+    maintenance = asyncio.create_task(runtime.maintain())
+    try:
+        async with asyncio.timeout(2):
+            while not runtime.social_scheduler.diagnostics(session.id)["pending_command_id"]:
+                await asyncio.sleep(0.01)
+    finally:
+        maintenance.cancel()
+        await asyncio.gather(maintenance, return_exceptions=True)
     state = runtime.social_scheduler.diagnostics(session.id)
     assert state["status"] == "waiting"
     assert state["reserved_model_calls"] == 4

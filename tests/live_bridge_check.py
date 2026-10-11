@@ -12,12 +12,13 @@ import socket
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import closing
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
+
+from live_cleanup import temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -85,7 +86,7 @@ def main():
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     endpoint = f"http://127.0.0.1:{port}"
-    with tempfile.TemporaryDirectory(prefix="lls-contract-") as temporary:
+    with temporary_directory(prefix="lls-contract-") as temporary:
         database = Path(temporary) / "probe.sqlite3"
         environment = {
             **{

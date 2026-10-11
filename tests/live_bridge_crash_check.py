@@ -8,13 +8,14 @@ import socket
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from contextlib import closing
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
+
+from live_cleanup import temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,7 +44,7 @@ def main():
         "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
         "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
     }
-    with tempfile.TemporaryDirectory(prefix="lls-process-death-") as temporary:
+    with temporary_directory(prefix="lls-process-death-") as temporary:
         database = Path(temporary) / "probe.sqlite3"
         with (Path(temporary) / "service.log").open("w+") as log:
             arguments = [

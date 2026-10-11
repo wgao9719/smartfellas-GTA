@@ -1282,7 +1282,10 @@ async def test_role_change_mid_scene_cancels_the_scene(client):
     session = runtime.sessions[sid]
     runtime.provider = Slow()
     assert (await utterance(client, sid))[0].status_code == 200
-    await asyncio.sleep(0.01)
+    # Cuff the ped only once a chunk exists; slow runners can take longer than a fixed sleep.
+    async with asyncio.timeout(5):
+        while not any(c["kind"] == "dialogue.chunk" for c in session.commands.values()):
+            await asyncio.sleep(0.01)
     actor.update(seq=4, event_id="cuffed-snapshot")
     actor["payload"]["ped_facts"] = fixture_ped_facts(cuffed=True)
     response = await client.post(

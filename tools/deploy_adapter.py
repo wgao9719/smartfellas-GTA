@@ -138,6 +138,17 @@ def deploy_local(bundle: Path, scripts: Path) -> None:
 # Uploaded with the bundle and run by path. Values arrive as JSON data, never as code.
 REMOTE_SCRIPT = r"""$ErrorActionPreference = 'Stop'
 $src = $PSScriptRoot
+# .NET hashing avoids Get-FileHash, whose module can fail to load under an inherited PSModulePath.
+function Get-Sha256([string]$path) {
+  $stream = [System.IO.File]::OpenRead($path)
+  try {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $hex = [System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', ''
+      return $hex.ToLowerInvariant()
+    } finally { $sha.Dispose() }
+  } finally { $stream.Dispose() }
+}
 try {
   $plan = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $src 'deploy.json')
   $plan = $plan | ConvertFrom-Json
@@ -146,8 +157,8 @@ try {
     throw 'GTA scripts directory does not exist'
   }
   foreach ($entry in $plan.files) {
-    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $src $entry.source)).Hash
-    if ($actual.ToLowerInvariant() -ne $entry.sha256) {
+    $actual = Get-Sha256 (Join-Path $src $entry.source)
+    if ($actual -ne $entry.sha256) {
       throw ('Checksum mismatch: ' + $entry.source)
     }
   }

@@ -10,7 +10,6 @@ import re
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from collections import Counter
 from contextlib import contextmanager
@@ -19,6 +18,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import httpx
+from live_cleanup import temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -207,7 +207,7 @@ def exercise(endpoint, phase, *, speaker, listener=None, expected, erase=False):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="lls-social-adaptation-") as temporary:
+    with temporary_directory(prefix="lls-social-adaptation-") as temporary:
         directory = Path(temporary)
         for phase in range(2):
             with server(directory) as endpoint:

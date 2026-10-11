@@ -5,13 +5,13 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 
 import httpx
+from live_cleanup import temporary_directory
 from live_neighborhood_check import ROOT, START, open_session, post, world
 
 from service.lls.neighborhood import demo_pack
@@ -86,7 +86,7 @@ def request(session, at):
 
 def main():
     end = START + timedelta(hours=7)
-    with tempfile.TemporaryDirectory(prefix="lls-neighborhood-auto-") as folder:
+    with temporary_directory(prefix="lls-neighborhood-auto-") as folder:
         directory = Path(folder)
         pack = directory / "authored.json"
         pack.write_text(demo_pack(30).model_dump_json(), encoding="utf-8")
