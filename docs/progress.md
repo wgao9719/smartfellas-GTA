@@ -4,6 +4,14 @@ Date: 2026-10-11. This note records the project state after the second working s
 
 ## Status
 
+The first real conversations on adapter `427eebe` exposed action narration in
+speech, an Enter/phone conflict, stale cancellation status, invisible target
+selection, and an ambiguous-timeline notice. The
+[first-conversation fix record](first-conversation-fixes.md) describes their
+reproductions, service/adapter changes, validation and pending in-game checks.
+The selected-ped marker and input behavior remain provisional; these fixes have
+not been deployed or verified in GTA.
+
 Living Los Santos is a development foundation. **G0 through G4 have not passed.** The first reported Windows GTA run reached adapter startup after the `f013351` thread-binding hotfix, while the prologue kept gameplay interactions disabled. The [configuration/threading follow-up](first-gta-adapter-fixes.md) records the defects, automated checks, and remaining rig work. This does not establish gameplay, Windows audio, or release readiness.
 
 The later free-roam targeting fix `a98b0bd` is withdrawn after a reported GTA crash. **Current rule: decorators are not used; post-startup decorator registration crashed GTA 1.0.3889.0 with SHVDN 3.7.0-nightly.193 in QA.** The adapter logged `target_decorator_unavailable`; a manual console unlock/register/relock also failed to register the marker. About two minutes later, Windows Application Event 1000 at 05:08:06 reported `GTA5.exe` version `1.0.3889.0`, exception `0xc0000005`, faulting module unknown; WER Event 1001 reported `BEX64`. These are Brian's supplied QA observations. Post-startup registration/unlocking is unsafe on this stack and must not be retried.

@@ -239,6 +239,31 @@ async def test_action_uses_separate_model_only_offered_schemas_and_one_repair(pr
     assert len(requests[1]["messages"]) == 4
 
 
+async def test_dialogue_prompt_excludes_action_metadata_and_requires_spoken_words(provider_factory):
+    requests = []
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, stream=Stream([frame("Hi."), b"data: [DONE]\n"]))
+
+    provider = provider_factory(local(), transport=httpx.MockTransport(handle))
+    context = {
+        "input": "Hi there.",
+        "eligible_actions": {"face_player": "Turn toward the player."},
+        "action_outcomes": [{"action_id": "face_player", "status": "started"}],
+        "speech_constraints": {"acknowledged_completion_lines": []},
+    }
+    assert "".join([part async for part in provider.dialogue(context)]) == "Hi."
+    request = requests[0]
+    prompt = json.loads(request["messages"][1]["content"])
+    assert "eligible_actions" not in prompt
+    assert "action_outcomes" not in prompt
+    assert "stage directions" in request["messages"][0]["content"]
+    assert "Turn toward the player." not in json.dumps(request)
+    assert "face_player" in context["eligible_actions"]
+    assert request["stream"] is True
+
+
 async def test_two_invalid_action_proposals_produce_no_action(provider_factory):
     requests = []
 

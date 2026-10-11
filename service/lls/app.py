@@ -130,7 +130,11 @@ def create_app(settings=None, repository=None, provider=None, *, runtime_options
     @app.exception_handler(TimelineAmbiguityError)
     async def ambiguous_timeline(request, exc):
         return JSONResponse(
-            {"detail": "Choose the save timeline explicitly", "branch_candidates": exc.candidates},
+            {
+                "reason_code": "timeline_ambiguous",
+                "detail": "Choose this save's history in the Living Los Santos dashboard",
+                "branch_candidates": exc.candidates,
+            },
             status_code=409,
         )
 

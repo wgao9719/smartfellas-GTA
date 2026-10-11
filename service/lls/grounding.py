@@ -3,6 +3,8 @@
 import re
 import unicodedata
 
+from .narration import SpeechMarkupFilter, action_narration
+
 NEUTRAL_FALLBACK = "I'm not sure what to say right now."
 
 COMPLETION_LINES = {
@@ -185,6 +187,7 @@ def speech_constraints(*, completion_lines=()):
             "player missions/jobs/objectives", "player payments/rewards/discounts/prices",
             "player unlocks or service outcomes", "canonical relationship changes",
             "story revelations", "unacknowledged actions in this interaction",
+            "action names/descriptions or stage directions",
         ],
         "acknowledged_completion_lines": list(completion_lines),
     }
@@ -197,12 +200,17 @@ def grounded_text(text, *, completion_lines=()):
     physical outcomes. A successful action never licenses added narrative.
     This is a bounded vocabulary gate, not a general natural-language proof.
     """
+    spoken = SpeechMarkupFilter().feed(text)
+    if spoken != text:
+        text = re.sub(r"\s+", " ", spoken)
     allowed = {_normalized(line) for line in completion_lines}
     kept = []
     for match in re.finditer(r".+?(?:[.!?](?:\s+|$)|$)", text, re.DOTALL):
         sentence = match.group()
         normalized = _normalized(sentence)
-        if normalized in allowed or not _restricted_claim(normalized):
+        if not action_narration(normalized) and (
+            normalized in allowed or not _restricted_claim(normalized)
+        ):
             kept.append(sentence)
     return "".join(kept)
 

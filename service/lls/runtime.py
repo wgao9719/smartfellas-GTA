@@ -24,6 +24,7 @@ from .context import build_context
 from .display import DISPLAY_MAX_CHARS, DISPLAY_RULE, display_text
 from .grounding import NEUTRAL_FALLBACK, acknowledged_completion_lines, grounded_text
 from .memory_index import MemoryIndex
+from .narration import SpeechMarkupFilter
 from .neighborhood_bridge import NeighborhoodBridge
 from .outbound import AIControlOwner
 from .packs import install_pilot_pack
@@ -53,17 +54,20 @@ def key(prefix):
 
 
 async def sentence_chunks(provider, context, max_chars):
-    """Bound token streams and remove one leading emotion tag before delivery."""
+    """Bound streams, stripping stage markup and a leading emotion tag before delivery."""
     buffer = ""
     received = 0
     leading = True
+    markup = SpeechMarkupFilter()
     async with aclosing(provider.dialogue(context)) as stream:
         async for raw in stream:
             fragment = raw[: max_chars - received]
             if not fragment:
                 break
             received += len(fragment)
-            buffer += fragment
+            buffer += markup.feed(fragment)
+            if not buffer.strip():
+                continue
             if leading:
                 buffer = buffer.lstrip()
                 if buffer.startswith(("[", "<")) and not re.match(

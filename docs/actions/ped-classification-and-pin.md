@@ -79,6 +79,10 @@ Game-script-owned or unknown ownership forces Protected. Otherwise the role poli
 
 F6 shows `Target: <name> (Available)`, `(Busy)`, `(Out of range)`, or `(Not available)`. When no eligible ped is nearby, it names the nearest refused role, for example `Nearest: police officer — not available`. Debug builds log `target_classified role= reason= ped_type= relgroup=0x… model=0x…`.
 
+While the selected binding remains valid, the script thread also draws a small blue cone above that pedestrian's head and refreshes `Target (blue marker): <name> (<state>)` each frame. The indicator follows the resolved binding, including seated pedestrians; cancel, despawn, or continuity invalidation removes it. Missing or nonfinite bone positions skip the marker, show `marker unavailable`, and log `target_indicator_unavailable` once. **The native marker and head anchor remain provisional and unverified in GTA.** Core tests and builds establish only the presentation contract and native API compatibility.
+
+Transient notices expire after five seconds. Opening typed entry, sending a turn, and rendering a reply replace an old cancellation notice with typing, thinking, and talking status; recording and the current target remain visible independently. While typed entry is open, phone/accept/frontend navigation controls are disabled every tick in all three GTA input groups. Enter, arrow, Escape, and Backspace presses remain suppressed through their release frame, even when submitting or canceling already closed the field. If a phone call or phone task is active, Enter keeps the draft and asks the player to retry after the call. These control and phone natives also require an in-game recheck.
+
 Technical failures show distinct targeting-unavailable feedback with the fixed codes `target_sampling_failed`, `target_camera_unavailable`, `target_binding_limit`, or `target_binding_lost`, logged once per code per adapter lifetime. These failures must not be mistaken for an empty candidate pool or a role refusal. The retired `target_decorator_unavailable` and `target_marker_failed` statuses are no longer part of binding.
 
 ## Rig test script
@@ -108,6 +112,13 @@ These checks are pending on the reference rig; pure tests and bridge probes cann
 4. Reacquire a recycled handle, including a replacement with the same model elsewhere. Confirm it receives a new actor UUID/runtime instance and cannot retrieve the old actor's conversation history.
 5. Exercise failed native sampling and binding-capacity failure in a controlled validation build. Confirm distinct technical feedback, one fixed log entry per code, no selection, and no native action dispatch.
 6. Repeat the pin checks below and the provisional face/wait capability checks with the continuity guard active. Record results without marking native capabilities supported until their full sheets pass.
+
+### First-conversation UI regression checks (pending)
+
+1. With Franklin at Legion Square, select the intended seated pedestrian in a crowd. Confirm the blue cone identifies exactly the selected ped, including while sitting or walking, and that the persistent label tracks availability. If F6 chooses a passer-by, the marker must expose that before F7 sends a message. Reselecting the same still-bound ped must keep its history; selecting another must not inherit it.
+2. Open F7 while a story phone call is ringing. Type a draft, hold/release Enter, and use the arrow keys. Confirm those keys cannot answer or navigate the phone and the utterance is sent only once. Repeat with an already active call: Enter must keep the full draft and display the phone notice; after the call, Enter must submit it. Escape cancels typed entry and normal phone/game controls must return after release.
+3. Cancel, reselect, and start another successful turn. Observe typing, thinking, then talking instead of the previous canceled notice. Wait five seconds after a transient notice: the notice must expire while the valid target label and marker remain. Confirm a recording indicator does not disappear merely because a transient notice expires.
+4. Cancel, despawn the target, change ownership, and exercise an invalidated/recycled handle. Confirm the indicator disappears and never follows the replacement ped. Repeat at differing resolutions and with the pause menu; record screenshots and the loaded build identity before marking native UI behavior verified.
 
 ## Pinning
 

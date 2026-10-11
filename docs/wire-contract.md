@@ -23,6 +23,17 @@ The adapter displays its own bounded, actionable version-mismatch notice without
 displaying arbitrary HTTP response bodies. Other malformed session fields remain
 HTTP 422 validation errors.
 
+An ambiguous save history returns HTTP **409** with
+`reason_code: "timeline_ambiguous"` and the existing `branch_candidates` list.
+The adapter recognizes only that fixed reason code, displays its own dashboard
+history-selection notice, and allows the configured `ConfirmProfileKey` (F10 by
+default) to retry session opening after the player selects a history. Unknown,
+malformed, and oversized error bodies retain the generic save/profile refusal;
+server detail and candidate IDs never enter the game notice. Other 409 failures
+still require correcting the save/profile association. Timeline isolation and
+explicit profile confirmation remain unchanged. These are automated bridge
+contracts; the dashboard-to-game retry still needs native verification.
+
 The response's `capabilities` contains the intersection of offered action IDs and
 the service action registry. `capability_flags` contains the intersection of
 offered optional feature names and service-supported features. Unknown optional

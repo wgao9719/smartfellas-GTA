@@ -970,6 +970,56 @@ class MarkupProvider(FakeProvider):
             yield part
 
 
+@pytest.mark.parametrize("direction", [
+    "Turn toward the player.",
+    "[Turns toward the player. Waits briefly.]",
+    "*Turns toward the player. Follows nearby.*",
+    "**Turns toward the player. Follows nearby.**",
+    "*Turns **warmly** toward the player. Nods.*",
+    "(Turns toward the player. Waits briefly.)",
+])
+async def test_action_narration_is_removed_while_dialogue_is_still_streaming(client, direction):
+    class PausedReply(FakeProvider):
+        def __init__(self):
+            self.waiting = asyncio.Event()
+            self.resume = asyncio.Event()
+            self.action_reply = None
+
+        async def dialogue(self, context):
+            reply = direction + " Hi, I was just out for a stroll. "
+            for offset in range(0, len(reply), 3):
+                yield reply[offset:offset + 3]
+            self.waiting.set()
+            await self.resume.wait()
+            yield "How about you?"
+
+        async def action(self, context, utterance, eligible):
+            self.action_reply = utterance
+            return None
+
+    sid, _ = await open_ready(client)
+    runtime = client.app.state.runtime
+    runtime.provider = provider = PausedReply()
+    session = runtime.sessions[sid]
+    await utterance(client, sid, "Hi there. What brings you downtown tonight?")
+    try:
+        await asyncio.wait_for(provider.waiting.wait(), 1)
+        assert not session.task.done()
+        chunks = [c for c in session.commands.values() if c["kind"] == "dialogue.chunk"]
+        assert "".join(c["payload"]["text"] for c in chunks).strip() == (
+            "Hi, I was just out for a stroll."
+        )
+        assert provider.action_reply is None
+    finally:
+        provider.resume.set()
+        await session.task
+    assert provider.action_reply.strip() == "Hi, I was just out for a stroll. How about you?"
+    for command in session.commands.values():
+        if command["kind"] == "dialogue.chunk":
+            await delivery_ack(client, session, command)
+    assert all(direction not in u.text for u in session.delivered_utterances.values())
+
+
 @pytest.mark.parametrize("claim", [
     "Lester has a new mission for you.",
     "Your next objective is to steal that car.",

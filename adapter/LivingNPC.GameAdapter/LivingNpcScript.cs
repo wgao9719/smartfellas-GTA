@@ -27,6 +27,7 @@ namespace LivingNPC.GameAdapter
         private long generation = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), seq;
         private string? typing;
         private readonly ConversationInput input = new ConversationInput();
+        private readonly ConversationControls inputControls = new ConversationControls();
         private EventEnvelope? targetSnapshot;
         private DateTimeOffset pendingPttDeadline;
         private bool wasOnline, offlineShown;
@@ -109,7 +110,7 @@ namespace LivingNPC.GameAdapter
                     ["game_os_version"] = Environment.OSVersion.VersionString, ["service_os"] = serviceOs, ["service_host_mode"] = IPAddress.IsLoopback(IPAddress.Parse(endpoint.Host)) ? "local" : "dev_lan",
                     ["compat_layer"] = "none", ["arch"] = "x64", ["capability_flags"] = CapabilityFlags() } };
             pinConfirmation.Reset();
-            bridge = new BridgeWorker(endpoint, request, bootstrapToken); wasOnline = false; offlineShown = false;
+            bridge = new BridgeWorker(endpoint, request, bootstrapToken, confirmProfileKey: confirmProfileKey.ToString()); wasOnline = false; offlineShown = false;
             log.Write("bridge_connect", "generation=" + generation);
         }
         private string[] CapabilityFlags()
@@ -127,6 +128,8 @@ namespace LivingNPC.GameAdapter
         private void OnTick(object sender, EventArgs args)
         {
             game.BindScriptThread();
+            inputControls.DisableForFrame(typing != null, game.DisableControl);
+            if (typing != null) Game.DisableAllControlsThisFrame();
             if (configurationStatus != null && !readyForInput)
             {
                 if (Game.IsPaused) { configurationStatusUntil = null; return; }
@@ -197,7 +200,6 @@ namespace LivingNPC.GameAdapter
                 if (game.SelectedActorId != null) SendSnapshot(game.Resolve(game.SelectedActorId));
                 nextSample = DateTimeOffset.UtcNow.AddMilliseconds(500);
             }
-            if (typing != null) Game.DisableAllControlsThisFrame();
             game.Render(typing, input.Whisper);
             timer.Stop();
             if (timer.ElapsedMilliseconds > 20) { log.Write("slow_tick", "milliseconds=" + timer.ElapsedMilliseconds); CancelInput(); game.ShowStatus("slow", "Living Los Santos: slow adapter tick. Pending AI stopped."); }
@@ -254,9 +256,17 @@ namespace LivingNPC.GameAdapter
         {
             // SHVDN drains key events before Tick, including before the first thread binding.
             if (!game.IsScriptThread || !readyForInput || !enabled) return;
+            inputControls.KeyDown((int)args.KeyCode, typing != null);
             if (args.KeyCode == confirmProfileKey)
             {
-                if (!profileKeyHeld && !profileConfirmation.Confirmed) profileConfirmation.Confirm(game.ReadWorld(), profileId, saveSlot);
+                if (!profileKeyHeld)
+                {
+                    if (bridge?.TimelineSelectionRequired == true)
+                    {
+                        CancelInput(); bridge.Dispose(); bridge = null; controller = null; game.Reset();
+                    }
+                    else if (!profileConfirmation.Confirmed) profileConfirmation.Confirm(game.ReadWorld(), profileId, saveSlot);
+                }
                 profileKeyHeld = true; return;
             }
             if (!profileConfirmation.Confirmed) return;
@@ -269,9 +279,18 @@ namespace LivingNPC.GameAdapter
             {
                 if (args.KeyCode == Keys.Enter)
                 {
-                    var typed = input.TypedPayload(typing);
-                    if (typed != null && bridge != null && input.IsCurrent(game.Resolve(input.ActorId!), game.ReadWorld(), generation) && !bridge.Events.TryAdd(Event("player.utterance_text", input.ActorId, typed)))
-                        game.ShowStatus("error", "Living Los Santos: input queue is full.");
+                    var phoneActive = game.PhoneActive;
+                    var typed = input.TypedPayload(typing, phoneActive);
+                    if (phoneActive)
+                    {
+                        game.ShowStatus("phone", "Living Los Santos: phone active. Draft kept; press Enter after the call, or Escape to cancel."); return;
+                    }
+                    if (typed == null) return;
+                    if (bridge?.Online != true || !input.IsCurrent(game.Resolve(input.ActorId!), game.ReadWorld(), generation))
+                    { game.ShowStatus("error", "Living Los Santos: target unavailable. Cancel and select a target again."); return; }
+                    if (!bridge.Events.TryAdd(Event("player.utterance_text", input.ActorId, typed)))
+                    { game.ShowStatus("error", "Living Los Santos: input queue is full. Draft kept; try Enter again."); return; }
+                    game.ShowStatus("thinking", "Living Los Santos: thinking.");
                     typing = null; return;
                 }
                 if (args.KeyCode == Keys.Back && typing.Length > 0) typing = typing.Substring(0, typing.Length - 1);
@@ -299,7 +318,13 @@ namespace LivingNPC.GameAdapter
                     : refusal != null ? "Nearest: " + PedRoleTable.Label(refusal.Role) + " — not available" : "No nearby resident is available.")); return;
             }
             if (args.KeyCode == pinKey) { RequestPin(); return; }
-            if (args.KeyCode == textKey) { CancelInput(clearTarget: false); if (LockTarget()) typing = ""; return; }
+            if (args.KeyCode == textKey)
+            {
+                CancelInput(clearTarget: false);
+                if (LockTarget()) { typing = ""; game.ShowStatus("typing", "Living Los Santos: typing. Enter to send; Escape to cancel."); }
+                else game.ShowStatus("unavailable", "Living Los Santos: select an available target with " + targetKey + ".");
+                return;
+            }
             if ((args.KeyCode == pttKey || args.KeyCode == whisperKey) && !input.PushToTalkHeld)
             {
                 CancelInput(clearTarget: false);
@@ -335,7 +360,9 @@ namespace LivingNPC.GameAdapter
         }
         private void OnKeyUp(object sender, KeyEventArgs args)
         {
-            if (!game.IsScriptThread || !readyForInput || !enabled) return;
+            if (!game.IsScriptThread) return;
+            inputControls.KeyUp((int)args.KeyCode);
+            if (!readyForInput || !enabled) return;
             if (args.KeyCode == confirmProfileKey) profileKeyHeld = false;
             if (args.KeyCode != pttKey && args.KeyCode != whisperKey) return;
             heldTalkKeys.Remove(args.KeyCode);

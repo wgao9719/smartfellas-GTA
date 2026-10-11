@@ -84,6 +84,41 @@ held-out model benchmark. These measured rates describe this checked-in corpus;
 other paraphrases, ambiguous wording, and languages can still produce errors.
 The tests do not establish arbitrary-model factuality or native game truth.
 
+## First in-game conversation: action narration
+
+The first local Qwen2.5-7B conversations exposed a separate speech defect:
+`Turn toward the player.` reached subtitles before the ordinary reply. That is
+the registry description of `face_player`, copied from dialogue context. The
+completion-claim gate did not reject imperative stage directions.
+
+The model's dialogue prompt now excludes eligible-action metadata and raw action
+outcomes, retaining the existing speech constraints and receipt-authorized fixed
+completion lines. The system prompt and dialogue policy require only spoken
+words. The separate action call retains its eligibility information.
+
+`narration.py` rejects every registered action ID and description, plus bounded
+English direction patterns and synonyms for turning, following, waiting, and the
+other registry actions. Ordinary first-person intentions and history remain
+allowed. Square brackets, parentheses and asterisks are treated as nonspoken
+markup; their spans are removed, including nested brackets, mixed asterisk widths
+and unfinished spans. A streaming filter retains delimiter state across provider
+tokens and sentence boundaries so the second sentence of a direction cannot leak.
+The shared grounding gate also removes markup from social and authored speech.
+
+`tests/fixtures/action_narration_corpus.json` records the observed local-model
+style replies, direction paraphrases and ordinary controls. Registry IDs and
+descriptions are additionally enumerated from the current registry in the test.
+Paused-provider bridge regressions verify a safe sentence reaches delivery before
+the provider finishes, while the action selector sees only the cleaned utterance
+and confirmed-delivery memory excludes directions. FR-DLG-02 stays a plain-text
+stream with a separate action stage; no midstream schema validation was added.
+
+These are deterministic corpus and synthetic-stream tests. The English direction
+vocabulary is bounded, and treats parenthetical or emphasized text conservatively
+as nonspoken markup; it is not a semantic guarantee for arbitrary paraphrases or
+languages. Repeat the two observed conversations with the local model in GTA to
+verify subtitles, speech and action timing. Native behavior remains unverified.
+
 ## Action dispatch boundary
 
 Immediately before building a command-poll response, Python rechecks action

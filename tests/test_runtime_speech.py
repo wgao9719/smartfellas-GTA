@@ -504,6 +504,26 @@ async def test_speech_and_audio_subtitles_use_identical_display_text(speech_scen
         assert all(is_display_safe(text) for text in audio)
 
 
+async def test_local_model_action_narration_never_reaches_tts(speech_scene):
+    async with speech_scene() as values:
+        client, runtime, session, microphone, transcriber, synthesizer, playback, provider = values
+        provider.reply = (
+            "Turn toward the player. Hi, I was just out for a stroll. "
+            "*smiles **warmly** then nods* How about you?"
+        )
+        assert (await say(client, session)).status_code == 200
+        await session.task
+        audio = [
+            c["payload"]["text"] for c in session.commands.values()
+            if c["kind"] == "dialogue.chunk" and c["payload"].get("delivery_mode") == "audio"
+        ]
+        assert audio == synthesizer.texts
+        assert " ".join(text.strip() for text in audio) == (
+            "Hi, I was just out for a stroll. How about you?"
+        )
+        assert all(is_display_safe(text) for text in audio)
+
+
 async def test_completed_audio_keeps_subtitle_command_available_until_render_ack(speech_scene):
     async with speech_scene() as values:
         client, runtime, session, microphone, transcriber, synthesizer, playback, provider = values

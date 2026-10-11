@@ -1,5 +1,13 @@
 # Development validation
 
+## First real conversation fixes on Windows — 2026-10-11
+
+The [first-conversation validation record](first-conversation-fixes.md) covers
+the five reported defects from adapter `427eebe`, including failing regressions,
+full Windows checks and remaining native verification. Work stayed on
+`win/validation` in the `integration` worktree; the existing QA service on port
+8765 was left running. These fixes are not deployed or game-verified.
+
 ## Dialogue-grounding merge on Windows — 2026-10-11
 
 Completed the in-progress merge of `win/fix-dialogue-grounding` (`4fefcd5` and

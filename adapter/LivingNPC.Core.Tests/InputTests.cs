@@ -1,4 +1,10 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using LivingNPC.Core;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -8,6 +14,74 @@ namespace LivingNPC.Core.Tests;
 public sealed class InputTests
 {
     private const int PttKey = 78, WhisperKey = 66;
+    [Fact] public void RequestedControlIdsMatchThePinnedShvdnApi()
+    {
+        var path = typeof(InputTests).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>().Single(a => a.Key == "ShvdnReference").Value!;
+        using var stream = File.OpenRead(path); using var pe = new PEReader(stream);
+        var metadata = pe.GetMetadataReader();
+        var type = metadata.TypeDefinitions.Select(metadata.GetTypeDefinition).Single(t => metadata.GetString(t.Namespace) == "GTA" && metadata.GetString(t.Name) == "Control");
+        var members = new Dictionary<string, int>();
+        foreach (var field in type.GetFields().Select(metadata.GetFieldDefinition))
+        {
+            var constant = field.GetDefaultValue(); if (constant.IsNil) continue;
+            var value = metadata.GetConstant(constant); Assert.Equal(ConstantTypeCode.Int32, value.TypeCode);
+            members[metadata.GetString(field.Name)] = metadata.GetBlobReader(value.Value).ReadInt32();
+        }
+        foreach (ConversationControl control in Enum.GetValues(typeof(ConversationControl)))
+            Assert.Equal(members[control.ToString()], (int)control);
+    }
+
+    [Fact] public void TypingRequestsPhoneAndFrontendControlsInEveryInputGroup()
+    {
+        var controls = new ConversationControls(); var disabled = new List<(int Group, int Control)>();
+        controls.DisableForFrame(false, (group, control) => disabled.Add((group, control)));
+        Assert.Empty(disabled);
+        controls.DisableForFrame(true, (group, control) => disabled.Add((group, control)));
+        foreach (var group in new[] { 0, 1, 2 })
+            foreach (var control in new[] { 27, 172, 173, 174, 175, 176, 177, 187, 188, 189, 190, 199, 200, 201, 202, 215, 217 })
+                Assert.Contains((group, control), disabled);
+        Assert.Equal(disabled.Count, disabled.Distinct().Count());
+    }
+
+    [Theory][InlineData(13)][InlineData(27)][InlineData(8)][InlineData(37)][InlineData(38)][InlineData(39)][InlineData(40)]
+    public void ClosingTextKeepsControlsDisabledThroughKeyRelease(int key)
+    {
+        var controls = new ConversationControls(); var disabled = new List<int>();
+        controls.KeyDown(key, true);
+        for (var tick = 0; tick < 3; tick++)
+        {
+            controls.DisableForFrame(false, (_, control) => disabled.Add(control));
+            Assert.Contains(176, disabled); Assert.Contains(201, disabled); disabled.Clear();
+        }
+        controls.KeyUp(key);
+        controls.DisableForFrame(false, (_, control) => disabled.Add(control));
+        Assert.Contains(201, disabled); disabled.Clear();
+        controls.DisableForFrame(false, (_, control) => disabled.Add(control)); Assert.Empty(disabled);
+    }
+
+    [Fact] public void PressAndReleaseBeforeTickStillSuppressesSubmissionFrame()
+    {
+        var controls = new ConversationControls(); var disabled = new List<int>();
+        controls.KeyDown(13, true); controls.KeyUp(13);
+        controls.DisableForFrame(false, (_, control) => disabled.Add(control)); Assert.Contains(176, disabled);
+        disabled.Clear(); controls.DisableForFrame(false, (_, control) => disabled.Add(control)); Assert.Empty(disabled);
+    }
+
+    [Fact] public void GameKeysOutsideTypingNeverLatchSuppression()
+    {
+        var controls = new ConversationControls(); var disabled = new List<int>();
+        controls.KeyDown(13, false); controls.KeyUp(13);
+        controls.DisableForFrame(false, (_, control) => disabled.Add(control)); Assert.Empty(disabled);
+    }
+
+    [Fact] public void ActivePhoneCannotProduceAnUtteranceAndTheSameDraftCanBeRetried()
+    {
+        var game = new FakeGame(); var input = new ConversationInput();
+        Assert.True(input.TryBind(game.Actor, game.World, 7)); var scene = input.SceneId;
+        const string draft = "Hi there. What brings you downtown tonight?";
+        Assert.Null(input.TypedPayload(draft, phoneActive: true)); Assert.Equal(scene, input.SceneId);
+        Assert.Equal(draft, input.TypedPayload(draft, phoneActive: false)!["text"]);
+    }
     [Theory][InlineData(false, false)][InlineData(true, false)][InlineData(false, true)][InlineData(true, true)]
     public void CancelClearsSelectionWithOrWithoutBoundInput(bool bound, bool paused)
     {

@@ -36,7 +36,8 @@ namespace LivingNPC.GameAdapter
         private readonly HashSet<string> targetFailures = new HashSet<string>();
         // Debug builds with EnableUnverifiedPinPersistence only.
         public bool PinPersistence { get; set; }
-        private string subtitle = "", status = "Living Los Santos: connecting";
+        private string subtitle = "";
+        private readonly ConversationStatus status = new ConversationStatus();
         private DateTimeOffset subtitleUntil;
         public string? SelectedActorId { get; private set; }
         public string? TargetError { get; private set; }
@@ -47,10 +48,24 @@ namespace LivingNPC.GameAdapter
         public GtaGameAdapter(AdapterLog log)
         {
             this.log = log;
+            status.Show("Living Los Santos: connecting", DateTimeOffset.UtcNow);
         }
         public bool IsScriptThread => thread.IsCurrent;
         public void BindScriptThread() => thread.Bind();
         private void OnScriptThread() => thread.Verify();
+        public void DisableControl(int group, int control)
+        {
+            OnScriptThread(); Function.Call(Hash.DISABLE_CONTROL_ACTION, group, control, true);
+        }
+        public bool PhoneActive
+        {
+            get
+            {
+                OnScriptThread();
+                try { return Function.Call<bool>(Hash.IS_MOBILE_PHONE_CALL_ONGOING) || Function.Call<bool>(Hash.IS_PED_RUNNING_MOBILE_PHONE_TASK, Game.Player.Character.Handle); }
+                catch (Exception) { return true; }
+            }
+        }
         public WorldState ReadWorld()
         {
             OnScriptThread();
@@ -333,19 +348,53 @@ namespace LivingNPC.GameAdapter
                 if (statusNow == 0 || statusNow == 1) binding.Ped.Task.ClearAll();
             }, () => tasks.Remove(command.Id), log);
         }
-        public void Reset() { OnScriptThread(); foreach (var binding in bindings.Values) { ReleasePersistence(binding); binding.Guard.Invalidate(); } bindings.Clear(); dropped.Clear(); tasks.Clear(); SelectedActorId = null; Recording = false; ClearSubtitle(); }
+        public void Reset() { OnScriptThread(); foreach (var binding in bindings.Values) { ReleasePersistence(binding); binding.Guard.Invalidate(); } bindings.Clear(); dropped.Clear(); tasks.Clear(); SelectedActorId = null; Recording = false; status.Clear(); ClearSubtitle(); }
         // Dialogue renders verbatim. Unsafe text never renders, so it never earns a subtitle receipt.
-        public void ShowSubtitle(string speaker, string text) { OnScriptThread(); SubtitleRendered = false; subtitle = DisplayText.IsSafe(speaker) && DisplayText.IsSafe(text) ? speaker + ": " + text : ""; subtitleUntil = DateTimeOffset.UtcNow.AddSeconds(30); }
+        public void ShowSubtitle(string speaker, string text)
+        {
+            OnScriptThread(); SubtitleRendered = false; subtitle = DisplayText.IsSafe(speaker) && DisplayText.IsSafe(text) ? speaker + ": " + text : ""; subtitleUntil = DateTimeOffset.UtcNow.AddSeconds(30);
+            if (subtitle.Length > 0 && !Recording) ShowStatus("talking", "Living Los Santos: talking to " + speaker + ".");
+        }
         public void ClearSubtitle() { OnScriptThread(); subtitle = ""; SubtitleRendered = false; }
-        public void ShowStatus(string state, string message) { OnScriptThread(); Recording = state == "recording"; status = DisplayText.Clean(message); }
+        public void ShowStatus(string state, string message) { OnScriptThread(); Recording = state == "recording"; status.Show(message, DateTimeOffset.UtcNow); }
+        private string? RenderTarget()
+        {
+            OnScriptThread();
+            if (SelectedActorId == null) return null;
+            var actor = Resolve(SelectedActorId);
+            if (actor == null || !bindings.TryGetValue(actor.ActorId, out var binding)) return null;
+            var label = TargetPresentation.Label(actor, ReadWorld(), binding.Generation);
+            if (label == null) return null;
+            try
+            {
+                // Provisional until the head anchor and marker visibility are checked in GTA.
+                var bone = binding.Ped.Bones[Bone.SkelHead];
+                if (bone.IsValid)
+                {
+                    var head = bone.Position;
+                    if (ActionMotionTracker.IsFinite(head.X) && ActionMotionTracker.IsFinite(head.Y) && ActionMotionTracker.IsFinite(head.Z))
+                    {
+                        World.DrawMarker(MarkerType.UpsideDownCone, head + new Vector3(0, 0, 0.55f), Vector3.Zero, Vector3.Zero,
+                            new Vector3(0.15f, 0.15f, 0.2f), System.Drawing.Color.FromArgb(220, 70, 200, 255));
+                        return label;
+                    }
+                }
+            }
+            catch (Exception) { }
+            if (targetFailures.Add("target_indicator_unavailable")) log.Write("target_indicator_unavailable");
+            return "Target: " + DisplayText.Clean(actor.Name) + " (marker unavailable)";
+        }
         public void Render(string? typed, bool whispering = false)
         {
             OnScriptThread();
             if (Game.IsPaused) return;
             if (typed != null) GTA.UI.Screen.ShowSubtitle(TypedInput.Echo(typed) + "_", 100);
             else if (subtitle.Length > 0 && DateTimeOffset.UtcNow < subtitleUntil) { GTA.UI.Screen.ShowSubtitle(subtitle, 100); SubtitleRendered = true; }
-            if (Recording) GTA.UI.Screen.ShowHelpTextThisFrame(whispering ? "Living Los Santos: Recording (whispering)" : "Living Los Santos: Recording");
-            else if (status.Length > 0) GTA.UI.Screen.ShowHelpTextThisFrame(status);
+            var label = RenderTarget();
+            var message = Recording ? (whispering ? "Living Los Santos: Recording (whispering)" : "Living Los Santos: Recording") : status.Read(DateTimeOffset.UtcNow);
+            if (message.Length == 0 && typed != null) message = "Living Los Santos: typing. Enter to send; Escape to cancel.";
+            if (label != null) message += (message.Length > 0 ? "\n" : "") + label;
+            if (message.Length > 0) GTA.UI.Screen.ShowHelpTextThisFrame(message);
         }
     }
 }

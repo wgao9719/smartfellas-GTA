@@ -6,13 +6,20 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace LivingNPC.Core
 {
     // Owns HTTP only. No game API, disk operation, or continuation calls the script.
     public sealed class BridgeWorker : IDisposable
     {
-        private sealed class PermanentFailure : Exception { public int Status; public PermanentFailure(int status) { Status = status; } }
+        private sealed class PermanentFailure : Exception
+        {
+            public int Status;
+            public bool TimelineAmbiguous;
+            public PermanentFailure(int status, bool timelineAmbiguous = false) { Status = status; TimelineAmbiguous = timelineAmbiguous; }
+        }
         public readonly BoundedQueue<string> Notices = new BoundedQueue<string>(16);
         private readonly HttpClient controlClient, eventClient, pollClient;
         private readonly CancellationTokenSource stop = new CancellationTokenSource();
@@ -20,9 +27,11 @@ namespace LivingNPC.Core
         private readonly Task run;
         private readonly string bootstrapToken;
         private readonly Uri endpoint;
+        private readonly string confirmProfileKey;
         private long cursor;
         public volatile bool RequiresReconnect;
         public volatile bool ProtocolFault;
+        public bool TimelineSelectionRequired { get; private set; }
         public float Fps;
         public int ActorCount;
         private int failures;
@@ -36,9 +45,10 @@ namespace LivingNPC.Core
         public SessionResponse? Session => session;
         public bool Online => online;
         public string LastFailure { get; private set; } = "";
-        public BridgeWorker(Uri endpoint, SessionRequest request, string bootstrapToken, HttpMessageHandler? controlHandler = null, HttpMessageHandler? eventHandler = null, HttpMessageHandler? pollHandler = null)
+        public BridgeWorker(Uri endpoint, SessionRequest request, string bootstrapToken, HttpMessageHandler? controlHandler = null, HttpMessageHandler? eventHandler = null, HttpMessageHandler? pollHandler = null, string confirmProfileKey = "F10")
         {
             this.endpoint = endpoint; this.request = request; this.bootstrapToken = bootstrapToken;
+            this.confirmProfileKey = DisplayText.Clean(confirmProfileKey);
             controlClient = Client(endpoint, controlHandler); eventClient = Client(endpoint, eventHandler); pollClient = Client(endpoint, pollHandler);
             run = Task.Run(Run);
         }
@@ -63,21 +73,46 @@ namespace LivingNPC.Core
                 using (var response = await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false))
                 {
                     if ((int)response.StatusCode == 401 && session != null) { RequiresReconnect = true; online = false; }
-                    if ((int)response.StatusCode >= 400 && (int)response.StatusCode < 500 && (int)response.StatusCode != 408 && (int)response.StatusCode != 429) throw new PermanentFailure((int)response.StatusCode);
-                    response.EnsureSuccessStatusCode();
-                    using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                    using (var output = new MemoryStream())
+                    if ((int)response.StatusCode >= 400 && (int)response.StatusCode < 500 && (int)response.StatusCode != 408 && (int)response.StatusCode != 429)
                     {
-                        var buffer = new byte[8192]; int count;
-                        while ((count = await stream.ReadAsync(buffer, 0, buffer.Length, deadline.Token).ConfigureAwait(false)) > 0)
-                        {
-                            if (output.Length + count > BridgeLimits.MaxBodyBytes) throw new InvalidDataException("bridge_response_too_large");
-                            output.Write(buffer, 0, count);
-                        }
-                        return Encoding.UTF8.GetString(output.ToArray());
+                        var timeline = (int)response.StatusCode == 409 && path == "/v1/bridge/sessions" &&
+                            await IsTimelineAmbiguous(response, deadline.Token).ConfigureAwait(false);
+                        throw new PermanentFailure((int)response.StatusCode, timeline);
                     }
+                    response.EnsureSuccessStatusCode();
+                    return await ReadBody(response, deadline.Token).ConfigureAwait(false);
                 }
             }
+        }
+        private static async Task<string> ReadBody(HttpResponseMessage response, CancellationToken token)
+        {
+            using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+            using (var output = new MemoryStream())
+            {
+                var buffer = new byte[8192]; int count;
+                while ((count = await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false)) > 0)
+                {
+                    if (output.Length + count > BridgeLimits.MaxBodyBytes) throw new InvalidDataException("bridge_response_too_large");
+                    output.Write(buffer, 0, count);
+                }
+                return Encoding.UTF8.GetString(output.ToArray());
+            }
+        }
+        private static async Task<bool> IsTimelineAmbiguous(HttpResponseMessage response, CancellationToken token)
+        {
+            try
+            {
+                using (var source = new StringReader(await ReadBody(response, token).ConfigureAwait(false)))
+                using (var reader = new JsonTextReader(source) { MaxDepth = 24, DateParseHandling = DateParseHandling.None })
+                {
+                    var body = JToken.ReadFrom(reader, new JsonLoadSettings { DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error }) as JObject;
+                    return !reader.Read() && body?["reason_code"]?.Type == JTokenType.String && (string?)body["reason_code"] == "timeline_ambiguous";
+                }
+            }
+            catch (JsonException) { return false; }
+            catch (InvalidDataException) { return false; }
+            catch (IOException) { return false; }
+            catch (HttpRequestException) { return false; }
         }
         private async Task Run()
         {
@@ -93,8 +128,11 @@ namespace LivingNPC.Core
                 catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
                 catch (PermanentFailure e)
                 {
-                    LastFailure = "session_rejected_" + e.Status;
-                    Notices.ReplaceOldest(e.Status == 409
+                    TimelineSelectionRequired = e.TimelineAmbiguous;
+                    LastFailure = e.TimelineAmbiguous ? "timeline_ambiguous" : "session_rejected_" + e.Status;
+                    Notices.ReplaceOldest(e.TimelineAmbiguous
+                        ? "Choose this save's history in the Living Los Santos dashboard, then press " + confirmProfileKey + " to reconnect."
+                        : e.Status == 409
                         ? "Save/profile association refused. Verify ProfileId, SaveSlot and ParentBranchId in LivingNPC.ini, then reload and confirm. Use a new profile for a different save."
                         : e.Status == 426 ? "Protocol version mismatch. Update the Living Los Santos adapter and service together, then reload the adapter."
                         : LastFailure);

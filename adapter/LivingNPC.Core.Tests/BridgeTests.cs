@@ -219,12 +219,39 @@ public class BridgeTests
         Assert.Equal("instance-1", Assert.Single(batch.Commands).RuntimeInstanceId);
         Assert.Equal(TimeSpan.Zero, batch.Commands[0].ExpiresAt.Offset);
     }
-    [Fact] public async Task AssociationConflictStopsWithoutExposingResponseBody()
+    [Theory][InlineData("F10")][InlineData("F11")]
+    public async Task TimelineAmbiguityDirectsPlayerToDashboardAndReconnectKey(string key)
     {
         var calls = 0;
         var rejected = new Handler((_, _) => {
             Interlocked.Increment(ref calls);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict) { Content = new StringContent("private response body") });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict) { Content = new StringContent("{\"reason_code\":\"timeline_ambiguous\",\"detail\":\"private response body\",\"branch_candidates\":[\"private-branch\"]}") });
+        });
+        using var worker = new BridgeWorker(new Uri("http://127.0.0.1:8765"), new SessionRequest(), "", eventHandler: rejected, confirmProfileKey: key);
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (worker.Notices.Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(5);
+        Assert.True(worker.Notices.TryTake(out var notice));
+        Assert.Equal("Choose this save's history in the Living Los Santos dashboard, then press " + key + " to reconnect.", notice);
+        Assert.Equal("timeline_ambiguous", worker.LastFailure);
+        Assert.True(worker.TimelineSelectionRequired);
+        Assert.Null(worker.Session); Assert.False(worker.Online); Assert.False(worker.RequiresReconnect);
+        Assert.Equal(1, calls);
+    }
+    [Theory]
+    [InlineData("private response body")]
+    [InlineData("{\"reason_code\":\"private response body\"}")]
+    [InlineData("{\"reason_code\":{\"detail\":\"private response body\"}}")]
+    [InlineData("[\"timeline_ambiguous\",\"private response body\"]")]
+    [InlineData("{\"detail\":\"timeline_ambiguous private response body\"}")]
+    [InlineData("{\"reason_code\":\"timeline_ambiguous\"} trailing")]
+    [InlineData("{\"reason_code\":\"timeline_ambiguous\"} {\"detail\":\"private response body\"}")]
+    [InlineData("{\"reason_code\":\"unknown\",\"reason_code\":\"timeline_ambiguous\"}")]
+    public async Task AssociationConflictStopsWithoutExposingResponseBody(string body)
+    {
+        var calls = 0;
+        var rejected = new Handler((_, _) => {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict) { Content = new StringContent(body) });
         });
         using var worker = new BridgeWorker(new Uri("http://127.0.0.1:8765"), new SessionRequest(), "", eventHandler: rejected);
         var deadline = DateTime.UtcNow.AddSeconds(2);
@@ -234,7 +261,21 @@ public class BridgeTests
         Assert.Contains("ProfileId, SaveSlot and ParentBranchId", notice);
         Assert.DoesNotContain("private response body", notice);
         Assert.Equal("session_rejected_409", worker.LastFailure);
+        Assert.False(worker.TimelineSelectionRequired);
         Assert.Null(worker.Session); Assert.False(worker.Online); Assert.False(worker.RequiresReconnect);
         Assert.Equal(1, calls);
+    }
+    [Fact] public async Task OversizedSessionConflictRetainsGenericRefusal()
+    {
+        var rejected = new Handler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict) {
+            Content = new StringContent("{\"reason_code\":\"timeline_ambiguous\",\"detail\":\"" + new string('x', BridgeLimits.MaxBodyBytes) + "\"}")
+        }));
+        using var worker = new BridgeWorker(new Uri("http://127.0.0.1:8765"), new SessionRequest(), "", eventHandler: rejected);
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (worker.Notices.Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(5);
+        Assert.True(worker.Notices.TryTake(out var notice));
+        Assert.Contains("Save/profile association refused", notice);
+        Assert.Equal("session_rejected_409", worker.LastFailure);
+        Assert.False(worker.TimelineSelectionRequired);
     }
 }

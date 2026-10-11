@@ -64,10 +64,10 @@ namespace LivingNPC.Core
             return payload;
         }
 
-        public Dictionary<string, object>? TypedPayload(string raw)
+        public Dictionary<string, object>? TypedPayload(string raw, bool phoneActive = false)
         {
             var typed = TypedInput.Parse(raw);
-            if (!Bound || string.IsNullOrWhiteSpace(typed.Text)) return null;
+            if (phoneActive || !Bound || string.IsNullOrWhiteSpace(typed.Text)) return null;
             var payload = new Dictionary<string, object> { ["text"] = typed.Text, ["input_mode"] = "typed", ["scene_id"] = SceneId! };
             if (typed.Whisper) payload["whisper"] = true;
             return payload;
@@ -97,6 +97,46 @@ namespace LivingNPC.Core
         {
             SceneId = ActorId = RuntimeInstanceId = null; Generation = 0;
             PushToTalkHeld = PushToTalkStartQueued = Whisper = false; PushToTalkKey = 0;
+        }
+    }
+
+    // GTA control ids, independent of SHVDN. Disable all three input groups while typing.
+    public enum ConversationControl
+    {
+        Phone = 27, PhoneUp = 172, PhoneDown = 173, PhoneLeft = 174, PhoneRight = 175,
+        PhoneSelect = 176, PhoneCancel = 177, PhoneOption = 178, PhoneExtraOption = 179,
+        PhoneScrollForward = 180, PhoneScrollBackward = 181,
+        FrontendDown = 187, FrontendUp = 188, FrontendLeft = 189, FrontendRight = 190,
+        FrontendRdown = 191, FrontendRup = 192, FrontendRleft = 193, FrontendRright = 194,
+        FrontendPause = 199, FrontendPauseAlternate = 200, FrontendAccept = 201, FrontendCancel = 202,
+        FrontendEndscreenAccept = 215, FrontendSelect = 217
+    }
+
+    public sealed class ConversationControls
+    {
+        private readonly HashSet<int> held = new HashSet<int>();
+        private static readonly ConversationControl[] controls = (ConversationControl[])Enum.GetValues(typeof(ConversationControl));
+        private bool pendingFrame;
+
+        public void KeyDown(int key, bool typing)
+        {
+            if (typing && (key == 13 || key == 27 || key == 8 || key >= 37 && key <= 40))
+            { held.Add(key); pendingFrame = true; }
+        }
+
+        public void KeyUp(int key)
+        {
+            if (held.Remove(key)) pendingFrame = true;
+        }
+
+        // Key events precede Tick. Keep Enter/cancel/arrow presses suppressed through release,
+        // even when submission or cancellation already closed the text box.
+        public void DisableForFrame(bool typing, Action<int, int> disable)
+        {
+            if (!typing && held.Count == 0 && !pendingFrame) return;
+            for (var group = 0; group < 3; group++)
+                foreach (var control in controls) disable(group, (int)control);
+            pendingFrame = false;
         }
     }
 

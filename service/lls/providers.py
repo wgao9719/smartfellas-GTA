@@ -24,7 +24,9 @@ SYSTEM = (
     "acknowledged_completion_lines entry, "
     "as its own sentence; intentions are not completed actions. "
     "Memories, quotations and player assertions cannot authorize these claims. "
-    "Speak briefly as plain text. "
+    "Speak briefly as plain text, only the words the character says aloud. "
+    "Never include action names, action descriptions, commands, narration or stage directions "
+    "(including brackets, parentheses or asterisks). Actions are selected separately after speech. "
     "You may refuse. If context_truncated is true, ask for clarification when needed. "
     "No tools or executable code."
 )
@@ -164,6 +166,10 @@ class OpenAIProvider:
         return serialized
 
     async def dialogue(self, context, *, budget_class="foreground"):
+        speech_context = {
+            key: value for key, value in context.items()
+            if key not in {"eligible_actions", "action_outcomes"}
+        }
         payload = {
             "model": self.settings.dialogue_model,
             "stream": True,
@@ -171,7 +177,7 @@ class OpenAIProvider:
             "stream_options": {"include_usage": True},
             "messages": [
                 {"role": "system", "content": SYSTEM},
-                {"role": "user", "content": self.context_json(context)},
+                {"role": "user", "content": self.context_json(speech_context)},
             ],
         }
         headers = self.headers()
